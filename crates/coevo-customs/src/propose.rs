@@ -4,12 +4,10 @@
 use coevo_core::cognitive::*;
 use coevo_core::contract::EvidenceRequirement;
 use coevo_core::metadata::CommonMetadataHeader;
-use coevo_store::repos::blackboard_repo::BlackboardRepo;
 use sqlx::SqlitePool;
 
 use crate::blackboard::Blackboard;
 use crate::dependency::{CognitiveDependencyGraph, EdgeType};
-use crate::promotion::PromotionEngine;
 use crate::provenance::validate_provenance;
 
 /// The CognitiveCustoms Propose interface.
@@ -67,11 +65,6 @@ impl CognitiveCustoms {
         }
 
         // ---- Guard 4: Write ----
-        let layer_str = serde_json::to_string(&cognitive_layer)
-            .unwrap()
-            .trim_matches('"')
-            .to_string();
-
         let ttl_ms = if cognitive_layer == CognitiveLayer::Fact {
             Some(provenance_envelope.ttl_seconds * 1000)
         } else {
@@ -115,8 +108,6 @@ pub enum ProposeError {
     ProvenanceValidationFailed(String),
     #[error("cognitive boundary violation: {detail}")]
     CognitiveBoundViolation { detail: String },
-    #[error("version precondition required — expected_version must be provided")]
-    VersionRequired,
     #[error("version mismatch: expected {expected}, actual {actual}")]
     VersionMismatch { expected: u64, actual: u64 },
     #[error("database error: {0}")]

@@ -67,9 +67,6 @@ pub async fn propose_fact(
     )
     .await
     .map_err(|e| match e {
-        coevo_customs::propose::ProposeError::VersionRequired => {
-            ProblemDetails::version_required("/customs/propose", "expected_version must be provided")
-        }
         coevo_customs::propose::ProposeError::VersionMismatch { expected, actual } => {
             ProblemDetails::version_mismatch(
                 "/customs/propose",

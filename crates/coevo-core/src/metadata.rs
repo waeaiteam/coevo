@@ -123,7 +123,12 @@ impl CommonMetadataHeader {
 
         // traceparent must match W3C format: 00-<trace-id>-<span-id>-<flags>
         let parts: Vec<&str> = self.traceparent.split('-').collect();
-        if parts.len() != 4 || parts[0] != "00" || parts[1].len() != 32 || parts[2].len() != 16 {
+        if parts.len() != 4
+            || parts[0] != "00"
+            || parts[1].len() != 32
+            || parts[2].len() != 16
+            || parts[3].len() != 2
+        {
             return Err(HeaderValidationError::InvalidTraceparent);
         }
 
