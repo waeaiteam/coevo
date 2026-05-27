@@ -15,6 +15,7 @@ members = [
     "crates/coevo-tracks",
     "crates/coevo-cli",
     "apps/server",
+    "tests/e2e",
 ]
 
 [workspace.package]

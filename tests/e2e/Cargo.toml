@@ -1,0 +1,27 @@
+[package]
+name = "coevo-e2e-tests"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+coevo-core = { path = "../../crates/coevo-core" }
+coevo-store = { path = "../../crates/coevo-store" }
+coevo-policy = { path = "../../crates/coevo-policy" }
+coevo-adapters = { path = "../../crates/coevo-adapters" }
+coevo-mcl = { path = "../../crates/coevo-mcl" }
+coevo-router = { path = "../../crates/coevo-router" }
+coevo-customs = { path = "../../crates/coevo-customs" }
+coevo-risk = { path = "../../crates/coevo-risk" }
+coevo-resolution = { path = "../../crates/coevo-resolution" }
+coevo-reputation = { path = "../../crates/coevo-reputation" }
+coevo-tracks = { path = "../../crates/coevo-tracks" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+[[test]]
+name = "acceptance"
+path = "acceptance.rs"

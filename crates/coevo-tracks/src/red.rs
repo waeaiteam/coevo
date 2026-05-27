@@ -129,8 +129,17 @@ impl RedTrackRunner {
         // ---- Step 6-8: Emergency Lease if needed ----
         let lease = match gating.decision {
             GateDecision::AllowWithLease => {
-                let mon_sig = monitoring_signature.unwrap_or("mon-sig:emergency");
-                let diag_sig = diagnostic_signature.unwrap_or("diag-sig:top-10-agent");
+                // Both signatures are mandatory — no defaults allowed
+                let mon_sig = monitoring_signature
+                    .ok_or(RedTrackError::MissingDualSign("monitoring_signature".to_string()))?;
+                let diag_sig = diagnostic_signature
+                    .ok_or(RedTrackError::MissingDualSign("diagnostic_signature".to_string()))?;
+                if mon_sig.is_empty() {
+                    return Err(RedTrackError::MissingDualSign("monitoring_signature is empty".to_string()));
+                }
+                if diag_sig.is_empty() {
+                    return Err(RedTrackError::MissingDualSign("diagnostic_signature is empty".to_string()));
+                }
                 let lease = LeaseManager::grant(
                     pool,
                     &contract_hash,
@@ -248,6 +257,8 @@ pub enum RedTrackError {
     CircuitBreakerTripped { reason: String },
     #[error("lease error: {0}")]
     LeaseError(String),
+    #[error("missing dual-sign signature: {0}")]
+    MissingDualSign(String),
     #[error("storage error: {0}")]
     StorageError(String),
     #[error("database error: {0}")]
