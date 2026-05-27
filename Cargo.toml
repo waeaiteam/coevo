@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/coevo-core",
+    "crates/coevo-store",
+    "crates/coevo-policy",
+    "crates/coevo-adapters",
+    "crates/coevo-audit",
+    "crates/coevo-mcl",
+    "crates/coevo-router",
+    "crates/coevo-customs",
+    "crates/coevo-risk",
+    "crates/coevo-resolution",
+    "crates/coevo-reputation",
+    "crates/coevo-tracks",
+    "crates/coevo-cli",
+    "apps/server",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/coevo-dev/coevo"
+
+[workspace.dependencies]
+# --- std / core ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+ed25519-dalek = { version = "2", features = ["serde"] }
+rand = "0.8"
+petgraph = "0.6"
+
+# --- server ---
+axum = { version = "0.8", features = ["macros"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa-redoc = { version = "5", features = ["axum"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
+
+# --- db ---
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid", "migrate"] }
+
+# --- cli ---
+clap = { version = "4", features = ["derive"] }
+
+# --- coevo crates ---
+coevo-core = { path = "crates/coevo-core" }
+coevo-store = { path = "crates/coevo-store" }
+coevo-policy = { path = "crates/coevo-policy" }
+coevo-adapters = { path = "crates/coevo-adapters" }
+coevo-audit = { path = "crates/coevo-audit" }
+coevo-mcl = { path = "crates/coevo-mcl" }
+coevo-router = { path = "crates/coevo-router" }
+coevo-customs = { path = "crates/coevo-customs" }
+coevo-risk = { path = "crates/coevo-risk" }
+coevo-resolution = { path = "crates/coevo-resolution" }
+coevo-reputation = { path = "crates/coevo-reputation" }
+coevo-tracks = { path = "crates/coevo-tracks" }

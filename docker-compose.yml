@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  coevo-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8717:8717"
+    environment:
+      - COEVO_DATABASE_URL=sqlite:/data/coevo.db?mode=rwc
+      - COEVO_BIND_ADDR=0.0.0.0:8717
+      - RUST_LOG=coevo=debug,info
+    volumes:
+      - coevo-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8717/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  coevo-data:

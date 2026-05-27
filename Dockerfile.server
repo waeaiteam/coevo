@@ -1,0 +1,65 @@
+# ---- Rust builder ----
+FROM rust:1.85-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Cache deps
+COPY Cargo.toml Cargo.lock* ./
+COPY crates/coevo-core/Cargo.toml crates/coevo-core/
+COPY crates/coevo-store/Cargo.toml crates/coevo-store/
+COPY crates/coevo-policy/Cargo.toml crates/coevo-policy/
+COPY crates/coevo-adapters/Cargo.toml crates/coevo-adapters/
+COPY crates/coevo-audit/Cargo.toml crates/coevo-audit/
+COPY crates/coevo-mcl/Cargo.toml crates/coevo-mcl/
+COPY crates/coevo-router/Cargo.toml crates/coevo-router/
+COPY crates/coevo-customs/Cargo.toml crates/coevo-customs/
+COPY crates/coevo-risk/Cargo.toml crates/coevo-risk/
+COPY crates/coevo-resolution/Cargo.toml crates/coevo-resolution/
+COPY crates/coevo-reputation/Cargo.toml crates/coevo-reputation/
+COPY crates/coevo-tracks/Cargo.toml crates/coevo-tracks/
+COPY crates/coevo-cli/Cargo.toml crates/coevo-cli/
+COPY apps/server/Cargo.toml apps/server/
+
+# Dummy src to build deps
+RUN mkdir -p crates/coevo-core/src && echo "" > crates/coevo-core/src/lib.rs
+RUN mkdir -p crates/coevo-store/src && echo "" > crates/coevo-store/src/lib.rs
+RUN mkdir -p crates/coevo-policy/src && echo "" > crates/coevo-policy/src/lib.rs
+RUN mkdir -p crates/coevo-adapters/src && echo "" > crates/coevo-adapters/src/lib.rs
+RUN mkdir -p crates/coevo-audit/src && echo "" > crates/coevo-audit/src/lib.rs
+RUN mkdir -p crates/coevo-mcl/src && echo "" > crates/coevo-mcl/src/lib.rs
+RUN mkdir -p crates/coevo-router/src && echo "" > crates/coevo-router/src/lib.rs
+RUN mkdir -p crates/coevo-customs/src && echo "" > crates/coevo-customs/src/lib.rs
+RUN mkdir -p crates/coevo-risk/src && echo "" > crates/coevo-risk/src/lib.rs
+RUN mkdir -p crates/coevo-resolution/src && echo "" > crates/coevo-resolution/src/lib.rs
+RUN mkdir -p crates/coevo-reputation/src && echo "" > crates/coevo-reputation/src/lib.rs
+RUN mkdir -p crates/coevo-tracks/src && echo "" > crates/coevo-tracks/src/lib.rs
+RUN mkdir -p crates/coevo-cli/src && echo "fn main() {}" > crates/coevo-cli/src/main.rs
+RUN mkdir -p apps/server/src && echo "fn main() {}" > apps/server/src/main.rs
+
+RUN cargo build --release -p coevo-server 2>/dev/null || true
+
+# Copy real src
+COPY crates/ crates/
+COPY apps/ apps/
+
+RUN cargo build --release -p coevo-server
+
+# ---- runtime ----
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/coevo-server /usr/local/bin/coevo-server
+
+RUN mkdir -p /data
+VOLUME /data
+
+EXPOSE 8717
+
+ENTRYPOINT ["coevo-server"]
