@@ -62,12 +62,14 @@ impl GreenTrackRunner {
     ) -> Result<GreenTrackResult, GreenTrackError> {
         let start_ms = chrono::Utc::now().timestamp_millis() as u64;
 
+        let zero_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+
         // ---- Step 2: Compile MCL ----
         let compile_meta = CommonMetadataHeader::new(
-            String::new(), // filled after compile
-            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            zero_hash.to_string(),
+            zero_hash.to_string(),
             tenant_id.to_string(),
-            String::new(), // filled after route
+            zero_hash.to_string(),
             "Synthesizer".to_string(),
         );
 
@@ -82,23 +84,23 @@ impl GreenTrackRunner {
             .await
             .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
-        // Transition: Draft → Validated (OPA dry-run passed since we used DRAFT mode)
-        let transition = MCLStateMachine::transition(
+        // Transition: Draft → Validated
+        let t1 = MCLStateMachine::transition(
             ContractState::DraftContract,
             TransitionEvent::PolicyValidationPass,
         )
         .map_err(|e| GreenTrackError::StateMachineError(e.to_string()))?;
-        ContractRepo::update_state(pool, &compile_result.contract_hash, "ValidatedContract")
+        ContractRepo::update_state(pool, &compile_result.contract_hash, &format!("{:?}", t1.new_state))
             .await
             .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
         // Transition: Validated → Active
-        let transition = MCLStateMachine::transition(
-            ContractState::ValidatedContract,
+        let t2 = MCLStateMachine::transition(
+            t1.new_state,
             TransitionEvent::ContractActivation,
         )
         .map_err(|e| GreenTrackError::StateMachineError(e.to_string()))?;
-        ContractRepo::update_state(pool, &compile_result.contract_hash, "ActiveContract")
+        ContractRepo::update_state(pool, &compile_result.contract_hash, &format!("{:?}", t2.new_state))
             .await
             .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
@@ -157,7 +159,7 @@ impl GreenTrackRunner {
         let receipt = CognitiveCustoms::propose(
             pool,
             &hypothesis_key,
-            1, // expected_version = 1 (new key)
+            0, // expected_version = 0 (new key, per OCC rules)
             &hypothesis_value,
             CognitiveLayer::Hypothesis,
             &provenance,

@@ -46,10 +46,8 @@ impl CognitiveCustoms {
         }
 
         // ---- Guard 3: Optimistic concurrency control ----
-        if expected_version == 0 {
-            return Err(ProposeError::VersionRequired);
-        }
-
+        // New key: expected_version must be 0.
+        // Existing key: expected_version must match current version.
         let existing = Blackboard::read(pool, target_key).await?;
         if let Some(ref entry) = existing {
             if entry.version != expected_version {
@@ -58,11 +56,14 @@ impl CognitiveCustoms {
                     actual: entry.version,
                 });
             }
-        } else if expected_version > 1 {
-            return Err(ProposeError::VersionMismatch {
-                expected: expected_version,
-                actual: 0,
-            });
+        } else {
+            // New key — only expected_version 0 is valid
+            if expected_version != 0 {
+                return Err(ProposeError::VersionMismatch {
+                    expected: expected_version,
+                    actual: 0,
+                });
+            }
         }
 
         // ---- Guard 4: Write ----

@@ -7,6 +7,9 @@ build:
 test:
 	cargo test --workspace
 
+test-e2e:
+	cargo test -p coevo-server --test acceptance -- --nocapture
+
 check:
 	cargo check --workspace
 

@@ -42,15 +42,16 @@ impl YellowTrackRunner {
         tenant_id: &str,
         environment: &str,
     ) -> Result<YellowTrackResult, YellowTrackError> {
+        let zero = "0000000000000000000000000000000000000000000000000000000000000000";
         let policy = Box::new(MockPolicyEngine::new());
         let compiler = MCLCompiler::new();
 
         // Compile
         let meta = CommonMetadataHeader::new(
-            String::new(),
-            policy.policy_version(),
+            zero.to_string(),
+            zero.to_string(),
             tenant_id.to_string(),
-            String::new(),
+            zero.to_string(),
             "Proposer".to_string(),
         );
         let result = compiler
@@ -66,17 +67,17 @@ impl YellowTrackRunner {
             .map_err(|e| YellowTrackError::StorageError(e.to_string()))?;
 
         // Activate
-        MCLStateMachine::transition(
+        let t1 = MCLStateMachine::transition(
             ContractState::DraftContract,
             TransitionEvent::PolicyValidationPass,
         )?;
-        ContractRepo::update_state(pool, &contract_hash, "ValidatedContract").await?;
+        ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t1.new_state)).await?;
 
-        MCLStateMachine::transition(
-            ContractState::ValidatedContract,
+        let t2 = MCLStateMachine::transition(
+            t1.new_state,
             TransitionEvent::ContractActivation,
         )?;
-        ContractRepo::update_state(pool, &contract_hash, "ActiveContract").await?;
+        ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t2.new_state)).await?;
 
         // Route
         let route_result = PcdtRouter::compute(&contract, agent_ids.clone(), None)
@@ -174,7 +175,7 @@ impl YellowTrackRunner {
         let receipt = CognitiveCustoms::propose(
             pool,
             &format!("yellow-result-{}", uuid::Uuid::new_v4()),
-            1,
+            0,
             &serde_json::json!({"status": "pending_approval", "decision": decision_str}),
             CognitiveLayer::Hypothesis,
             &provenance,

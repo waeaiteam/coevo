@@ -53,15 +53,16 @@ impl RedTrackRunner {
             return Err(RedTrackError::MissingIdentityProof);
         }
 
+        let zero = "0000000000000000000000000000000000000000000000000000000000000000";
         let policy = Box::new(MockPolicyEngine::new());
         let compiler = MCLCompiler::new();
 
         // ---- Step 2: Compile with OPA injection ----
         let meta = CommonMetadataHeader::new(
-            String::new(),
-            policy.policy_version(),
+            zero.to_string(),
+            zero.to_string(),
             tenant_id.to_string(),
-            String::new(),
+            zero.to_string(),
             "Proposer".to_string(),
         );
 
@@ -81,16 +82,16 @@ impl RedTrackRunner {
             .map_err(|e| RedTrackError::StorageError(e.to_string()))?;
 
         // Activate
-        MCLStateMachine::transition(
+        let t1 = MCLStateMachine::transition(
             ContractState::DraftContract,
             TransitionEvent::PolicyValidationPass,
         )?;
-        ContractRepo::update_state(pool, &contract_hash, "ValidatedContract").await?;
-        MCLStateMachine::transition(
-            ContractState::ValidatedContract,
+        ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t1.new_state)).await?;
+        let t2 = MCLStateMachine::transition(
+            t1.new_state,
             TransitionEvent::ContractActivation,
         )?;
-        ContractRepo::update_state(pool, &contract_hash, "ActiveContract").await?;
+        ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t2.new_state)).await?;
 
         // ---- Step 3: Route with strict limits ----
         let route_result = PcdtRouter::compute(&contract, agent_ids.clone(), None)
@@ -198,7 +199,7 @@ impl RedTrackRunner {
                         let receipt = CognitiveCustoms::propose(
                             pool,
                             &format!("red-result-{}-{}", uuid::Uuid::new_v4(), i),
-                            1,
+                            0,
                             &serde_json::json!({"operation": i, "status": "executed_under_lease"}),
                             CognitiveLayer::Hypothesis,
                             &provenance,

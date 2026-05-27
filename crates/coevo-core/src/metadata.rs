@@ -1,9 +1,11 @@
 //! Common Metadata Header — every API request must carry these fields.
 //! Per coevo whitepaper Section 1.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::track::Track;
 
 /// The mandatory metadata header carried by every coevo control-plane request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +112,44 @@ impl CommonMetadataHeader {
         }
         Ok(())
     }
+
+    /// Per-track validation with additional constraints.
+    /// Red Track MUST have caller_identity_proof.
+    /// All tracks: traceparent must match W3C format, causality_parent_id must be valid UUID,
+    /// request_ttl_ms must be positive.
+    pub fn validate_for_track(&self, track: Track) -> Result<(), HeaderValidationError> {
+        // Base validation first
+        self.validate()?;
+
+        // traceparent must match W3C format: 00-<trace-id>-<span-id>-<flags>
+        let parts: Vec<&str> = self.traceparent.split('-').collect();
+        if parts.len() != 4 || parts[0] != "00" || parts[1].len() != 32 || parts[2].len() != 16 {
+            return Err(HeaderValidationError::InvalidTraceparent);
+        }
+
+        // causality_parent_id must be valid UUID
+        if Uuid::parse_str(&self.causality_parent_id).is_err() {
+            return Err(HeaderValidationError::InvalidCausalityParentId);
+        }
+
+        // request_ttl_ms must be positive
+        if self.request_ttl_ms == 0 {
+            return Err(HeaderValidationError::InvalidRequestTtl);
+        }
+
+        // Red Track: caller_identity_proof is mandatory
+        if track == Track::Red {
+            match &self.caller_identity_proof {
+                None => return Err(HeaderValidationError::MissingCallerIdentityProof),
+                Some(proof) if proof.is_empty() => {
+                    return Err(HeaderValidationError::MissingCallerIdentityProof);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -128,4 +168,12 @@ pub enum HeaderValidationError {
     MissingActorRole,
     #[error("timestamp drift {drift_ms}ms exceeds 5000ms gateway threshold")]
     TimestampDriftExceeded { drift_ms: u64 },
+    #[error("traceparent must match W3C format: 00-<32hex>-<16hex>-<flags>")]
+    InvalidTraceparent,
+    #[error("causality_parent_id must be a valid UUIDv4")]
+    InvalidCausalityParentId,
+    #[error("request_ttl_ms must be positive")]
+    InvalidRequestTtl,
+    #[error("caller_identity_proof is required for Red Track")]
+    MissingCallerIdentityProof,
 }

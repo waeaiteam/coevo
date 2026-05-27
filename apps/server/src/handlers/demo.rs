@@ -11,19 +11,28 @@ pub struct DemoRequest {
     pub agent_ids: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RedDemoRequest {
+    pub tenant_id: Option<String>,
+    pub agent_ids: Option<Vec<String>>,
+    pub caller_identity_proof: Option<String>,
+    pub monitoring_signature: Option<String>,
+    pub diagnostic_signature: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DemoResponse {
     pub track: String,
     pub contract_hash: String,
     pub plan_hash: String,
     pub traceparent: String,
-    pub ambiguity_score: f64,
+    pub ambiguity_score: Option<f64>,
     pub warnings: Vec<String>,
     pub entries_created: Vec<String>,
     pub elapsed_ms: u64,
 }
 
-/// POST /demo/green — run a complete Green Track scenario
+/// POST /demo/green — Green Track end-to-end
 #[utoipa::path(
     post,
     path = "/demo/green",
@@ -53,41 +62,120 @@ pub async fn run_green_demo(
         contract_hash: gr.contract_hash,
         plan_hash: gr.plan_hash,
         traceparent: gr.traceparent,
-        ambiguity_score: gr.ambiguity_score,
+        ambiguity_score: Some(gr.ambiguity_score),
         warnings: gr.warnings,
         entries_created: gr.entries_created,
         elapsed_ms: gr.total_elapsed_ms,
     }))
 }
 
-/// POST /demo/yellow — stub (filled in step 8)
+/// POST /demo/yellow — Yellow Track end-to-end
 #[utoipa::path(
     post,
     path = "/demo/yellow",
     tag = "Demo",
-    responses((status = 200, description = "Yellow Track demo"))
+    responses((status = 200, description = "Yellow Track demo completed"))
 )]
 pub async fn run_yellow_demo(
-    State(_state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
-    Ok(Json(serde_json::json!({
-        "track": "yellow",
-        "status": "not_yet_implemented"
-    })))
+    State(state): State<AppState>,
+    Json(req): Json<DemoRequest>,
+) -> Result<Json<DemoResponse>, ProblemDetails> {
+    let tenant_id = req.tenant_id.unwrap_or_else(|| "demo-tenant".to_string());
+    let agents = req
+        .agent_ids
+        .unwrap_or_else(|| vec!["agent-synthesizer-01".to_string()]);
+
+    let intent =
+        "Send deployment notification to the team and write changelog to the staging wiki";
+
+    let result =
+        dispatch::dispatch_yellow(&state.pool, intent, agents, &tenant_id, "staging")
+            .await
+            .map_err(|e| ProblemDetails::internal_error("/demo/yellow", &e.to_string()))?;
+
+    let yr = result.yellow_result.unwrap();
+    Ok(Json(DemoResponse {
+        track: "yellow".to_string(),
+        contract_hash: yr.contract_hash,
+        plan_hash: yr.plan_hash,
+        traceparent: yr.traceparent,
+        ambiguity_score: None,
+        warnings: vec![],
+        entries_created: yr.entries_created,
+        elapsed_ms: 0,
+    }))
 }
 
-/// POST /demo/red — stub (filled in step 9)
+/// POST /demo/red — Red Track end-to-end (requires identity_proof + dual-sign for lease)
 #[utoipa::path(
     post,
     path = "/demo/red",
     tag = "Demo",
-    responses((status = 200, description = "Red Track demo"))
+    responses(
+        (status = 200, description = "Red Track demo completed"),
+        (status = 403, description = "Missing caller_identity_proof")
+    )
 )]
 pub async fn run_red_demo(
-    State(_state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ProblemDetails> {
-    Ok(Json(serde_json::json!({
-        "track": "red",
-        "status": "not_yet_implemented"
-    })))
+    State(state): State<AppState>,
+    Json(req): Json<RedDemoRequest>,
+) -> Result<Json<DemoResponse>, ProblemDetails> {
+    let tenant_id = req.tenant_id.unwrap_or_else(|| "demo-tenant".to_string());
+    let agents = req
+        .agent_ids
+        .unwrap_or_else(|| vec!["agent-synthesizer-01".to_string()]);
+
+    let caller_proof = req.caller_identity_proof.as_deref();
+
+    // Red Track requires caller_identity_proof
+    if caller_proof.is_none() || caller_proof.unwrap().is_empty() {
+        return Err(ProblemDetails::forbidden(
+            "/demo/red",
+            "caller_identity_proof is required for Red Track",
+        ));
+    }
+
+    let intent =
+        "Emergency fix for production database connection pool exhaustion causing P1 outage";
+
+    // Register agent for this demo
+    coevo_store::repos::agent_repo::AgentRepo::register(
+        &state.pool,
+        agents.first().unwrap(),
+        r#"{"roles":["Proposer"]}"#,
+        r#"{"tools":["deploy-production"]}"#,
+    )
+    .await
+    .ok();
+
+    let result = dispatch::dispatch_red(
+        &state.pool,
+        intent,
+        agents,
+        &tenant_id,
+        req.caller_identity_proof.as_deref(),
+        req.monitoring_signature.as_deref(),
+        req.diagnostic_signature.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        let err_str = e.to_string();
+        if err_str.contains("caller_identity_proof") {
+            ProblemDetails::forbidden("/demo/red", &err_str)
+        } else {
+            ProblemDetails::internal_error("/demo/red", &err_str)
+        }
+    })?;
+
+    let rr = result.red_result.unwrap();
+    Ok(Json(DemoResponse {
+        track: "red".to_string(),
+        contract_hash: rr.contract_hash,
+        plan_hash: rr.plan_hash,
+        traceparent: rr.traceparent,
+        ambiguity_score: None,
+        warnings: vec![],
+        entries_created: rr.entries_created,
+        elapsed_ms: 0,
+    }))
 }

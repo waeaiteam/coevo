@@ -22,3 +22,12 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
+
+[dev-dependencies]
+coevo-customs.workspace = true
+coevo-mcl.workspace = true
+coevo-policy.workspace = true
+coevo-resolution.workspace = true
+coevo-reputation.workspace = true
+coevo-risk.workspace = true
+coevo-router.workspace = true
