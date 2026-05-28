@@ -39,6 +39,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
+      <h2 className="text-lg font-bold">Dashboard</h2>
       {/* KPI Row */}
       <div className="grid grid-cols-6 gap-3">
         <MetricCard label="Active Contracts" value={12} sub="+3 this hour" accent="purple" />

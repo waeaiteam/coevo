@@ -2,11 +2,7 @@ import { useEffect, useState } from "react";
 import { getHealth } from "../api/client";
 
 export default function TopStatusBar() {
-  const [status, setStatus] = useState<{ ok: boolean; version: string; latency: number }>({
-    ok: false,
-    version: "—",
-    latency: 0,
-  });
+  const [status, setStatus] = useState({ ok: false, version: "—", latency: 0 });
 
   useEffect(() => {
     let mounted = true;
@@ -25,23 +21,17 @@ export default function TopStatusBar() {
   }, []);
 
   return (
-    <div className="flex items-center gap-6 px-5 py-2.5 border-b text-xs tracking-wide" style={{ background: "#0d0d16", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
-      <div className="flex items-center gap-2">
+    <div className="flex items-center gap-5 px-5 py-2 border-b text-xs" style={{ background: "#fff", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>
+      <div className="flex items-center gap-1.5">
         <span className={`status-dot ${status.ok ? "online pulse" : "offline"}`} />
-        <span style={{ color: status.ok ? "var(--green)" : "var(--red)" }}>
-          {status.ok ? "Control Plane Online" : "Control Plane Offline"}
+        <span style={{ color: status.ok ? "var(--green)" : "var(--red)", fontWeight: 500 }}>
+          {status.ok ? "Online" : "Offline"}
         </span>
       </div>
-      <span style={{ color: "var(--border-accent)" }}>|</span>
-      <span>Server: <span style={{ color: "var(--text-primary)" }}>127.0.0.1:8717</span></span>
-      <span style={{ color: "var(--border-accent)" }}>|</span>
-      <span>Version: <span style={{ color: "var(--text-primary)" }}>{status.version}</span></span>
-      <span style={{ color: "var(--border-accent)" }}>|</span>
-      <span>Latency: <span style={{ color: status.latency < 100 ? "var(--green)" : "var(--yellow)" }}>{status.latency}ms</span></span>
-      <span style={{ color: "var(--border-accent)" }}>|</span>
-      <span>Last Sync: <span style={{ color: "var(--text-primary)" }}>{new Date().toLocaleTimeString()}</span></span>
+      <span>v{status.version}</span>
+      <span>{status.latency}ms</span>
       <div className="flex-1" />
-      <span style={{ color: "var(--text-muted)" }}>{new Date().toISOString().slice(0, 19).replace("T", " ")} UTC</span>
+      <span>{new Date().toLocaleTimeString()}</span>
     </div>
   );
 }
