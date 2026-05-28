@@ -1,0 +1,31 @@
+CREATE TABLE IF NOT EXISTS agent_skills (
+    skill_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    owner_agent_id TEXT NOT NULL DEFAULT '',
+    department TEXT NOT NULL DEFAULT 'Custom',
+    description TEXT NOT NULL DEFAULT '',
+    trigger_patterns_json TEXT NOT NULL DEFAULT '[]',
+    applicable_domains_json TEXT NOT NULL DEFAULT '[]',
+    required_tools_json TEXT NOT NULL DEFAULT '[]',
+    required_model_profile_json TEXT,
+    input_schema_json TEXT NOT NULL DEFAULT '{}',
+    output_schema_json TEXT NOT NULL DEFAULT '{}',
+    prompt_template TEXT NOT NULL DEFAULT '',
+    procedure_steps_json TEXT NOT NULL DEFAULT '[]',
+    guardrails_json TEXT NOT NULL DEFAULT '[]',
+    examples_json TEXT NOT NULL DEFAULT '[]',
+    tests_json TEXT NOT NULL DEFAULT '[]',
+    evals_json TEXT NOT NULL DEFAULT '[]',
+    permissions_required_json TEXT NOT NULL DEFAULT '[]',
+    allowed_cognitive_layers_json TEXT NOT NULL DEFAULT '[]',
+    allowed_action_modes_json TEXT NOT NULL DEFAULT '[]',
+    risk_ceiling REAL NOT NULL DEFAULT 0.3,
+    provenance TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'Draft' CHECK(status IN ('Draft','Proposed','Verified','Approved','Active','Deprecated','Revoked')),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (skill_id, version)
+);
+CREATE INDEX idx_skill_owner ON agent_skills(owner_agent_id);
+CREATE INDEX idx_skill_status ON agent_skills(status);

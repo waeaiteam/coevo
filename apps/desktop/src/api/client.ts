@@ -62,3 +62,23 @@ export async function resolveConflict(request: unknown) {
 export async function runDemo(track: "green" | "yellow" | "red"): Promise<DemoResponse> {
   return post(`/demo/${track}`, { tenant_id: "desktop-demo", agent_ids: ["agent-synthesizer-01"] });
 }
+
+// === OPC API ===
+export async function getUserProfile(): Promise<Record<string,unknown>> { return get("/opc/profile/user"); }
+export async function updateUserProfile(p: Record<string,unknown>) { return put("/opc/profile/user", p); }
+export async function listMemory(params?: Record<string,string>) {
+  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+  return get(`/opc/memory${qs}`);
+}
+export async function createMemory(m: Record<string,unknown>) { return post("/opc/memory", m); }
+export async function staleMemory(id: string) { return post(`/opc/memory/${id}/stale`, {}); }
+export async function revokeMemory(id: string) { return post(`/opc/memory/${id}/revoke`, {}); }
+export async function listEmployees(): Promise<Record<string,unknown>[]> { return get("/opc/agents/employees"); }
+export async function seedEmployees() { return post("/opc/agents/employees/seed", {}); }
+export async function listWorkOrders(): Promise<Record<string,unknown>[]> { return get("/opc/work-orders"); }
+export async function createWorkOrder(wo: Record<string,unknown>) { return post("/opc/work-orders", wo); }
+
+async function put<T=unknown>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
+  return res.json();
+}

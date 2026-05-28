@@ -3,3 +3,5 @@ pub mod migrate;
 pub mod models;
 pub mod pool;
 pub mod repos;
+pub mod repos_opc;
+pub mod seed;

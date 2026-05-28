@@ -2,6 +2,7 @@ pub mod compile;
 pub mod demo;
 pub mod evaluate;
 pub mod health;
+pub mod opc;
 pub mod propose;
 pub mod resolve;
 pub mod route;

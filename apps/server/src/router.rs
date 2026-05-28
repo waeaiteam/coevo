@@ -18,7 +18,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(handlers::health::health_check))
         .route("/openapi.json", get(docs::openapi_json))
         .route("/docs", get(docs::swagger_ui))
-        .route("/redoc", get(docs::redoc));
+        .route("/redoc", get(docs::redoc))
+        // OPC routes
+        .route("/opc/profile/user", get(handlers::opc::get_user_profile).put(handlers::opc::put_user_profile))
+        .route("/opc/memory", get(handlers::opc::list_memory).post(handlers::opc::create_memory))
+        .route("/opc/memory/{id}/stale", post(handlers::opc::stale_memory))
+        .route("/opc/memory/{id}/revoke", post(handlers::opc::revoke_memory))
+        .route("/opc/agents/employees", get(handlers::opc::list_employees))
+        .route("/opc/agents/employees/seed", post(handlers::opc::seed_employees_handler))
+        .route("/opc/work-orders", get(handlers::opc::list_work_orders).post(handlers::opc::create_work_order));
 
     // Authenticated API routes (with metadata validation)
     let api = Router::new()
