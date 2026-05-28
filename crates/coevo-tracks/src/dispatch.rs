@@ -45,7 +45,6 @@ pub async fn dispatch_yellow(
     tenant_id: &str,
     environment: &str,
 ) -> Result<DispatchResult, TrackError> {
-    let runner = YellowTrackRunner;
     let result = YellowTrackRunner::run(pool, user_intent, agent_ids, tenant_id, environment)
         .await
         .map_err(|e| TrackError::YellowError(e.to_string()))?;
@@ -68,7 +67,6 @@ pub async fn dispatch_red(
     monitoring_signature: Option<&str>,
     diagnostic_signature: Option<&str>,
 ) -> Result<DispatchResult, TrackError> {
-    let runner = RedTrackRunner;
     let result = RedTrackRunner::run(
         pool,
         user_intent,

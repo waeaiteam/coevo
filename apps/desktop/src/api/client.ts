@@ -4,7 +4,7 @@ export type { HealthResponse, ContractResponse, DemoResponse } from "../types";
 
 const API_BASE = "http://127.0.0.1:8717";
 
-function headers(): Record<string, string> {
+export function headers(): Record<string, string> {
   return {
     "Content-Type": "application/json",
     "x-coevo-tenant-id": "desktop-tenant",
@@ -17,7 +17,7 @@ function headers(): Record<string, string> {
     "x-coevo-request-ttl-ms": "30000",
     "x-coevo-replay-mode": "false",
     "x-coevo-timestamp": String(Date.now()),
-    traceparent: `00-${crypto.randomUUID().replace(/-/g, "")}-${Math.random().toString(16).slice(2, 18)}-01`,
+    traceparent: `00-${crypto.randomUUID().replace(/-/g, "")}-${Array.from({length:16},()=>Math.floor(Math.random()*16).toString(16)).join("")}-01`,
   };
 }
 

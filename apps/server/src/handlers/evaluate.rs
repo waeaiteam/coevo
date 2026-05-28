@@ -42,7 +42,7 @@ pub struct EvaluateResponse {
     )
 )]
 pub async fn evaluate_risk(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<EvaluateRequest>,
 ) -> Result<Json<EvaluateResponse>, ProblemDetails> {
     let policy = Box::new(MockPolicyEngine::new());

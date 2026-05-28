@@ -19,9 +19,8 @@ pub struct AdrBuilder {
 }
 
 impl AdrBuilder {
-    pub fn new(issue: &str, mcl_reference: &str, proposer_agent: &str) -> Self {
+    pub fn new(_issue: &str, mcl_reference: &str, proposer_agent: &str) -> Self {
         Self {
-            issue: issue.to_string(),
             mcl_reference: mcl_reference.to_string(),
             proposer_agent: proposer_agent.to_string(),
             critic_objections: vec![],

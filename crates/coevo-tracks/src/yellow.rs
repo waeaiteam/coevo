@@ -108,7 +108,7 @@ impl YellowTrackRunner {
             )
             .await;
 
-        let (approval_id, decision_str, final_decision) = match gating.decision {
+        let (approval_id, decision_str, _final_decision) = match gating.decision {
             GateDecision::Allow => (None, "ALLOW".to_string(), GateDecision::Allow),
             GateDecision::RequireHumanApproval => {
                 // Create approval request

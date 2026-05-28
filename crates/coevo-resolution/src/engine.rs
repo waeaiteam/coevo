@@ -70,7 +70,7 @@ impl ResolutionEngine {
             }])
             .build();
 
-            let adr_id = adr.decision_id.clone();
+            let _adr_id = adr.decision_id.clone();
             AdrRepo::insert(pool, &adr)
                 .await
                 .map_err(|e| ResolutionError::StorageError(e.to_string()))?;
@@ -135,7 +135,7 @@ impl ResolutionEngine {
             )
             .build();
 
-            let adr_id = adr.decision_id.clone();
+            let _adr_id = adr.decision_id.clone();
             AdrRepo::insert(pool, &adr)
                 .await
                 .map_err(|e| ResolutionError::StorageError(e.to_string()))?;
@@ -167,7 +167,7 @@ impl ResolutionEngine {
             .with_rejected_alternatives(vec![])
             .build();
 
-            let adr_id = adr.decision_id.clone();
+            let _adr_id = adr.decision_id.clone();
             AdrRepo::insert(pool, &adr)
                 .await
                 .map_err(|e| ResolutionError::StorageError(e.to_string()))?;
@@ -192,7 +192,7 @@ impl ResolutionEngine {
             .with_consensus(ConflictStatus::Divergence, consensus_ratio)
             .build();
 
-            let adr_id = adr.decision_id.clone();
+            let _adr_id = adr.decision_id.clone();
             AdrRepo::insert(pool, &adr)
                 .await
                 .map_err(|e| ResolutionError::StorageError(e.to_string()))?;
