@@ -31,3 +31,6 @@ data/
 
 # Local cargo overrides
 .cargo/config.local.toml
+*.log
+run-server.sh
+start-server.bat
