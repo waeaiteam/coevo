@@ -3,6 +3,12 @@ import { GovernanceProvider } from "./hooks/useGovernance";
 import Layout from "./components/Layout";
 import MissionChat from "./pages/MissionChat";
 import Dashboard from "./pages/Dashboard";
+import FounderProfile from "./pages/FounderProfile";
+import CompanyMemory from "./pages/CompanyMemory";
+import AIEmployees from "./pages/AIEmployees";
+import SkillsPage from "./pages/SkillsPage";
+import ExternalExecutors from "./pages/ExternalExecutors";
+import WorkOrders from "./pages/WorkOrders";
 import Contracts from "./pages/Contracts";
 import Plans from "./pages/Plans";
 import Customs from "./pages/Customs";
@@ -19,6 +25,12 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<MissionChat />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/founder" element={<FounderProfile />} />
+          <Route path="/memory" element={<CompanyMemory />} />
+          <Route path="/employees" element={<AIEmployees />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/executors" element={<ExternalExecutors />} />
+          <Route path="/work-orders" element={<WorkOrders />} />
           <Route path="/contracts" element={<Contracts />} />
           <Route path="/plans" element={<Plans />} />
           <Route path="/customs" element={<Customs />} />

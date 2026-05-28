@@ -14,6 +14,8 @@ members = [
     "crates/coevo-reputation",
     "crates/coevo-tracks",
     "crates/coevo-cli",
+    "crates/coevo-evolution",
+    "crates/coevo-executors",
     "apps/server",
     "tests/e2e",
 ]
@@ -70,5 +72,7 @@ coevo-router = { path = "crates/coevo-router" }
 coevo-customs = { path = "crates/coevo-customs" }
 coevo-risk = { path = "crates/coevo-risk" }
 coevo-resolution = { path = "crates/coevo-resolution" }
+coevo-evolution = { path = "crates/coevo-evolution" }
+coevo-executors = { path = "crates/coevo-executors" }
 coevo-reputation = { path = "crates/coevo-reputation" }
 coevo-tracks = { path = "crates/coevo-tracks" }

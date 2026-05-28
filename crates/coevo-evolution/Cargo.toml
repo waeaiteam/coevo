@@ -1,0 +1,15 @@
+[package]
+name = "coevo-evolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+coevo-core.workspace = true
+coevo-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
