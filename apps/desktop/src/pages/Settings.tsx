@@ -129,7 +129,7 @@ function ModelProviderPanel() {
 
   async function handleTestConnection() {
     setTestResult("idle"); setTestMsg("");
-    const providerMap: Record<string,string> = {"openai-compatible":"OpenAICompatible","openai":"OpenAI","anthropic":"Anthropic","gemini":"Gemini","deepseek":"DeepSeek","ollama":"Ollama","local":"Local"};
+    const providerMap: Record<string,string> = {"mock":"Mock","openai-compatible":"OpenAICompatible","openai":"OpenAI","anthropic":"Anthropic","gemini":"Gemini","deepseek":"DeepSeek","ollama":"Ollama","local":"Local"};
     try {
       await updateModelConfig({provider_id: "desktop", kind: providerMap[m.provider]||"Mock", base_url: m.base_url, api_key: m.api_key, default_model: m.default_model, fast_model: m.fast_model, reasoning_model: m.reasoning_model, structured_output_model: m.structured_output_model, max_tokens: m.max_tokens, temperature: m.temperature, timeout_ms: m.request_timeout_ms, max_cost_per_task_usd: m.max_cost_per_task_usd});
       const r = await testModelConnection() as Record<string,unknown>;
@@ -145,7 +145,7 @@ function ModelProviderPanel() {
     <SettingsSection title={t("settings.model_provider")}>
       <SettingRow label={t("settings.provider")}>
         <SelectField value={m.provider} options={[
-          {value:"openai-compatible",label:"OpenAI Compatible"},{value:"openai",label:"OpenAI"},{value:"anthropic",label:"Anthropic"},{value:"gemini",label:"Gemini"},{value:"deepseek",label:"DeepSeek"},{value:"ollama",label:"Ollama"},{value:"local",label:"Local"}
+          {value:"mock",label:"Mock / Local Test Provider"},{value:"openai-compatible",label:"OpenAI Compatible"},{value:"openai",label:"OpenAI"},{value:"anthropic",label:"Anthropic"},{value:"gemini",label:"Gemini"},{value:"deepseek",label:"DeepSeek"},{value:"ollama",label:"Ollama"},{value:"local",label:"Local"}
         ]} onChange={(v)=>update("model_provider",{provider:v as never})} />
       </SettingRow>
       <SettingRow label={t("settings.base_url")}>

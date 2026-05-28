@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { getHealth, runDemo, headers } from "../api/client";
+import { getHealth, runDemo, headers, ApiError, get, post } from "../api/client";
 
 describe("API Client", () => {
   it("constructs coevo metadata headers", () => {
@@ -15,6 +15,7 @@ describe("API Client", () => {
 
   it("getHealth returns ok from mock", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
       json: () => Promise.resolve({ status: "ok", version: "1.0.0" }),
     });
     const result = await getHealth();
@@ -23,6 +24,7 @@ describe("API Client", () => {
 
   it("runDemo constructs green request", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
       json: () =>
         Promise.resolve({
           track: "green",
@@ -39,5 +41,25 @@ describe("API Client", () => {
     expect(result.track).toBe("green");
     expect(result.contract_hash).toHaveLength(64);
     expect(result.entries_created).toHaveLength(1);
+  });
+
+  it("post throws ApiError on 400", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 400,
+      json: () => Promise.resolve({ error: "MissingApiKey" }),
+    });
+    await expect(post("/opc/models/test", {})).rejects.toThrow(ApiError);
+    try { await post("/opc/models/test", {}); } catch(e) {
+      expect(e instanceof ApiError).toBe(true);
+      expect((e as ApiError).status).toBe(400);
+    }
+  });
+
+  it("get throws ApiError on 403", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 403,
+      json: () => Promise.resolve({ error: "Forbidden" }),
+    });
+    await expect(get("/opc/work-orders/x/execute")).rejects.toThrow(ApiError);
   });
 });

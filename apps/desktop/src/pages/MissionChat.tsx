@@ -112,7 +112,7 @@ export default function MissionChat() {
         const detTrack = inferTrackFromIntent(text).track;
         appendMsg("system","text","Model-enhanced mission draft generated",
           `goal: ${mj.goal_summary||"N/A"} | track: ${modelTrack}`+(modelTrack!==detTrack?` (governance override: ${detTrack})`:""));
-      } catch { /* model failed, fallback to deterministic */ }
+      } catch { appendMsg("system","warning","Model Gateway unavailable. Falling back to deterministic Mission Draft."); }
 
       appendMsg("system", "text", "Compiling MCL contract...");
       const compileRes = await compileContract(text, "DRAFT");
@@ -202,7 +202,7 @@ export default function MissionChat() {
           ]
         }) as Record<string,unknown>;
         appendMsg("system","text","Synthesizer Summary",(synth.content||"") as string);
-      } catch { /* fallback */ }
+      } catch { appendMsg("system","warning","Synthesizer model unavailable. Showing raw execution result."); }
 
       appendMsg("system","text","coevo Governance Mesh completed. Human responsibility is anchored via ADR-A. Audit trail preserved.");
     } catch (e: unknown) {

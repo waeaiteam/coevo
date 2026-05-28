@@ -21,9 +21,30 @@ export function headers(): Record<string, string> {
   };
 }
 
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+  constructor(status: number, message: string, payload?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+async function handleResponse(res: Response) {
+  if (!res.ok) {
+    let body: Record<string,unknown> = {};
+    try { body = await res.json(); } catch { /* use empty */ }
+    const msg = (body.error as string) || (body.message as string) || `HTTP ${res.status}`;
+    throw new ApiError(res.status, msg, body);
+  }
+  try { return await res.json(); } catch { return {}; }
+}
+
 export async function get<T = unknown>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { headers: headers() });
-  return res.json();
+  return handleResponse(res) as Promise<T>;
 }
 
 export async function post<T = unknown>(path: string, body: unknown): Promise<T> {
@@ -32,7 +53,7 @@ export async function post<T = unknown>(path: string, body: unknown): Promise<T>
     headers: headers(),
     body: JSON.stringify(body),
   });
-  return res.json();
+  return handleResponse(res) as Promise<T>;
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -111,5 +132,5 @@ export async function modelStructured(payload: Record<string,unknown>) { return 
 
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
-  return res.json();
+  return handleResponse(res) as Promise<T>;
 }
