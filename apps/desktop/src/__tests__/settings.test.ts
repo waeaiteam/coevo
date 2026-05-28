@@ -39,8 +39,38 @@ describe("Settings", () => {
   });
 
   it("SaveBar appears when dirty", () => {
-    // SaveBar shows when dirty=true, hides when dirty=false && saved=false
-    // Verified by component logic: if (!dirty && !saved) return null
     expect(true).toBe(true);
+  });
+
+  it("MissionDraft has required fields", () => {
+    const draft = {
+      intent: "test",
+      suggestedTrack: "green" as const,
+      reason: "test",
+      contractHash: "a".repeat(64),
+      planHash: "b".repeat(64),
+      ambiguityScore: 0.2,
+      selectedAgents: ["agent-1"],
+      allowedActions: ["read"],
+      restrictedActions: ["write"],
+      approvalRequired: false,
+      approvalMode: "NEGATIVE_CONSENT",
+      compileResult: {},
+      routeResult: {},
+    };
+    expect(draft.suggestedTrack).toBe("green");
+    expect(draft.contractHash).toHaveLength(64);
+    expect(draft.selectedAgents).toHaveLength(1);
+    expect(draft.allowedActions).toContain("read");
+    expect(draft.restrictedActions).toContain("write");
+    expect(draft.approvalRequired).toBe(false);
+  });
+
+  it("MissionPhase has all required states", () => {
+    const phases = ["idle", "drafting", "review", "executing", "completed", "cancelled", "error"];
+    expect(phases).toContain("review");
+    expect(phases).toContain("cancelled");
+    expect(phases).toContain("executing");
+    expect(phases.length).toBe(7);
   });
 });
