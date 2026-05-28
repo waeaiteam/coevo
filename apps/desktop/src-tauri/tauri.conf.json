@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "title": "coevo — Agent Governance Mesh",
     "withGlobalTauri": true,
     "windows": [
       {
