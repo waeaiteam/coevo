@@ -36,7 +36,8 @@ impl CognitiveDependencyGraph {
         target_entry_id: &str,
         edge_type: EdgeType,
     ) -> Result<(), DependencyGraphError> {
-        CognitiveEdgeRepo::insert(pool, source_entry_id, target_entry_id, edge_type.as_str()).await?;
+        CognitiveEdgeRepo::insert(pool, source_entry_id, target_entry_id, edge_type.as_str())
+            .await?;
         Ok(())
     }
 

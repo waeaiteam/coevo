@@ -73,10 +73,7 @@ impl YellowTrackRunner {
         )?;
         ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t1.new_state)).await?;
 
-        let t2 = MCLStateMachine::transition(
-            t1.new_state,
-            TransitionEvent::ContractActivation,
-        )?;
+        let t2 = MCLStateMachine::transition(t1.new_state, TransitionEvent::ContractActivation)?;
         ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t2.new_state)).await?;
 
         // Route
@@ -103,12 +100,12 @@ impl YellowTrackRunner {
                 &contract,
                 &[0.7], // support reputation
                 &[0.8], // support evidence weight
-                &[],     // no opposition
-                &[],     // no opposition evidence
-                0.3,     // service impact
-                0.2,     // time criticality
-                0.1,     // failure propagation
-                false,   // no veto
+                &[],    // no opposition
+                &[],    // no opposition evidence
+                0.3,    // service impact
+                0.2,    // time criticality
+                0.1,    // failure propagation
+                false,  // no veto
             )
             .await;
 

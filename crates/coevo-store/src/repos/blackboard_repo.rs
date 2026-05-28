@@ -18,12 +18,11 @@ impl BlackboardRepo {
         let now = chrono::Utc::now().timestamp_millis();
         let expires_at = ttl_ms.map(|t| now + t);
         // Get current max version for this key
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT MAX(version) FROM blackboard_entries WHERE entry_key = ?"
-        )
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT MAX(version) FROM blackboard_entries WHERE entry_key = ?")
+                .bind(key)
+                .fetch_optional(pool)
+                .await?;
         let version = row.map(|(v,)| v + 1).unwrap_or(1);
         sqlx::query(
             "INSERT INTO blackboard_entries (id, entry_key, version, value_json, cognitive_layer, source_agent_id, contract_hash, is_valid, created_at_ms, expires_at_ms) VALUES (?,?,?,?,?,?,?,1,?,?)"
@@ -42,7 +41,10 @@ impl BlackboardRepo {
         Ok(id)
     }
 
-    pub async fn find_latest(pool: &SqlitePool, key: &str) -> Result<Option<BlackboardEntryRow>, sqlx::Error> {
+    pub async fn find_latest(
+        pool: &SqlitePool,
+        key: &str,
+    ) -> Result<Option<BlackboardEntryRow>, sqlx::Error> {
         sqlx::query_as::<_, BlackboardEntryRow>(
             "SELECT * FROM blackboard_entries WHERE entry_key = ? AND is_valid = 1 ORDER BY version DESC LIMIT 1"
         )
@@ -51,7 +53,10 @@ impl BlackboardRepo {
         .await
     }
 
-    pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<BlackboardEntryRow>, sqlx::Error> {
+    pub async fn find_by_id(
+        pool: &SqlitePool,
+        id: &str,
+    ) -> Result<Option<BlackboardEntryRow>, sqlx::Error> {
         sqlx::query_as::<_, BlackboardEntryRow>("SELECT * FROM blackboard_entries WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
@@ -75,7 +80,9 @@ impl BlackboardRepo {
         Ok(())
     }
 
-    pub async fn expire_stale_facts(pool: &SqlitePool) -> Result<Vec<BlackboardEntryRow>, sqlx::Error> {
+    pub async fn expire_stale_facts(
+        pool: &SqlitePool,
+    ) -> Result<Vec<BlackboardEntryRow>, sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
         let rows = sqlx::query_as::<_, BlackboardEntryRow>(
             "SELECT * FROM blackboard_entries WHERE cognitive_layer = 'Fact' AND is_valid = 1 AND expires_at_ms IS NOT NULL AND expires_at_ms < ?"
@@ -83,12 +90,16 @@ impl BlackboardRepo {
         .bind(now)
         .fetch_all(pool)
         .await?;
+        let mut updated = Vec::new();
         for row in &rows {
             sqlx::query("UPDATE blackboard_entries SET cognitive_layer = 'StaleFact' WHERE id = ?")
                 .bind(&row.id)
                 .execute(pool)
                 .await?;
+            if let Some(refetched) = Self::find_by_id(pool, &row.id).await? {
+                updated.push(refetched);
+            }
         }
-        Ok(rows)
+        Ok(updated)
     }
 }

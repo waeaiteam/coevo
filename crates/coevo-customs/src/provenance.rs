@@ -4,7 +4,10 @@
 use coevo_core::cognitive::ProvenanceEnvelope;
 
 /// Validate a provenance envelope for fact-layer writes.
-pub fn validate_provenance(envelope: &ProvenanceEnvelope, require_mcp_verification: bool) -> Result<(), ProvenanceError> {
+pub fn validate_provenance(
+    envelope: &ProvenanceEnvelope,
+    require_mcp_verification: bool,
+) -> Result<(), ProvenanceError> {
     if envelope.source_agent_id.is_empty() {
         return Err(ProvenanceError::MissingField("source_agent_id"));
     }

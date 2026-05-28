@@ -37,7 +37,10 @@ impl AdrBuilder {
             human_override_reason: None,
             responsibility_anchor: ResponsibilityAnchor {
                 human_role: "CISO".to_string(),
-                mfa_signature_fingerprint: format!("mfa-fp-{}", hex::encode(&rand::random::<[u8; 16]>())),
+                mfa_signature_fingerprint: format!(
+                    "mfa-fp-{}",
+                    hex::encode(&rand::random::<[u8; 16]>())
+                ),
             },
             follow_up_monitoring_plan: Some(
                 "Monitor for 24h; auto-rollback if error rate exceeds 5%".to_string(),

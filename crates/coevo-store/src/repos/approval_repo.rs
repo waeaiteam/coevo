@@ -32,14 +32,21 @@ impl ApprovalRepo {
         Ok(id)
     }
 
-    pub async fn find_by_id(pool: &SqlitePool, id: &str) -> Result<Option<ApprovalRequestRow>, sqlx::Error> {
+    pub async fn find_by_id(
+        pool: &SqlitePool,
+        id: &str,
+    ) -> Result<Option<ApprovalRequestRow>, sqlx::Error> {
         sqlx::query_as::<_, ApprovalRequestRow>("SELECT * FROM approval_requests WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
             .await
     }
 
-    pub async fn approve(pool: &SqlitePool, id: &str, approved_by: &str) -> Result<(), sqlx::Error> {
+    pub async fn approve(
+        pool: &SqlitePool,
+        id: &str,
+        approved_by: &str,
+    ) -> Result<(), sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query("UPDATE approval_requests SET status = 'approved', approved_by = ?, decided_at_ms = ? WHERE id = ?")
             .bind(approved_by)
@@ -64,7 +71,7 @@ impl ApprovalRepo {
     pub async fn expire_pending(pool: &SqlitePool) -> Result<Vec<ApprovalRequestRow>, sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
         let rows = sqlx::query_as::<_, ApprovalRequestRow>(
-            "SELECT * FROM approval_requests WHERE status = 'pending' AND expires_at_ms < ?"
+            "SELECT * FROM approval_requests WHERE status = 'pending' AND expires_at_ms < ?",
         )
         .bind(now)
         .fetch_all(pool)

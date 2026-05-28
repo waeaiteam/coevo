@@ -1,8 +1,8 @@
 //! Mock Identity adapter — simulates OIDC/mTLS authentication.
 
+use crate::traits::*;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use crate::traits::*;
 
 pub struct MockIdentityProvider {
     known_agents: Vec<(String, Vec<String>)>, // (agent_id, roles)
@@ -12,11 +12,23 @@ impl MockIdentityProvider {
     pub fn new() -> Self {
         Self {
             known_agents: vec![
-                ("agent-synthesizer-01".to_string(), vec!["Synthesizer".to_string()]),
+                (
+                    "agent-synthesizer-01".to_string(),
+                    vec!["Synthesizer".to_string()],
+                ),
                 ("agent-critic-01".to_string(), vec!["Critic".to_string()]),
-                ("agent-proposer-01".to_string(), vec!["Proposer".to_string()]),
-                ("agent-diagnostic-01".to_string(), vec!["Diagnostic".to_string()]),
-                ("agent-admin-01".to_string(), vec!["Admin".to_string(), "HumanApprover".to_string()]),
+                (
+                    "agent-proposer-01".to_string(),
+                    vec!["Proposer".to_string()],
+                ),
+                (
+                    "agent-diagnostic-01".to_string(),
+                    vec!["Diagnostic".to_string()],
+                ),
+                (
+                    "agent-admin-01".to_string(),
+                    vec!["Admin".to_string(), "HumanApprover".to_string()],
+                ),
             ],
         }
     }
@@ -35,15 +47,21 @@ impl Default for MockIdentityProvider {
 
 #[async_trait]
 impl IdentityProvider for MockIdentityProvider {
-    async fn verify_proof(&self, caller_identity_proof: &str) -> Result<IdentityClaims, AdapterError> {
+    async fn verify_proof(
+        &self,
+        caller_identity_proof: &str,
+    ) -> Result<IdentityClaims, AdapterError> {
         // Mock: parse proof as "agent:<agent_id>:<tenant_id>"
         // In real impl, this would verify Ed25519 signature against JWKS
         if caller_identity_proof.is_empty() {
-            return Err(AdapterError::IdentityError("empty identity proof".to_string()));
+            return Err(AdapterError::IdentityError(
+                "empty identity proof".to_string(),
+            ));
         }
 
         // For mock, we accept "mock-signature:<agent_id>" format
-        let agent_id = if let Some(stripped) = caller_identity_proof.strip_prefix("mock-signature:") {
+        let agent_id = if let Some(stripped) = caller_identity_proof.strip_prefix("mock-signature:")
+        {
             stripped.to_string()
         } else if caller_identity_proof.starts_with("agent:") {
             caller_identity_proof
@@ -80,7 +98,11 @@ impl IdentityProvider for MockIdentityProvider {
         Ok(token == "mfa-valid" || token.len() > 5)
     }
 
-    async fn issue_passport(&self, agent_id: &str, roles: Vec<String>) -> Result<String, AdapterError> {
+    async fn issue_passport(
+        &self,
+        agent_id: &str,
+        roles: Vec<String>,
+    ) -> Result<String, AdapterError> {
         let mut hasher = Sha256::new();
         hasher.update(agent_id.as_bytes());
         hasher.update(serde_json::to_string(&roles).unwrap().as_bytes());

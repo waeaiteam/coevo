@@ -28,7 +28,11 @@ impl PcdtRouter {
         }
 
         // Build a topological path (simplistic: sequential ordering for now; DAG in production)
-        let primary_path: Vec<String> = agent_ids.iter().take(contract.termination_policy.max_hops as usize).cloned().collect();
+        let primary_path: Vec<String> = agent_ids
+            .iter()
+            .take(contract.termination_policy.max_hops as usize)
+            .cloned()
+            .collect();
 
         if primary_path.is_empty() {
             return Err(RoutingError::NoCompliantPath {
@@ -90,8 +94,8 @@ impl PcdtRouter {
         };
 
         // Hash the plan
-        let plan_json = serde_json::to_string(&plan)
-            .map_err(|e| RoutingError::Internal(e.to_string()))?;
+        let plan_json =
+            serde_json::to_string(&plan).map_err(|e| RoutingError::Internal(e.to_string()))?;
         let mut hasher = Sha256::new();
         hasher.update(plan_json.as_bytes());
         let plan_hash = hex::encode(hasher.finalize());

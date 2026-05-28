@@ -32,9 +32,13 @@ impl AuditRepo {
         Ok(id)
     }
 
-    pub async fn list_by_tenant(pool: &SqlitePool, tenant_id: &str, limit: i64) -> Result<Vec<AuditEventRow>, sqlx::Error> {
+    pub async fn list_by_tenant(
+        pool: &SqlitePool,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AuditEventRow>, sqlx::Error> {
         sqlx::query_as::<_, AuditEventRow>(
-            "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY recorded_at_ms DESC LIMIT ?"
+            "SELECT * FROM audit_events WHERE tenant_id = ? ORDER BY recorded_at_ms DESC LIMIT ?",
         )
         .bind(tenant_id)
         .bind(limit)

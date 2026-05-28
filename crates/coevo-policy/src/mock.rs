@@ -48,7 +48,10 @@ impl Default for MockPolicyEngine {
 
 #[async_trait]
 impl PolicyEngine for MockPolicyEngine {
-    async fn validate_contract(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError> {
+    async fn validate_contract(
+        &self,
+        contract: &MCLSpec,
+    ) -> Result<PolicyResult, PolicyEngineError> {
         let mut violations: Vec<PolicyViolation> = vec![];
 
         // Check data boundaries
@@ -73,7 +76,10 @@ impl PolicyEngine for MockPolicyEngine {
                 if action_str.contains(forbidden) {
                     violations.push(PolicyViolation {
                         policy_urn: "urn:coevo:policy:forbidden-action".to_string(),
-                        description: format!("Action '{}' matches forbidden action '{}'", action_str, forbidden),
+                        description: format!(
+                            "Action '{}' matches forbidden action '{}'",
+                            action_str, forbidden
+                        ),
                         remediation: Some("Remove forbidden action from contract".to_string()),
                     });
                 }

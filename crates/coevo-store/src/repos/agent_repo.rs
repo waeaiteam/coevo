@@ -33,14 +33,21 @@ impl AgentRepo {
             .await
     }
 
-    pub async fn find_by_id(pool: &SqlitePool, agent_id: &str) -> Result<Option<AgentRow>, sqlx::Error> {
+    pub async fn find_by_id(
+        pool: &SqlitePool,
+        agent_id: &str,
+    ) -> Result<Option<AgentRow>, sqlx::Error> {
         sqlx::query_as::<_, AgentRow>("SELECT * FROM agent_registry WHERE agent_id = ?")
             .bind(agent_id)
             .fetch_optional(pool)
             .await
     }
 
-    pub async fn update_status(pool: &SqlitePool, agent_id: &str, status: &str) -> Result<(), sqlx::Error> {
+    pub async fn update_status(
+        pool: &SqlitePool,
+        agent_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE agent_registry SET status = ? WHERE agent_id = ?")
             .bind(status)
             .bind(agent_id)

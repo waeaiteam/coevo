@@ -57,7 +57,10 @@ impl ResolutionEngine {
             let adr = AdrBuilder::new(
                 &stance_matrix.issue,
                 &stance_matrix.context_ref,
-                supporters.first().map(|s| s.agent_id.as_str()).unwrap_or("unknown"),
+                supporters
+                    .first()
+                    .map(|s| s.agent_id.as_str())
+                    .unwrap_or("unknown"),
             )
             .with_veto_blockers(veto_agents.clone())
             .with_rejected_alternatives(vec![RejectedAlternative {
@@ -105,18 +108,19 @@ impl ResolutionEngine {
             .max()
             .unwrap_or(0);
 
-        let should_stop = self.stopper.should_stop(
-            max_round,
-            consensus_ratio,
-            stance_matrix.max_rounds,
-        );
+        let should_stop =
+            self.stopper
+                .should_stop(max_round, consensus_ratio, stance_matrix.max_rounds);
 
         if consensus_ratio >= 0.66 {
             // Consensus reached
             let adr = AdrBuilder::new(
                 &stance_matrix.issue,
                 &stance_matrix.context_ref,
-                supporters.first().map(|s| s.agent_id.as_str()).unwrap_or("unknown"),
+                supporters
+                    .first()
+                    .map(|s| s.agent_id.as_str())
+                    .unwrap_or("unknown"),
             )
             .with_consensus(ConflictStatus::Consensus, consensus_ratio)
             .with_rejected_alternatives(
@@ -155,7 +159,10 @@ impl ResolutionEngine {
             let adr = AdrBuilder::new(
                 &stance_matrix.issue,
                 &stance_matrix.context_ref,
-                supporters.first().map(|s| s.agent_id.as_str()).unwrap_or("unknown"),
+                supporters
+                    .first()
+                    .map(|s| s.agent_id.as_str())
+                    .unwrap_or("unknown"),
             )
             .with_consensus(ConflictStatus::TradeOff, consensus_ratio)
             .with_rejected_alternatives(vec![])
@@ -178,7 +185,10 @@ impl ResolutionEngine {
             let adr = AdrBuilder::new(
                 &stance_matrix.issue,
                 &stance_matrix.context_ref,
-                supporters.first().map(|s| s.agent_id.as_str()).unwrap_or("unknown"),
+                supporters
+                    .first()
+                    .map(|s| s.agent_id.as_str())
+                    .unwrap_or("unknown"),
             )
             .with_consensus(ConflictStatus::Divergence, consensus_ratio)
             .build();
@@ -208,7 +218,11 @@ impl ResolutionEngine {
                 adr: None,
                 escalation: Some(EscalationAction {
                     target: "ResolutionEngine".to_string(),
-                    reason: format!("Continue debate, round {}/{}", max_round + 1, stance_matrix.max_rounds),
+                    reason: format!(
+                        "Continue debate, round {}/{}",
+                        max_round + 1,
+                        stance_matrix.max_rounds
+                    ),
                     requires_human_arbitration: false,
                 }),
             })

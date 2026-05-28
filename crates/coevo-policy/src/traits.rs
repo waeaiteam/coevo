@@ -34,7 +34,10 @@ pub struct PolicyViolation {
 #[async_trait]
 pub trait PolicyEngine: Send + Sync {
     /// Evaluate a contract against the institution policy.
-    async fn validate_contract(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError>;
+    async fn validate_contract(
+        &self,
+        contract: &MCLSpec,
+    ) -> Result<PolicyResult, PolicyEngineError>;
 
     /// Dry-run evaluation without side effects.
     async fn dry_run(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError>;

@@ -6,7 +6,11 @@ use uuid::Uuid;
 pub struct ContractRepo;
 
 impl ContractRepo {
-    pub async fn insert(pool: &SqlitePool, contract: &MCLSpec, contract_hash: &str) -> Result<String, sqlx::Error> {
+    pub async fn insert(
+        pool: &SqlitePool,
+        contract: &MCLSpec,
+        contract_hash: &str,
+    ) -> Result<String, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query(
@@ -33,7 +37,10 @@ impl ContractRepo {
         Ok(id)
     }
 
-    pub async fn find_by_hash(pool: &SqlitePool, hash: &str) -> Result<Option<ContractRow>, sqlx::Error> {
+    pub async fn find_by_hash(
+        pool: &SqlitePool,
+        hash: &str,
+    ) -> Result<Option<ContractRow>, sqlx::Error> {
         sqlx::query_as::<_, ContractRow>("SELECT * FROM contracts WHERE contract_hash = ?")
             .bind(hash)
             .fetch_optional(pool)
@@ -46,12 +53,14 @@ impl ContractRepo {
         new_state: &str,
     ) -> Result<(), sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query("UPDATE contracts SET mcl_state = ?, updated_at_ms = ? WHERE contract_hash = ?")
-            .bind(new_state)
-            .bind(now)
-            .bind(hash)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE contracts SET mcl_state = ?, updated_at_ms = ? WHERE contract_hash = ?",
+        )
+        .bind(new_state)
+        .bind(now)
+        .bind(hash)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 }

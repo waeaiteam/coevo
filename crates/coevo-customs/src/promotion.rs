@@ -44,7 +44,8 @@ impl PromotionEngine {
         match (current_layer, request.target_layer) {
             // Hypothesis → Fact: requires external MCP verification
             (CognitiveLayer::Hypothesis, CognitiveLayer::Fact) => {
-                if evidence_requirement.require_json_report && request.verification_report.is_none() {
+                if evidence_requirement.require_json_report && request.verification_report.is_none()
+                {
                     return Err(PromotionError::MissingVerification);
                 }
                 BlackboardRepo::update_layer(pool, &request.entry_id, "Fact").await?;

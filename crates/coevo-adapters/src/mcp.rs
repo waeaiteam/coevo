@@ -1,8 +1,8 @@
 //! Mock MCP adapter — simulates tool calls and verification.
 
+use crate::traits::*;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use crate::traits::*;
 
 pub struct MockMcpAdapter {
     registered_tools: Vec<String>,

@@ -38,7 +38,8 @@ impl CognitiveCustoms {
         if cognitive_layer == CognitiveLayer::Fact {
             if provenance_envelope.verification_tool_urn.is_empty() {
                 return Err(ProposeError::CognitiveBoundViolation {
-                    detail: "Cannot write directly to FACT layer without MCP-verified provenance".to_string(),
+                    detail: "Cannot write directly to FACT layer without MCP-verified provenance"
+                        .to_string(),
                 });
             }
         }
@@ -112,4 +113,8 @@ pub enum ProposeError {
     VersionMismatch { expected: u64, actual: u64 },
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("blackboard error: {0}")]
+    Blackboard(#[from] super::blackboard::BlackboardError),
+    #[error("dependency graph error: {0}")]
+    Dependency(#[from] super::dependency::DependencyGraphError),
 }

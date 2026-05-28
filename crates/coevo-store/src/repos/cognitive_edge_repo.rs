@@ -27,9 +27,12 @@ impl CognitiveEdgeRepo {
     }
 
     /// Get all downstream entries that depend on the given entry (target_entry_id is the dependency).
-    pub async fn find_dependents(pool: &SqlitePool, entry_id: &str) -> Result<Vec<CognitiveEdgeRow>, sqlx::Error> {
+    pub async fn find_dependents(
+        pool: &SqlitePool,
+        entry_id: &str,
+    ) -> Result<Vec<CognitiveEdgeRow>, sqlx::Error> {
         sqlx::query_as::<_, CognitiveEdgeRow>(
-            "SELECT * FROM cognitive_edges WHERE target_entry_id = ?"
+            "SELECT * FROM cognitive_edges WHERE target_entry_id = ?",
         )
         .bind(entry_id)
         .fetch_all(pool)
@@ -37,9 +40,12 @@ impl CognitiveEdgeRepo {
     }
 
     /// Get all upstream entries that the given entry depends on.
-    pub async fn find_dependencies(pool: &SqlitePool, entry_id: &str) -> Result<Vec<CognitiveEdgeRow>, sqlx::Error> {
+    pub async fn find_dependencies(
+        pool: &SqlitePool,
+        entry_id: &str,
+    ) -> Result<Vec<CognitiveEdgeRow>, sqlx::Error> {
         sqlx::query_as::<_, CognitiveEdgeRow>(
-            "SELECT * FROM cognitive_edges WHERE source_entry_id = ?"
+            "SELECT * FROM cognitive_edges WHERE source_entry_id = ?",
         )
         .bind(entry_id)
         .fetch_all(pool)

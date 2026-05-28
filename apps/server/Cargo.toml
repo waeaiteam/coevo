@@ -8,6 +8,13 @@ license.workspace = true
 coevo-tracks.workspace = true
 coevo-core.workspace = true
 coevo-store.workspace = true
+coevo-adapters.workspace = true
+coevo-customs.workspace = true
+coevo-mcl.workspace = true
+coevo-policy.workspace = true
+coevo-resolution.workspace = true
+coevo-risk.workspace = true
+coevo-router.workspace = true
 axum.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
@@ -22,6 +29,8 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
+hex.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 coevo-customs.workspace = true

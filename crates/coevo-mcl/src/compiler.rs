@@ -49,7 +49,8 @@ impl MCLCompiler {
         if parsed.ambiguity_score > 0.7 {
             return Err(CompileError::AmbiguityTooHigh {
                 score: parsed.ambiguity_score,
-                detail: "Intent is too ambiguous; please provide more specific instructions".to_string(),
+                detail: "Intent is too ambiguous; please provide more specific instructions"
+                    .to_string(),
             });
         }
         if parsed.ambiguity_score > 0.3 {
@@ -104,7 +105,10 @@ impl MCLCompiler {
             if let Some(ref engine) = self.policy_engine {
                 if let Ok(dry_run) = engine.dry_run(&contract).await {
                     for v in &dry_run.violations {
-                        warnings.push(format!("Policy warning [{}]: {}", v.policy_urn, v.description));
+                        warnings.push(format!(
+                            "Policy warning [{}]: {}",
+                            v.policy_urn, v.description
+                        ));
                     }
                 }
             }

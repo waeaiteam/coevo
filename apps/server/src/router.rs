@@ -26,14 +26,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/router/route", post(handlers::route::route_plan))
         .route("/customs/propose", post(handlers::propose::propose_fact))
         .route("/risk/evaluate", post(handlers::evaluate::evaluate_risk))
-        .route("/resolution/process", post(handlers::resolve::resolve_conflict))
+        .route(
+            "/resolution/process",
+            post(handlers::resolve::resolve_conflict),
+        )
         .route("/demo/green", post(handlers::demo::run_green_demo))
         .route("/demo/yellow", post(handlers::demo::run_yellow_demo))
         .route("/demo/red", post(handlers::demo::run_red_demo))
         .layer(middleware::from_fn(validate_metadata));
 
-    Router::new()
-        .merge(public)
-        .merge(api)
-        .with_state(state)
+    Router::new().merge(public).merge(api).with_state(state)
 }

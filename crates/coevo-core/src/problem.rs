@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// RFC 9457 compliant problem detail.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProblemDetails {
     /// A URI reference that identifies the problem type.
     #[serde(rename = "type")]
@@ -189,8 +189,8 @@ impl ProblemDetails {
 /// Axum-compatible response conversion.
 impl axum::response::IntoResponse for ProblemDetails {
     fn into_response(self) -> axum::response::Response {
-        let status =
-            axum::http::StatusCode::from_u16(self.status).unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let status = axum::http::StatusCode::from_u16(self.status)
+            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         let body = axum::Json(self);
         (status, body).into_response()
     }

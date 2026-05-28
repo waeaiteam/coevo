@@ -31,12 +31,11 @@ pub async fn run_adversarial_audit(
     for agent in &agents {
         if rng.gen::<f64>() < sample_rate {
             // Simulate audit: check if agent's reputation is suspiciously inflated
-            let avg_score =
-                (agent.task_domain_competence
-                    + agent.uncertainty_honesty
-                    + agent.policy_compliance
-                    + agent.resource_efficiency)
-                    / 4.0;
+            let avg_score = (agent.task_domain_competence
+                + agent.uncertainty_honesty
+                + agent.policy_compliance
+                + agent.resource_efficiency)
+                / 4.0;
 
             if avg_score > 0.95 && agent.task_count < 10 {
                 failed += 1;

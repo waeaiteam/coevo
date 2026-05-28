@@ -80,9 +80,13 @@ impl GreenTrackRunner {
             .map_err(|e| GreenTrackError::CompilationFailed(e.to_string()))?;
 
         // Store contract
-        ContractRepo::insert(pool, &compile_result.contract, &compile_result.contract_hash)
-            .await
-            .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
+        ContractRepo::insert(
+            pool,
+            &compile_result.contract,
+            &compile_result.contract_hash,
+        )
+        .await
+        .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
         // Transition: Draft → Validated
         let t1 = MCLStateMachine::transition(
@@ -90,27 +94,28 @@ impl GreenTrackRunner {
             TransitionEvent::PolicyValidationPass,
         )
         .map_err(|e| GreenTrackError::StateMachineError(e.to_string()))?;
-        ContractRepo::update_state(pool, &compile_result.contract_hash, &format!("{:?}", t1.new_state))
-            .await
-            .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
+        ContractRepo::update_state(
+            pool,
+            &compile_result.contract_hash,
+            &format!("{:?}", t1.new_state),
+        )
+        .await
+        .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
         // Transition: Validated → Active
-        let t2 = MCLStateMachine::transition(
-            t1.new_state,
-            TransitionEvent::ContractActivation,
+        let t2 = MCLStateMachine::transition(t1.new_state, TransitionEvent::ContractActivation)
+            .map_err(|e| GreenTrackError::StateMachineError(e.to_string()))?;
+        ContractRepo::update_state(
+            pool,
+            &compile_result.contract_hash,
+            &format!("{:?}", t2.new_state),
         )
-        .map_err(|e| GreenTrackError::StateMachineError(e.to_string()))?;
-        ContractRepo::update_state(pool, &compile_result.contract_hash, &format!("{:?}", t2.new_state))
-            .await
-            .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
+        .await
+        .map_err(|e| GreenTrackError::StorageError(e.to_string()))?;
 
         // ---- Step 3: Route ----
-        let route_result = PcdtRouter::compute(
-            &compile_result.contract,
-            agent_ids.clone(),
-            None,
-        )
-        .map_err(|e| GreenTrackError::RoutingFailed(e.to_string()))?;
+        let route_result = PcdtRouter::compute(&compile_result.contract, agent_ids.clone(), None)
+            .map_err(|e| GreenTrackError::RoutingFailed(e.to_string()))?;
 
         PlanRepo::insert(pool, &route_result.plan, &compile_result.contract_hash)
             .await

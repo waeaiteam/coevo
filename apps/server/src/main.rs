@@ -45,8 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers(Any);
 
     // Build router
-    let app = build_router(state)
-        .layer(cors);
+    let app = build_router(state).layer(cors);
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;

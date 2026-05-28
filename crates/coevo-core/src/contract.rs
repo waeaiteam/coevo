@@ -32,7 +32,7 @@ pub struct MCLSpec {
 
 /// MCL contract lifecycle states. Transition is strictly one-way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "PascalCase")]
 pub enum ContractState {
     DraftContract,
     ValidatedContract,
@@ -45,12 +45,24 @@ impl ContractState {
     pub fn can_transition_to(&self, target: ContractState) -> bool {
         matches!(
             (self, target),
-            (ContractState::DraftContract, ContractState::ValidatedContract)
-                | (ContractState::ValidatedContract, ContractState::ActiveContract)
-                | (ContractState::ActiveContract, ContractState::SuspendedContract)
-                | (ContractState::ActiveContract, ContractState::ClosedContract)
-                | (ContractState::SuspendedContract, ContractState::ActiveContract)
-                | (ContractState::SuspendedContract, ContractState::ClosedContract)
+            (
+                ContractState::DraftContract,
+                ContractState::ValidatedContract
+            ) | (
+                ContractState::ValidatedContract,
+                ContractState::ActiveContract
+            ) | (
+                ContractState::ActiveContract,
+                ContractState::SuspendedContract
+            ) | (ContractState::ActiveContract, ContractState::ClosedContract)
+                | (
+                    ContractState::SuspendedContract,
+                    ContractState::ActiveContract
+                )
+                | (
+                    ContractState::SuspendedContract,
+                    ContractState::ClosedContract
+                )
         )
     }
 }

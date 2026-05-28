@@ -3,7 +3,7 @@
 use axum::response::{Html, Json};
 use utoipa::OpenApi;
 
-use crate::handlers::*;
+use crate::handlers;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -21,7 +21,6 @@ use crate::handlers::*;
     ),
     components(schemas(
         coevo_core::problem::ProblemDetails,
-        coevo_core::metadata::CommonMetadataHeader,
     )),
     tags(
         (name = "MCL", description = "Mission Contract Language compiler"),
@@ -42,9 +41,28 @@ pub async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
 /// Serve Swagger UI HTML page.
 pub async fn swagger_ui() -> Html<String> {
     Html(
-        utoipa_swagger_ui::SwaggerUi::new("/openapi.json")
-            .url("/openapi.json", ApiDoc::openapi())
-            .to_html(),
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>coevo API - Swagger UI</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+        SwaggerUIBundle({
+            url: "/openapi.json",
+            dom_id: '#swagger-ui',
+            presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+            layout: "BaseLayout"
+        });
+    </script>
+</body>
+</html>"#
+            .to_string(),
     )
 }
 
@@ -64,6 +82,6 @@ pub async fn redoc() -> Html<String> {
     <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
 </body>
 </html>"#
-        .to_string(),
+            .to_string(),
     )
 }

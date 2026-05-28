@@ -96,15 +96,34 @@ impl MCLStateMachine {
     pub fn can_transition(current: ContractState, event: TransitionEvent) -> bool {
         matches!(
             (current, event),
-            (ContractState::DraftContract, TransitionEvent::PolicyValidationPass)
-                | (ContractState::ValidatedContract, TransitionEvent::ContractActivation)
-                | (ContractState::ActiveContract, TransitionEvent::AuditAlertTriggered)
-                | (ContractState::ActiveContract, TransitionEvent::PlanRevisionRequired)
-                | (ContractState::SuspendedContract, TransitionEvent::ResolutionResolved)
-                | (ContractState::ActiveContract, TransitionEvent::GoalAchieved)
-                | (ContractState::ActiveContract, TransitionEvent::ContractRevoked)
-                | (ContractState::SuspendedContract, TransitionEvent::GoalAchieved)
-                | (ContractState::SuspendedContract, TransitionEvent::ContractRevoked)
+            (
+                ContractState::DraftContract,
+                TransitionEvent::PolicyValidationPass
+            ) | (
+                ContractState::ValidatedContract,
+                TransitionEvent::ContractActivation
+            ) | (
+                ContractState::ActiveContract,
+                TransitionEvent::AuditAlertTriggered
+            ) | (
+                ContractState::ActiveContract,
+                TransitionEvent::PlanRevisionRequired
+            ) | (
+                ContractState::SuspendedContract,
+                TransitionEvent::ResolutionResolved
+            ) | (ContractState::ActiveContract, TransitionEvent::GoalAchieved)
+                | (
+                    ContractState::ActiveContract,
+                    TransitionEvent::ContractRevoked
+                )
+                | (
+                    ContractState::SuspendedContract,
+                    TransitionEvent::GoalAchieved
+                )
+                | (
+                    ContractState::SuspendedContract,
+                    TransitionEvent::ContractRevoked
+                )
         )
     }
 

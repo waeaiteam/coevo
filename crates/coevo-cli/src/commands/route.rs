@@ -12,7 +12,10 @@ pub async fn run(contract_file: Option<String>) -> Result<(), Box<dyn std::error
         serde_json::from_str(&input)?
     };
 
-    let agents = vec!["agent-synthesizer-01".to_string(), "agent-critic-01".to_string()];
+    let agents = vec![
+        "agent-synthesizer-01".to_string(),
+        "agent-critic-01".to_string(),
+    ];
     let result = PcdtRouter::compute(&contract, agents, None)
         .map_err(|e| format!("routing failed: {}", e))?;
 

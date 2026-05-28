@@ -15,8 +15,8 @@ use coevo_customs::propose::CognitiveCustoms;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
 use coevo_policy::mock::MockPolicyEngine;
-use coevo_resolution::engine::ResolutionEngine;
 use coevo_reputation::scoring::{ErrorSeverity, ReputationEngine};
+use coevo_resolution::engine::ResolutionEngine;
 use coevo_risk::decision_tree::RiskGate;
 use coevo_risk::lease::LeaseManager;
 use coevo_router::pcdt::PcdtRouter;
@@ -31,6 +31,54 @@ async fn setup() -> sqlx::SqlitePool {
     let pool = create_test_pool().await.unwrap();
     coevo_store::migrate::run_migrations(&pool).await.unwrap();
     pool
+}
+
+/// Insert a minimal valid contract row so FK constraints are satisfied.
+async fn insert_test_contract(pool: &sqlx::SqlitePool, hash: &str) {
+    let contract = coevo_core::contract::MCLSpec {
+        mcl_version: "1.0".to_string(),
+        mcl_state: coevo_core::contract::ContractState::DraftContract,
+        parent_contract_hash: "0".repeat(64),
+        goal_tree: coevo_core::contract::GoalTree {
+            root: coevo_core::contract::GoalNode {
+                id: "root".to_string(),
+                description: "test".to_string(),
+                status: coevo_core::contract::GoalStatus::Pending,
+                children: vec![],
+                depends_on: vec![],
+            },
+        },
+        institution_policy_hash: "0".repeat(64),
+        data_boundary: vec![],
+        allowed_action_modes: vec![coevo_core::contract::ActionMode::CommitReady],
+        human_approval_policy: coevo_core::contract::HumanApprovalPolicy {
+            approval_mode: coevo_core::contract::ApprovalMode::ExplicitApproval,
+            authorized_roles: vec!["Admin".to_string()],
+            negative_consent_timeout_secs: 0,
+            mfa_auth_url: None,
+        },
+        evidence_requirement: coevo_core::contract::EvidenceRequirement {
+            minimum_level: "unit_tests_passing".to_string(),
+            require_json_report: true,
+        },
+        risk_tolerance_profile: coevo_core::contract::RiskToleranceProfile {
+            max_risk_score: 0.8,
+            allow_emergency_lease: true,
+        },
+        termination_policy: coevo_core::contract::TerminationPolicy {
+            max_token_budget: 100000,
+            max_hops: 6,
+            max_latency_ms: 300000,
+            max_stance_rounds: 3,
+        },
+        responsibility_anchor_policy: coevo_core::contract::ResponsibilityAnchorPolicy {
+            required_human_roles: vec![],
+            agent_forbidden_actions: vec![],
+        },
+    };
+    coevo_store::repos::contract_repo::ContractRepo::insert(pool, &contract, hash)
+        .await
+        .expect("insert_test_contract must succeed");
 }
 
 // ============================================================================
@@ -51,10 +99,19 @@ async fn test_01_green_demo_runs_e2e() {
         .await
         .expect("Green Track must succeed");
 
-    assert!(!result.contract_hash.is_empty(), "contract_hash must not be empty");
+    assert!(
+        !result.contract_hash.is_empty(),
+        "contract_hash must not be empty"
+    );
     assert!(!result.plan_hash.is_empty(), "plan_hash must not be empty");
-    assert!(result.contract_hash.len() == 64, "contract_hash must be 64-char SHA256");
-    assert!(!result.entries_created.is_empty(), "must have created blackboard entries");
+    assert!(
+        result.contract_hash.len() == 64,
+        "contract_hash must be 64-char SHA256"
+    );
+    assert!(
+        !result.entries_created.is_empty(),
+        "must have created blackboard entries"
+    );
     let entry = &result.entries_created[0];
     assert!(entry.contains("@v"), "entry must have version: {}", entry);
 }
@@ -125,26 +182,30 @@ async fn test_03_yellow_negative_consent_creates_approval() {
     let pool = setup().await;
     let runner = YellowTrackRunner;
 
-    let result = runner
-        .run(
-            &pool,
-            "Send notification about deployment to team",
-            vec!["agent-01".to_string()],
-            "e2e-tenant",
-            "staging",
-        )
-        .await
-        .expect("Yellow Track must complete");
+    let result = YellowTrackRunner::run(
+        &pool,
+        "Send notification about deployment to team",
+        vec!["agent-01".to_string()],
+        "e2e-tenant",
+        "staging",
+    )
+    .await
+    .expect("Yellow Track must complete");
 
-    assert!(!result.contract_hash.is_empty(), "contract_hash must not be empty");
+    assert!(
+        !result.contract_hash.is_empty(),
+        "contract_hash must not be empty"
+    );
     assert!(!result.plan_hash.is_empty(), "plan_hash must not be empty");
     assert_eq!(
-        result.approval_mode,
-        "NEGATIVE_CONSENT",
+        result.approval_mode, "NEGATIVE_CONSENT",
         "Staging notification must use NEGATIVE_CONSENT"
     );
-    assert!(result.approval_id.is_some() || result.decision == "ALLOW",
-        "Must have approval_id or ALLOW decision, got decision={}", result.decision);
+    assert!(
+        result.approval_id.is_some() || result.decision == "ALLOW",
+        "Must have approval_id or ALLOW decision, got decision={}",
+        result.decision
+    );
 }
 
 // ============================================================================
@@ -191,7 +252,7 @@ async fn test_05_red_missing_dual_sign_rejected() {
     let pool = setup().await;
 
     // Red Track with valid identity but NO monitoring AND NO diagnostic → MUST fail
-    let result = RedTrackRunner.run(
+    let result = RedTrackRunner::run(
         &pool,
         "Critical production hotfix",
         vec!["agent-1".to_string()],
@@ -221,6 +282,8 @@ async fn test_05_red_missing_dual_sign_rejected() {
 #[tokio::test]
 async fn test_06_lease_scope_budget_enforced() {
     let pool = setup().await;
+    insert_test_contract(&pool, "test-contract").await;
+    insert_test_contract(&pool, "test-contract-2").await;
 
     // Grant lease with budget 2
     let lease = LeaseManager::grant(
@@ -244,8 +307,13 @@ async fn test_06_lease_scope_budget_enforced() {
         .expect("op 2 must succeed");
 
     // Budget exhausted
-    let r = LeaseManager::try_consume(&pool, &lease.lease_id, "urn:coevo:action:test:analyze").await;
-    assert!(r.is_err(), "Budget exhaustion must be rejected. Got: {:?}", r);
+    let r =
+        LeaseManager::try_consume(&pool, &lease.lease_id, "urn:coevo:action:test:analyze").await;
+    assert!(
+        r.is_err(),
+        "Budget exhaustion must be rejected. Got: {:?}",
+        r
+    );
 
     // Out of scope
     let new_lease = LeaseManager::grant(
@@ -260,8 +328,13 @@ async fn test_06_lease_scope_budget_enforced() {
     .await
     .expect("lease grant must succeed");
 
-    let r = LeaseManager::try_consume(&pool, &new_lease.lease_id, "urn:coevo:action:FORBIDDEN").await;
-    assert!(r.is_err(), "Out-of-scope operation must be rejected. Got: {:?}", r);
+    let r =
+        LeaseManager::try_consume(&pool, &new_lease.lease_id, "urn:coevo:action:FORBIDDEN").await;
+    assert!(
+        r.is_err(),
+        "Out-of-scope operation must be rejected. Got: {:?}",
+        r
+    );
 }
 
 // ============================================================================
@@ -270,6 +343,7 @@ async fn test_06_lease_scope_budget_enforced() {
 #[tokio::test]
 async fn test_07_fact_ttl_expires_to_stale() {
     let pool = setup().await;
+    insert_test_contract(&pool, "test-contract").await;
 
     let key = format!("ttl-test-{}", uuid::Uuid::new_v4());
     let _ = blackboard_repo::BlackboardRepo::insert(
@@ -302,6 +376,7 @@ async fn test_07_fact_ttl_expires_to_stale() {
 #[tokio::test]
 async fn test_08_revoked_fact_triggers_dependency_invalidation() {
     let pool = setup().await;
+    insert_test_contract(&pool, "test-contract").await;
 
     let fact_id = blackboard_repo::BlackboardRepo::insert(
         &pool,
@@ -354,7 +429,7 @@ async fn test_08_revoked_fact_triggers_dependency_invalidation() {
 async fn test_09_red_rejects_missing_identity_proof() {
     let pool = setup().await;
 
-    let result = RedTrackRunner.run(
+    let result = RedTrackRunner::run(
         &pool,
         "Critical production hotfix",
         vec!["agent-1".to_string()],
@@ -394,7 +469,7 @@ async fn test_10_red_with_identity_generates_lease() {
     .await
     .unwrap();
 
-    let result = RedTrackRunner.run(
+    let result = RedTrackRunner::run(
         &pool,
         "Emergency fix for production database connection pool exhaustion causing P1 outage",
         vec!["agent-red-1".to_string()],
@@ -407,7 +482,10 @@ async fn test_10_red_with_identity_generates_lease() {
 
     match result {
         Ok(r) => {
-            assert!(!r.contract_hash.is_empty(), "contract_hash must not be empty");
+            assert!(
+                !r.contract_hash.is_empty(),
+                "contract_hash must not be empty"
+            );
             assert!(!r.decision.is_empty(), "decision must not be empty");
             // With full identity + dual-sign, a lease SHOULD be generated
             // (if gating produces AllowWithLease). If Deny, it would have returned Err.
@@ -419,7 +497,10 @@ async fn test_10_red_with_identity_generates_lease() {
             let lease = r.lease.as_ref().unwrap();
             assert!(lease.is_active, "lease must be active");
             assert_eq!(lease.lease_budget, 3, "lease budget must be 3");
-            assert!(!lease.lease_scope.is_empty(), "lease scope must not be empty");
+            assert!(
+                !lease.lease_scope.is_empty(),
+                "lease scope must not be empty"
+            );
         }
         Err(e) => {
             // If the gating returned Deny, circuit breaker tripped — that's acceptable
@@ -519,7 +600,10 @@ async fn test_11_adr_contains_required_fields() {
         max_rounds: 3,
     };
 
-    let result = engine.process(&pool, &stance).await.expect("resolution must succeed");
+    let result = engine
+        .process(&pool, &stance)
+        .await
+        .expect("resolution must succeed");
     let adr = result.adr.expect("ADR-A must be generated");
 
     // Must have rejected_alternatives
@@ -536,13 +620,21 @@ async fn test_11_adr_contains_required_fields() {
         "ADR-A responsibility_anchor.human_role must not be empty"
     );
     assert!(
-        !adr.responsibility_anchor.mfa_signature_fingerprint.is_empty(),
+        !adr.responsibility_anchor
+            .mfa_signature_fingerprint
+            .is_empty(),
         "ADR-A responsibility_anchor.mfa_signature_fingerprint must not be empty"
     );
 
     // Must have decision_id
-    assert!(!adr.decision_id.is_empty(), "ADR-A decision_id must not be empty");
-    assert!(!adr.mcl_reference.is_empty(), "ADR-A mcl_reference must not be empty");
+    assert!(
+        !adr.decision_id.is_empty(),
+        "ADR-A decision_id must not be empty"
+    );
+    assert!(
+        !adr.mcl_reference.is_empty(),
+        "ADR-A mcl_reference must not be empty"
+    );
 }
 
 // ============================================================================
@@ -552,7 +644,7 @@ async fn test_11_adr_contains_required_fields() {
 async fn test_12_red_rejects_empty_identity_proof() {
     let pool = setup().await;
 
-    let result = RedTrackRunner.run(
+    let result = RedTrackRunner::run(
         &pool,
         "Critical production hotfix",
         vec!["agent-1".to_string()],
@@ -587,7 +679,11 @@ async fn test_13_reputation_difficulty_adjusted() {
         .await
         .expect("reputation update must succeed");
 
-    assert!(rv.task_domain_competence > 0.5, "High difficulty success must increase score above 0.5. Got: {:.3}", rv.task_domain_competence);
+    assert!(
+        rv.task_domain_competence > 0.5,
+        "High difficulty success must increase score above 0.5. Got: {:.3}",
+        rv.task_domain_competence
+    );
     assert_eq!(rv.task_count, 1, "task_count must be 1");
 
     // Severe penalty
@@ -600,5 +696,9 @@ async fn test_13_reputation_difficulty_adjusted() {
     .await
     .expect("penalty must succeed");
 
-    assert!(rv2.policy_compliance < 0.8, "Severe penalty must drop compliance below 0.8. Got: {:.3}", rv2.policy_compliance);
+    assert!(
+        rv2.policy_compliance < 0.8,
+        "Severe penalty must drop compliance below 0.8. Got: {:.3}",
+        rv2.policy_compliance
+    );
 }

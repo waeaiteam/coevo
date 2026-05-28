@@ -28,9 +28,12 @@ impl LeaseRepo {
         Ok(id)
     }
 
-    pub async fn find_active(pool: &SqlitePool, lease_id: &str) -> Result<Option<LeaseRow>, sqlx::Error> {
+    pub async fn find_active(
+        pool: &SqlitePool,
+        lease_id: &str,
+    ) -> Result<Option<LeaseRow>, sqlx::Error> {
         sqlx::query_as::<_, LeaseRow>(
-            "SELECT * FROM leases WHERE lease_id = ? AND is_active = 1 AND was_revoked = 0"
+            "SELECT * FROM leases WHERE lease_id = ? AND is_active = 1 AND was_revoked = 0",
         )
         .bind(lease_id)
         .fetch_optional(pool)
@@ -55,10 +58,12 @@ impl LeaseRepo {
 
     pub async fn expire_all(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
-        let result = sqlx::query("UPDATE leases SET is_active = 0 WHERE is_active = 1 AND expires_at_ms < ?")
-            .bind(now)
-            .execute(pool)
-            .await?;
+        let result = sqlx::query(
+            "UPDATE leases SET is_active = 0 WHERE is_active = 1 AND expires_at_ms < ?",
+        )
+        .bind(now)
+        .execute(pool)
+        .await?;
         Ok(result.rows_affected())
     }
 }

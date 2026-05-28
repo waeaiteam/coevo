@@ -40,9 +40,12 @@ impl RiskRepo {
         Ok(id)
     }
 
-    pub async fn find_by_contract(pool: &SqlitePool, contract_hash: &str) -> Result<Vec<RiskDecisionRow>, sqlx::Error> {
+    pub async fn find_by_contract(
+        pool: &SqlitePool,
+        contract_hash: &str,
+    ) -> Result<Vec<RiskDecisionRow>, sqlx::Error> {
         sqlx::query_as::<_, RiskDecisionRow>(
-            "SELECT * FROM risk_decisions WHERE contract_hash = ? ORDER BY decided_at_ms DESC"
+            "SELECT * FROM risk_decisions WHERE contract_hash = ? ORDER BY decided_at_ms DESC",
         )
         .bind(contract_hash)
         .fetch_all(pool)

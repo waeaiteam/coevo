@@ -66,9 +66,16 @@ pub struct IdentityClaims {
 
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
-    async fn verify_proof(&self, caller_identity_proof: &str) -> Result<IdentityClaims, AdapterError>;
+    async fn verify_proof(
+        &self,
+        caller_identity_proof: &str,
+    ) -> Result<IdentityClaims, AdapterError>;
     async fn verify_mfa(&self, token: &str, user_id: &str) -> Result<bool, AdapterError>;
-    async fn issue_passport(&self, agent_id: &str, roles: Vec<String>) -> Result<String, AdapterError>;
+    async fn issue_passport(
+        &self,
+        agent_id: &str,
+        roles: Vec<String>,
+    ) -> Result<String, AdapterError>;
 }
 
 #[derive(Debug, thiserror::Error)]

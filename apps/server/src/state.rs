@@ -1,5 +1,7 @@
 //! Application state — dependency injection container.
 
+use std::sync::Arc;
+
 use coevo_adapters::a2a::MockA2aAdapter;
 use coevo_adapters::identity::MockIdentityProvider;
 use coevo_adapters::mcp::MockMcpAdapter;
@@ -9,22 +11,23 @@ use coevo_policy::traits::PolicyEngine;
 use sqlx::SqlitePool;
 
 /// Shared application state injected into all handlers.
+#[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
-    pub a2a: Box<dyn A2aProvider>,
-    pub mcp: Box<dyn McpProvider>,
-    pub identity: Box<dyn IdentityProvider>,
-    pub policy_engine: Box<dyn PolicyEngine>,
+    pub a2a: Arc<dyn A2aProvider>,
+    pub mcp: Arc<dyn McpProvider>,
+    pub identity: Arc<dyn IdentityProvider>,
+    pub policy_engine: Arc<dyn PolicyEngine>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             pool,
-            a2a: Box::new(MockA2aAdapter::new()),
-            mcp: Box::new(MockMcpAdapter::new()),
-            identity: Box::new(MockIdentityProvider::new()),
-            policy_engine: Box::new(MockPolicyEngine::new()),
+            a2a: Arc::new(MockA2aAdapter::new()),
+            mcp: Arc::new(MockMcpAdapter::new()),
+            identity: Arc::new(MockIdentityProvider::new()),
+            policy_engine: Arc::new(MockPolicyEngine::new()),
         }
     }
 }

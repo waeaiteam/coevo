@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Cognitive layer for blackboard state entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(rename_all = "PascalCase")]
 pub enum CognitiveLayer {
     Hypothesis,
     Fact,

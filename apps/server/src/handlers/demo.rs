@@ -2,16 +2,17 @@ use axum::{extract::State, Json};
 use coevo_core::problem::ProblemDetails;
 use coevo_tracks::dispatch;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct DemoRequest {
     pub tenant_id: Option<String>,
     pub agent_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RedDemoRequest {
     pub tenant_id: Option<String>,
     pub agent_ids: Option<Vec<String>>,
@@ -20,7 +21,7 @@ pub struct RedDemoRequest {
     pub diagnostic_signature: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DemoResponse {
     pub track: String,
     pub contract_hash: String,
@@ -37,8 +38,10 @@ pub struct DemoResponse {
     post,
     path = "/demo/green",
     tag = "Demo",
+    request_body = DemoRequest,
     responses(
-        (status = 200, description = "Green Track demo completed", body = DemoResponse)
+        (status = 200, description = "Green Track demo completed", body = DemoResponse),
+        (status = 500, description = "Internal error", body = ProblemDetails)
     )
 )]
 pub async fn run_green_demo(
@@ -74,7 +77,11 @@ pub async fn run_green_demo(
     post,
     path = "/demo/yellow",
     tag = "Demo",
-    responses((status = 200, description = "Yellow Track demo completed"))
+    request_body = DemoRequest,
+    responses(
+        (status = 200, description = "Yellow Track demo completed", body = DemoResponse),
+        (status = 500, description = "Internal error", body = ProblemDetails)
+    )
 )]
 pub async fn run_yellow_demo(
     State(state): State<AppState>,
@@ -85,13 +92,11 @@ pub async fn run_yellow_demo(
         .agent_ids
         .unwrap_or_else(|| vec!["agent-synthesizer-01".to_string()]);
 
-    let intent =
-        "Send deployment notification to the team and write changelog to the staging wiki";
+    let intent = "Send deployment notification to the team and write changelog to the staging wiki";
 
-    let result =
-        dispatch::dispatch_yellow(&state.pool, intent, agents, &tenant_id, "staging")
-            .await
-            .map_err(|e| ProblemDetails::internal_error("/demo/yellow", &e.to_string()))?;
+    let result = dispatch::dispatch_yellow(&state.pool, intent, agents, &tenant_id, "staging")
+        .await
+        .map_err(|e| ProblemDetails::internal_error("/demo/yellow", &e.to_string()))?;
 
     let yr = result.yellow_result.unwrap();
     Ok(Json(DemoResponse {
@@ -111,9 +116,11 @@ pub async fn run_yellow_demo(
     post,
     path = "/demo/red",
     tag = "Demo",
+    request_body = RedDemoRequest,
     responses(
-        (status = 200, description = "Red Track demo completed"),
-        (status = 403, description = "Missing caller_identity_proof")
+        (status = 200, description = "Red Track demo completed", body = DemoResponse),
+        (status = 403, description = "Missing caller_identity_proof", body = ProblemDetails),
+        (status = 500, description = "Internal error", body = ProblemDetails)
     )
 )]
 pub async fn run_red_demo(

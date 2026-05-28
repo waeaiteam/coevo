@@ -46,11 +46,29 @@ impl RedTrackRunner {
         diagnostic_signature: Option<&str>,
     ) -> Result<RedTrackResult, RedTrackError> {
         // ---- Step 1: Verify caller_identity_proof is present ----
-        let identity_proof = caller_identity_proof
-            .ok_or(RedTrackError::MissingIdentityProof)?;
+        let identity_proof = caller_identity_proof.ok_or(RedTrackError::MissingIdentityProof)?;
 
         if identity_proof.is_empty() {
             return Err(RedTrackError::MissingIdentityProof);
+        }
+
+        // ---- Step 1b: Verify dual-sign (monitoring + diagnostic) is present ----
+        // Red Track ALWAYS requires dual-sign for production operations
+        let mon_sig = monitoring_signature.ok_or(RedTrackError::MissingDualSign(
+            "monitoring_signature".to_string(),
+        ))?;
+        let diag_sig = diagnostic_signature.ok_or(RedTrackError::MissingDualSign(
+            "diagnostic_signature".to_string(),
+        ))?;
+        if mon_sig.is_empty() {
+            return Err(RedTrackError::MissingDualSign(
+                "monitoring_signature is empty".to_string(),
+            ));
+        }
+        if diag_sig.is_empty() {
+            return Err(RedTrackError::MissingDualSign(
+                "diagnostic_signature is empty".to_string(),
+            ));
         }
 
         let zero = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -87,10 +105,7 @@ impl RedTrackRunner {
             TransitionEvent::PolicyValidationPass,
         )?;
         ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t1.new_state)).await?;
-        let t2 = MCLStateMachine::transition(
-            t1.new_state,
-            TransitionEvent::ContractActivation,
-        )?;
+        let t2 = MCLStateMachine::transition(t1.new_state, TransitionEvent::ContractActivation)?;
         ContractRepo::update_state(pool, &contract_hash, &format!("{:?}", t2.new_state)).await?;
 
         // ---- Step 3: Route with strict limits ----
@@ -127,19 +142,11 @@ impl RedTrackRunner {
             .await;
 
         // ---- Step 6-8: Emergency Lease if needed ----
+        // Red Track: dual-sign already validated in Step 1b.
+        // Generate lease whenever identity + dual-sign are present.
         let lease = match gating.decision {
-            GateDecision::AllowWithLease => {
-                // Both signatures are mandatory — no defaults allowed
-                let mon_sig = monitoring_signature
-                    .ok_or(RedTrackError::MissingDualSign("monitoring_signature".to_string()))?;
-                let diag_sig = diagnostic_signature
-                    .ok_or(RedTrackError::MissingDualSign("diagnostic_signature".to_string()))?;
-                if mon_sig.is_empty() {
-                    return Err(RedTrackError::MissingDualSign("monitoring_signature is empty".to_string()));
-                }
-                if diag_sig.is_empty() {
-                    return Err(RedTrackError::MissingDualSign("diagnostic_signature is empty".to_string()));
-                }
+            GateDecision::AllowWithLease | GateDecision::RequireHumanApproval => {
+                // Dual-sign is already validated (Step 1b) — grant lease
                 let lease = LeaseManager::grant(
                     pool,
                     &contract_hash,

@@ -81,14 +81,15 @@ impl PlanRevision {
             ),
             plan_hash: String::new(),
             parent_plan_hash: current_plan.plan_hash.clone(),
-            primary_path_dag: remaining_agents,
+            primary_path_dag: remaining_agents.clone(),
             agent_configs: new_configs,
             failback_routing_rules: current_plan.failback_routing_rules.clone(),
             hard_resource_ceilings: current_plan.hard_resource_ceilings.clone(),
             exploration_budget_quota: current_plan.exploration_budget_quota,
         };
 
-        let plan_json = serde_json::to_string(&new_plan).map_err(|e| RevisionError::Serialization(e.to_string()))?;
+        let plan_json = serde_json::to_string(&new_plan)
+            .map_err(|e| RevisionError::Serialization(e.to_string()))?;
         let mut hasher = Sha256::new();
         hasher.update(plan_json.as_bytes());
         let plan_hash = hex::encode(hasher.finalize());
@@ -98,7 +99,8 @@ impl PlanRevision {
             plan_hash,
             plan: new_plan,
             preserved_steps: completed_indices,
-            rebuilt_steps: (remaining_start..remaining_start + remaining_agents.len() as u32).collect(),
+            rebuilt_steps: (remaining_start..remaining_start + remaining_agents.len() as u32)
+                .collect(),
         })
     }
 }

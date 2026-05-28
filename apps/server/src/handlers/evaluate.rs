@@ -5,10 +5,11 @@ use coevo_core::problem::ProblemDetails;
 use coevo_policy::mock::MockPolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct EvaluateRequest {
     pub action_urn: String,
     pub target_environment: String,
@@ -20,7 +21,7 @@ pub struct EvaluateRequest {
     pub reversibility: u8,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EvaluateResponse {
     pub decision: String,
     pub required_confidence: f64,
@@ -36,8 +37,8 @@ pub struct EvaluateResponse {
     tag = "Risk",
     request_body = EvaluateRequest,
     responses(
-        (status = 200, description = "Risk evaluated"),
-        (status = 403, description = "Risk denied")
+        (status = 200, description = "Risk evaluated", body = EvaluateResponse),
+        (status = 403, description = "Risk denied", body = ProblemDetails)
     )
 )]
 pub async fn evaluate_risk(

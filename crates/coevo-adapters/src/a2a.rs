@@ -1,7 +1,7 @@
 //! Mock A2A adapter — simulates agent-to-agent messaging.
 
-use async_trait::async_trait;
 use crate::traits::*;
+use async_trait::async_trait;
 
 pub struct MockA2aAdapter {
     registered_agents: Vec<String>,

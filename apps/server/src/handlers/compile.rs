@@ -3,17 +3,18 @@ use coevo_core::metadata::CommonMetadataHeader;
 use coevo_core::problem::ProblemDetails;
 use coevo_mcl::compiler::MCLCompiler;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CompileRequest {
     pub user_intent: String,
     pub requested_mode: String,
     pub parent_contract_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CompileResponse {
     pub contract: serde_json::Value,
     pub contract_hash: String,

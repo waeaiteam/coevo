@@ -30,7 +30,10 @@ impl AdrRepo {
         Ok(id)
     }
 
-    pub async fn find_by_decision(pool: &SqlitePool, decision_id: &str) -> Result<Option<AdrRow>, sqlx::Error> {
+    pub async fn find_by_decision(
+        pool: &SqlitePool,
+        decision_id: &str,
+    ) -> Result<Option<AdrRow>, sqlx::Error> {
         sqlx::query_as::<_, AdrRow>("SELECT * FROM adr_records WHERE decision_id = ?")
             .bind(decision_id)
             .fetch_optional(pool)

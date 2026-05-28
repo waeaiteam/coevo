@@ -78,7 +78,8 @@ impl CommonMetadataHeader {
         if Uuid::parse_str(&self.idempotency_key).is_err() {
             return Err(HeaderValidationError::InvalidIdempotencyKey);
         }
-        if self.contract_hash.len() != 64 || !self.contract_hash.chars().all(|c| c.is_ascii_hexdigit())
+        if self.contract_hash.len() != 64
+            || !self.contract_hash.chars().all(|c| c.is_ascii_hexdigit())
         {
             return Err(HeaderValidationError::InvalidContractHash);
         }

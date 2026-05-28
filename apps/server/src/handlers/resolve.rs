@@ -4,17 +4,18 @@ use coevo_core::problem::ProblemDetails;
 use coevo_core::stance::*;
 use coevo_resolution::engine::ResolutionEngine;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResolveRequest {
     pub issue: String,
     pub context_ref: Option<String>,
     pub stances: Vec<StanceRequestEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct StanceRequestEntry {
     pub agent_id: String,
     pub position: String,
@@ -25,7 +26,7 @@ pub struct StanceRequestEntry {
     pub round: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ResolveResponse {
     pub verdict: String,
     pub adr_id: Option<String>,
@@ -33,14 +34,15 @@ pub struct ResolveResponse {
     pub escalation: Option<String>,
 }
 
+/// POST /resolution/process
 #[utoipa::path(
     post,
     path = "/resolution/process",
     tag = "Resolution",
     request_body = ResolveRequest,
     responses(
-        (status = 200, description = "Conflict resolved"),
-        (status = 422, description = "Deadlock detected")
+        (status = 200, description = "Conflict resolved", body = ResolveResponse),
+        (status = 422, description = "Deadlock detected", body = ProblemDetails)
     )
 )]
 pub async fn resolve_conflict(

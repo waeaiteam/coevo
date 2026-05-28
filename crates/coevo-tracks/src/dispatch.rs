@@ -46,8 +46,7 @@ pub async fn dispatch_yellow(
     environment: &str,
 ) -> Result<DispatchResult, TrackError> {
     let runner = YellowTrackRunner;
-    let result = runner
-        .run(pool, user_intent, agent_ids, tenant_id, environment)
+    let result = YellowTrackRunner::run(pool, user_intent, agent_ids, tenant_id, environment)
         .await
         .map_err(|e| TrackError::YellowError(e.to_string()))?;
 
@@ -70,18 +69,17 @@ pub async fn dispatch_red(
     diagnostic_signature: Option<&str>,
 ) -> Result<DispatchResult, TrackError> {
     let runner = RedTrackRunner;
-    let result = runner
-        .run(
-            pool,
-            user_intent,
-            agent_ids,
-            tenant_id,
-            caller_identity_proof,
-            monitoring_signature,
-            diagnostic_signature,
-        )
-        .await
-        .map_err(|e| TrackError::RedError(e.to_string()))?;
+    let result = RedTrackRunner::run(
+        pool,
+        user_intent,
+        agent_ids,
+        tenant_id,
+        caller_identity_proof,
+        monitoring_signature,
+        diagnostic_signature,
+    )
+    .await
+    .map_err(|e| TrackError::RedError(e.to_string()))?;
 
     Ok(DispatchResult {
         track: Track::Red,

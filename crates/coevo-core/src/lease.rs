@@ -52,7 +52,9 @@ impl EmergencyLease {
 
     /// Check if a given URN is within the lease scope.
     pub fn is_in_scope(&self, urn: &str) -> bool {
-        self.lease_scope.iter().any(|scope| urn.starts_with(scope.as_str()))
+        self.lease_scope
+            .iter()
+            .any(|scope| urn.starts_with(scope.as_str()))
     }
 
     /// Consume one operation from the lease budget.
@@ -61,7 +63,10 @@ impl EmergencyLease {
             return Err(LeaseError::LeaseExpiredOrRevoked);
         }
         if self.operations_used >= self.lease_budget {
-            return Err(LeaseError::BudgetExhausted);
+            return Err(LeaseError::BudgetExhausted {
+                used: self.operations_used,
+                budget: self.lease_budget,
+            });
         }
         self.operations_used += 1;
         Ok(())
@@ -73,7 +78,7 @@ pub enum LeaseError {
     #[error("lease has expired or been revoked")]
     LeaseExpiredOrRevoked,
     #[error("lease budget exhausted ({used}/{budget})")]
-    BudgetExhausted,
+    BudgetExhausted { used: u32, budget: u32 },
     #[error("URN '{urn}' is not within lease scope")]
     OutOfScope { urn: String },
 }

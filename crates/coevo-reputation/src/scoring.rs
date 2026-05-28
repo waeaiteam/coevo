@@ -83,8 +83,8 @@ impl ReputationEngine {
 
         let penalty_pct = match error_severity {
             ErrorSeverity::Minor => 0.03,    // 2-5%
-            ErrorSeverity::Moderate => 0.15,  // 10-20%
-            ErrorSeverity::Severe => 0.40,    // 30-50%
+            ErrorSeverity::Moderate => 0.15, // 10-20%
+            ErrorSeverity::Severe => 0.40,   // 30-50%
         };
 
         rv.penalize(dimension, penalty_pct);
@@ -116,8 +116,14 @@ impl ReputationEngine {
             ReputationRepo::upsert(pool, &tool_rv).await?;
         } else {
             // Normal update for the agent
-            Self::update(pool, agent_id, 3.0, actual_outcome, available_confidence_at_decision)
-                .await?;
+            Self::update(
+                pool,
+                agent_id,
+                3.0,
+                actual_outcome,
+                available_confidence_at_decision,
+            )
+            .await?;
         }
         Ok(())
     }

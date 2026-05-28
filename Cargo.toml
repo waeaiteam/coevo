@@ -45,8 +45,8 @@ petgraph = "0.6"
 # --- server ---
 axum = { version = "0.8", features = ["macros"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
-utoipa-redoc = { version = "5", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa-redoc = { version = "6", features = ["axum"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 

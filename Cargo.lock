@@ -131,40 +131,11 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axum"
-version = "0.7.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
-dependencies = [
- "async-trait",
- "axum-core 0.4.5",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "itoa",
- "matchit 0.7.3",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite",
- "rustversion",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sync_wrapper",
- "tower",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
-name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
- "axum-core 0.5.6",
+ "axum-core",
  "axum-macros",
  "bytes",
  "form_urlencoded",
@@ -175,7 +146,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit 0.8.4",
+ "matchit",
  "memchr",
  "mime",
  "percent-encoding",
@@ -190,26 +161,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "axum-core"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "mime",
- "pin-project-lite",
- "rustversion",
- "sync_wrapper",
- "tower-layer",
- "tower-service",
 ]
 
 [[package]]
@@ -367,8 +318,10 @@ dependencies = [
  "async-trait",
  "chrono",
  "coevo-core",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tracing",
@@ -385,6 +338,8 @@ dependencies = [
  "coevo-store",
  "serde",
  "serde_json",
+ "sqlx",
+ "thiserror",
  "tracing",
  "uuid",
 ]
@@ -395,6 +350,8 @@ version = "1.0.0"
 dependencies = [
  "clap",
  "coevo-core",
+ "coevo-mcl",
+ "coevo-router",
  "coevo-tracks",
  "serde_json",
  "tokio",
@@ -407,6 +364,7 @@ dependencies = [
 name = "coevo-core"
 version = "1.0.0"
 dependencies = [
+ "axum",
  "chrono",
  "ed25519-dalek",
  "hex",
@@ -416,6 +374,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "url",
+ "utoipa",
  "uuid",
 ]
 
@@ -428,9 +387,32 @@ dependencies = [
  "coevo-store",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "coevo-e2e-tests"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "coevo-adapters",
+ "coevo-core",
+ "coevo-customs",
+ "coevo-mcl",
+ "coevo-policy",
+ "coevo-reputation",
+ "coevo-resolution",
+ "coevo-risk",
+ "coevo-router",
+ "coevo-store",
+ "coevo-tracks",
+ "serde_json",
+ "sqlx",
+ "tokio",
  "uuid",
 ]
 
@@ -442,8 +424,10 @@ dependencies = [
  "coevo-core",
  "coevo-policy",
  "coevo-store",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
  "uuid",
@@ -455,8 +439,10 @@ version = "1.0.0"
 dependencies = [
  "async-trait",
  "coevo-core",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
 ]
@@ -472,6 +458,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tracing",
  "uuid",
@@ -484,8 +471,11 @@ dependencies = [
  "chrono",
  "coevo-core",
  "coevo-store",
+ "hex",
+ "rand",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tracing",
  "uuid",
@@ -501,6 +491,8 @@ dependencies = [
  "coevo-store",
  "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
  "thiserror",
  "tracing",
  "uuid",
@@ -510,11 +502,14 @@ dependencies = [
 name = "coevo-router"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "coevo-core",
  "coevo-store",
+ "hex",
  "petgraph",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
  "uuid",
@@ -524,8 +519,9 @@ dependencies = [
 name = "coevo-server"
 version = "1.0.0"
 dependencies = [
- "axum 0.8.9",
+ "axum",
  "chrono",
+ "coevo-adapters",
  "coevo-core",
  "coevo-customs",
  "coevo-mcl",
@@ -536,6 +532,8 @@ dependencies = [
  "coevo-router",
  "coevo-store",
  "coevo-tracks",
+ "hex",
+ "rand",
  "serde",
  "serde_json",
  "sqlx",
@@ -582,8 +580,12 @@ dependencies = [
  "coevo-risk",
  "coevo-router",
  "coevo-store",
+ "hex",
+ "rand",
  "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
  "thiserror",
  "tokio",
  "tracing",
@@ -849,8 +851,8 @@ version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
- "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1377,12 +1379,6 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
-
-[[package]]
-name = "matchit"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "matchit"
@@ -2562,11 +2558,11 @@ dependencies = [
 
 [[package]]
 name = "utoipa-redoc"
-version = "5.0.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9218304bba9a0ea5e92085b0a427ccce5fd56eaaf6436d245b7578e6a95787e1"
+checksum = "6427547f6db7ec006cbbef95f7565952a16f362e298b416d2d497d9706fef72d"
 dependencies = [
- "axum 0.7.9",
+ "axum",
  "serde",
  "serde_json",
  "utoipa",
@@ -2574,11 +2570,11 @@ dependencies = [
 
 [[package]]
 name = "utoipa-swagger-ui"
-version = "8.1.0"
+version = "9.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db4b5ac679cc6dfc5ea3f2823b0291c777750ffd5e13b21137e0f7ac0e8f9617"
+checksum = "d047458f1b5b65237c2f6dc6db136945667f40a7668627b3490b9513a3d43a55"
 dependencies = [
- "axum 0.7.9",
+ "axum",
  "base64",
  "mime_guess",
  "regex",
@@ -3097,20 +3093,23 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.4.2"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+checksum = "12598812502ed0105f607f941c386f43d441e00148fce9dec3ca5ffb0bde9308"
 dependencies = [
  "arbitrary",
  "crc32fast",
- "crossbeam-utils",
- "displaydoc",
  "flate2",
  "indexmap",
  "memchr",
- "thiserror",
  "zopfli",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
 
 [[package]]
 name = "zmij"

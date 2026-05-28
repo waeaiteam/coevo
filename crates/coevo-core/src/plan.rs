@@ -2,7 +2,6 @@
 //! Per coevo whitepaper Section 7.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// The system execution plan produced by the PCDT router.
 #[derive(Debug, Clone, Serialize, Deserialize)]

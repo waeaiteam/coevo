@@ -106,7 +106,10 @@ impl LeaseManager {
 
         // Check budget
         if row.operations_used >= row.lease_budget {
-            return Err(LeaseError::BudgetExhausted);
+            return Err(LeaseError::BudgetExhausted {
+                used: row.operations_used as u32,
+                budget: row.lease_budget as u32,
+            });
         }
 
         // Consume operation

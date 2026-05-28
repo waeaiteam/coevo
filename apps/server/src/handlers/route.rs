@@ -1,18 +1,19 @@
 use axum::{extract::State, Json};
-use coevo_core::contract::MCLSpec;
 use coevo_core::problem::ProblemDetails;
 use coevo_router::pcdt::PcdtRouter;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct RouteRequest {
-    pub contract: MCLSpec,
+    /// MCL contract specification as JSON (serde_json::Value for OpenAPI compatibility).
+    pub contract: serde_json::Value,
     pub agent_ids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RouteResponse {
     pub plan: serde_json::Value,
     pub plan_hash: String,
@@ -33,12 +34,17 @@ pub async fn route_plan(
     State(_state): State<AppState>,
     Json(req): Json<RouteRequest>,
 ) -> Result<Json<RouteResponse>, ProblemDetails> {
-    let result = PcdtRouter::compute(&req.contract, req.agent_ids, None).map_err(|e| match e {
-        coevo_router::pcdt::RoutingError::NoCompliantPath { blockers } => {
-            ProblemDetails::routing_no_path(
+    let contract: coevo_core::contract::MCLSpec =
+        serde_json::from_value(req.contract).map_err(|e| {
+            ProblemDetails::mcl_compilation_error(
                 "/router/route",
-                &format!("blockers: {:?}", blockers),
+                &format!("invalid contract: {}", e),
             )
+        })?;
+
+    let result = PcdtRouter::compute(&contract, req.agent_ids, None).map_err(|e| match e {
+        coevo_router::pcdt::RoutingError::NoCompliantPath { blockers } => {
+            ProblemDetails::routing_no_path("/router/route", &format!("blockers: {:?}", blockers))
         }
         coevo_router::pcdt::RoutingError::BudgetExceeded { budget, estimated } => {
             ProblemDetails::budget_exceeded(

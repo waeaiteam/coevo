@@ -10,14 +10,18 @@ pub struct Blackboard;
 
 impl Blackboard {
     /// Read the latest valid entry for a key.
-    pub async fn read(pool: &SqlitePool, key: &str) -> Result<Option<BlackboardEntry>, BlackboardError> {
+    pub async fn read(
+        pool: &SqlitePool,
+        key: &str,
+    ) -> Result<Option<BlackboardEntry>, BlackboardError> {
         let row = BlackboardRepo::find_latest(pool, key).await?;
         match row {
             Some(r) => {
                 let value: serde_json::Value =
                     serde_json::from_str(&r.value_json).unwrap_or(serde_json::Value::Null);
                 let layer: CognitiveLayer =
-                    serde_json::from_str(&format!("\"{}\"", r.cognitive_layer)).unwrap_or(CognitiveLayer::Hypothesis);
+                    serde_json::from_str(&format!("\"{}\"", r.cognitive_layer))
+                        .unwrap_or(CognitiveLayer::Hypothesis);
                 Ok(Some(BlackboardEntry {
                     key: r.entry_key,
                     version: r.version as u64,

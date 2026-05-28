@@ -6,7 +6,11 @@ use uuid::Uuid;
 pub struct PlanRepo;
 
 impl PlanRepo {
-    pub async fn insert(pool: &SqlitePool, plan: &ExecutionPlanSpec, contract_hash: &str) -> Result<String, sqlx::Error> {
+    pub async fn insert(
+        pool: &SqlitePool,
+        plan: &ExecutionPlanSpec,
+        contract_hash: &str,
+    ) -> Result<String, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query(
@@ -28,17 +32,25 @@ impl PlanRepo {
         Ok(id)
     }
 
-    pub async fn find_by_hash(pool: &SqlitePool, plan_hash: &str) -> Result<Option<ExecutionPlanRow>, sqlx::Error> {
+    pub async fn find_by_hash(
+        pool: &SqlitePool,
+        plan_hash: &str,
+    ) -> Result<Option<ExecutionPlanRow>, sqlx::Error> {
         sqlx::query_as::<_, ExecutionPlanRow>("SELECT * FROM execution_plans WHERE plan_hash = ?")
             .bind(plan_hash)
             .fetch_optional(pool)
             .await
     }
 
-    pub async fn find_by_contract(pool: &SqlitePool, contract_hash: &str) -> Result<Vec<ExecutionPlanRow>, sqlx::Error> {
-        sqlx::query_as::<_, ExecutionPlanRow>("SELECT * FROM execution_plans WHERE contract_hash = ? ORDER BY created_at_ms DESC")
-            .bind(contract_hash)
-            .fetch_all(pool)
-            .await
+    pub async fn find_by_contract(
+        pool: &SqlitePool,
+        contract_hash: &str,
+    ) -> Result<Vec<ExecutionPlanRow>, sqlx::Error> {
+        sqlx::query_as::<_, ExecutionPlanRow>(
+            "SELECT * FROM execution_plans WHERE contract_hash = ? ORDER BY created_at_ms DESC",
+        )
+        .bind(contract_hash)
+        .fetch_all(pool)
+        .await
     }
 }
