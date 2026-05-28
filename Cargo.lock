@@ -578,6 +578,7 @@ dependencies = [
  "coevo-router",
  "coevo-store",
  "coevo-tracks",
+ "coevo-worker",
  "hex",
  "rand",
  "serde",

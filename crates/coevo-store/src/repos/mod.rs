@@ -9,3 +9,5 @@ pub mod lease_repo;
 pub mod plan_repo;
 pub mod reputation_repo;
 pub mod risk_repo;
+pub mod agent_worker_repo;
+pub mod worker_run_repo;

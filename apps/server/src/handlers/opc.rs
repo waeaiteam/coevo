@@ -7,6 +7,7 @@ use coevo_store::repos_opc::*;
 use coevo_evolution::{analyzer::FailureAnalyzer, generator::SkillGenerator, verifier::SkillVerifier};
 use coevo_executors::adapters::*;
 use coevo_executors::traits::*;
+use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
 use crate::state::AppState;
 
 #[derive(Deserialize)] pub struct MemoryQuery { pub scope: Option<String>, pub owner_id: Option<String>, pub include_revoked: Option<bool>, pub q: Option<String> }
@@ -183,7 +184,7 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
         if ex.risk_ceiling < risk { return err!(StatusCode::FORBIDDEN, format!("Executor {} risk_ceiling {} < track risk {}", eid, ex.risk_ceiling, risk)); }
     }
     // 5. Yellow Track: require explicit approval or return WaitingApproval
-    if wo.track == "yellow" {
+    if wo.track == "yellow" && req.caller_identity_proof.is_none() {
         work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "WaitingApproval").await.ok();
         return ok!(serde_json::json!({"ok":true,"status":"WaitingApproval","approval_mode":"negative_consent","message":"Yellow Track requires approval. Use negative_consent timeout or explicit approval."}));
     }
@@ -197,43 +198,19 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
         ].iter().filter(|(_, ok)| !ok).map(|(name, _)| *name).collect();
         if !missing.is_empty() { return err!(StatusCode::FORBIDDEN, format!("Red Track missing: {:?}", missing)); }
     }
-    // 6. Dry-run + Execute each executor
-    let mut results = vec![];
-    let mut memory_ids = vec![];
-    for eid in &wo.selected_executors {
-        let ex = executor_repo::ExecutorRepo::get(&s.pool, eid).await.ok().flatten().unwrap();
-        let adapter = make_executor(&ex.source_type);
-        if let Some(a) = adapter {
-            match a.dry_run(&wo).await {
-                Err(e) => {
-                    work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Failed").await.ok();
-                    let analysis = FailureAnalyzer::analyze(&e.to_string(), false, false, None);
-                    let proposal = SkillGenerator::generate_from_failure(&analysis, "skill-mission-draft", eid);
-                    skill_evolution_repo::SkillEvolutionRepo::create_proposal(&s.pool, &proposal).await.ok();
-                    return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Executor {} dry-run failed: {}", eid, e));
-                }
-                Ok(_dr) => {
-                    let exec_result = a.execute(&wo, None).await.unwrap_or_else(|e| {
-                        ExecutorResult { run_id: String::new(), success: false, output: serde_json::json!({"error":e.to_string()}), audit_trace: String::new(), cost_usd: 0.0 }
-                    });
-                    let now = chrono::Utc::now().timestamp_millis() as u64;
-                    let mem = MemoryRecord{
-                        memory_id: format!("task-mem-{}", uuid::Uuid::new_v4()), scope: MemoryScope::Task, owner_id: id.clone(),
-                        title: format!("WO {} exec {}", &wo.work_order_id, eid), content: serde_json::to_string(&exec_result.output).unwrap_or_default(),
-                        tags: vec![], source: eid.clone(), provenance: format!("executor-run-{}", exec_result.run_id), confidence: 0.9,
-                        ttl_seconds: 86400, created_at_ms: now, updated_at_ms: now, access_policy: String::new(),
-                        status: MemoryStatus::Active, cognitive_layer: CognitiveLayer::Hypothesis,
-                        linked_contract_hash: Some(wo.contract_hash.clone()), linked_plan_hash: Some(wo.plan_hash.clone()), linked_adr_id: None,
-                    };
-                    memory_repo::MemoryRepo::create(&s.pool, &mem).await.ok();
-                    memory_ids.push(mem.memory_id.clone());
-                    results.push(serde_json::json!({"executor_id":eid,"success":exec_result.success,"run_id":exec_result.run_id}));
-                }
-            }
-        }
-    }
-    work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Completed").await.ok();
-    ok!(serde_json::json!({"ok":true,"status":"Completed","executor_results":results,"memory_ids":memory_ids}))
+    // 6. Green/Yellow with approval: use WorkerHarness
+    let harness_result = match WorkerHarness::run_work_order(&s.pool, &id, WorkerHarnessOptions{approval_receipt:req.caller_identity_proof.clone().or(req.lease_id.clone()),max_runtime_ms:Some(60000),deterministic_mode:true,preferred_tool_ids:vec![]}).await {
+        Ok(hr) => hr,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, &harness_result.status).await.ok();
+    ok!(serde_json::json!({
+        "ok":true,"status":harness_result.status,"summary":harness_result.summary,
+        "worker_runs":harness_result.worker_runs,"worker_steps":harness_result.worker_steps,
+        "worker_events":harness_result.worker_events,"skill_usage":harness_result.skill_usage,
+        "tool_calls":harness_result.tool_calls,"memory_ids":harness_result.memory_ids,
+        "reflection_id":harness_result.reflection_id,"proposal_id":harness_result.proposal_id
+    }))
 }
 
 pub async fn cancel_work_order(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
