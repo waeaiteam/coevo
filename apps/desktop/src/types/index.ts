@@ -24,7 +24,7 @@ export interface DemoResponse {
   contract_hash: string;
   plan_hash: string;
   traceparent: string;
-  ambiguity_score: number;
+  ambiguity_score: number | null;
   warnings: string[];
   entries_created: string[];
   elapsed_ms: number;

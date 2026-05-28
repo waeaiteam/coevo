@@ -13,7 +13,7 @@ export default function TrackMonitor({ result }: { result: DemoResponse }) {
         <div><span className="text-gray-400">Contract:</span> <span className="font-mono">{result.contract_hash.slice(0, 16)}...</span></div>
         <div><span className="text-gray-400">Plan:</span> <span className="font-mono">{result.plan_hash.slice(0, 16)}...</span></div>
         <div><span className="text-gray-400">Trace:</span> <span className="font-mono">{result.traceparent.slice(0, 24)}...</span></div>
-        <div><span className="text-gray-400">Ambiguity:</span> {result.ambiguity_score.toFixed(2)}</div>
+        <div><span className="text-gray-400">Ambiguity:</span> {result.ambiguity_score != null ? result.ambiguity_score.toFixed(2) : "N/A"}</div>
       </div>
       {result.warnings.length > 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded p-2 text-xs text-yellow-700">

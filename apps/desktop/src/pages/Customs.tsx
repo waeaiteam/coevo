@@ -5,7 +5,7 @@ import CognitiveBoard from "../components/CognitiveBoard";
 export default function Customs() {
   const [key, setKey] = useState("");
   const [layer, setLayer] = useState("Hypothesis");
-  const [result, setResult] = useState<unknown>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
   async function handlePropose() {
     if (!key.trim()) return;

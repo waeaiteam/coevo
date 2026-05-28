@@ -1,3 +1,7 @@
+import type { HealthResponse, ContractResponse, DemoResponse } from "../types";
+
+export type { HealthResponse, ContractResponse, DemoResponse } from "../types";
+
 const API_BASE = "http://127.0.0.1:8717";
 
 function headers(): Record<string, string> {
@@ -31,11 +35,11 @@ export async function post<T = unknown>(path: string, body: unknown): Promise<T>
   return res.json();
 }
 
-export async function getHealth(): Promise<{ status: string; version: string }> {
+export async function getHealth(): Promise<HealthResponse> {
   return get("/health");
 }
 
-export async function compileContract(userIntent: string, mode = "DRAFT") {
+export async function compileContract(userIntent: string, mode = "DRAFT"): Promise<ContractResponse> {
   return post("/mcl/compile", { user_intent: userIntent, requested_mode: mode, parent_contract_hash: null });
 }
 
@@ -43,7 +47,7 @@ export async function routePlan(contract: unknown, agentIds: string[]) {
   return post("/router/route", { contract, agent_ids: agentIds });
 }
 
-export async function proposeFact(request: unknown) {
+export async function proposeFact(request: unknown): Promise<Record<string, unknown>> {
   return post("/customs/propose", request);
 }
 
@@ -55,6 +59,6 @@ export async function resolveConflict(request: unknown) {
   return post("/resolution/process", request);
 }
 
-export async function runDemo(track: "green" | "yellow" | "red") {
+export async function runDemo(track: "green" | "yellow" | "red"): Promise<DemoResponse> {
   return post(`/demo/${track}`, { tenant_id: "desktop-demo", agent_ids: ["agent-synthesizer-01"] });
 }
