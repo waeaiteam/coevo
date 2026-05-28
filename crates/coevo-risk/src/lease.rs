@@ -3,7 +3,7 @@
 
 use coevo_core::lease::{EmergencyLease, LeaseError};
 use coevo_store::repos::lease_repo::LeaseRepo;
-use sha2::{Digest, Sha256};
+
 use sqlx::SqlitePool;
 
 /// Lease Manager for emergency self-healing.

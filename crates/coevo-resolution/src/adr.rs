@@ -6,7 +6,6 @@ use uuid::Uuid;
 
 /// Builder for constructing ADR-A records.
 pub struct AdrBuilder {
-    issue: String,
     mcl_reference: String,
     proposer_agent: String,
     critic_objections: Vec<CriticObjection>,

@@ -6,19 +6,15 @@
 //! All writes MUST go through Propose with provenance envelopes.
 
 use coevo_core::cognitive::{CognitiveLayer, ProvenanceEnvelope};
-use coevo_core::contract::{ActionMode, ContractState};
+use coevo_core::contract::ContractState;
 use coevo_core::metadata::CommonMetadataHeader;
-use coevo_core::plan::ExecutionPlanSpec;
-use coevo_customs::blackboard::Blackboard;
-use coevo_customs::dependency::{CognitiveDependencyGraph, EdgeType};
 use coevo_customs::propose::CognitiveCustoms;
-use coevo_customs::provenance::validate_provenance;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
 use coevo_router::pcdt::PcdtRouter;
 use coevo_store::repos::contract_repo::ContractRepo;
 use coevo_store::repos::plan_repo::PlanRepo;
-use sha2::{Digest, Sha256};
+
 use sqlx::SqlitePool;
 
 /// Result of a Green Track execution.

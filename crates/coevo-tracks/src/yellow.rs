@@ -10,7 +10,6 @@ use coevo_customs::propose::CognitiveCustoms;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
 use coevo_policy::mock::MockPolicyEngine;
-use coevo_policy::traits::PolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use coevo_router::pcdt::PcdtRouter;
 use coevo_store::repos::approval_repo::ApprovalRepo;
@@ -59,7 +58,7 @@ impl YellowTrackRunner {
             .await
             .map_err(|e| YellowTrackError::CompilationFailed(e.to_string()))?;
 
-        let mut contract = result.contract;
+        let contract = result.contract;
         let contract_hash = result.contract_hash;
 
         ContractRepo::insert(pool, &contract, &contract_hash)

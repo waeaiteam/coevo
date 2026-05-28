@@ -15,7 +15,6 @@ use coevo_risk::decision_tree::RiskGate;
 use coevo_risk::lease::LeaseManager;
 use coevo_router::pcdt::PcdtRouter;
 use coevo_store::repos::contract_repo::ContractRepo;
-use coevo_store::repos::lease_repo::LeaseRepo;
 use coevo_store::repos::plan_repo::PlanRepo;
 use sqlx::SqlitePool;
 

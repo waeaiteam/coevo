@@ -112,7 +112,7 @@ impl PolicyEngine for MockPolicyEngine {
 
     async fn dry_run(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError> {
         // Dry-run is identical to validate but marked as simulation
-        let mut result = self.validate_contract(contract).await?;
+        let result = self.validate_contract(contract).await?;
         // In real OPA, dry-run would bypass enforcement
         Ok(result)
     }
@@ -145,8 +145,8 @@ impl PolicyEngine for MockPolicyEngine {
 
     async fn diff_policies(
         &self,
-        old_version: &str,
-        new_version: &str,
+        _old_version: &str,
+        _new_version: &str,
     ) -> Result<PolicyDiff, PolicyEngineError> {
         Ok(PolicyDiff {
             added_rules: vec![],

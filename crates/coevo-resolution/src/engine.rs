@@ -5,7 +5,6 @@ use coevo_core::decision::*;
 use coevo_core::stance::*;
 use coevo_store::repos::adr_repo::AdrRepo;
 use sqlx::SqlitePool;
-use uuid::Uuid;
 
 use crate::adr::AdrBuilder;
 use crate::stopper::{ResolutionStopper, RuleBasedStopper};

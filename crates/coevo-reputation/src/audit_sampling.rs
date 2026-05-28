@@ -1,7 +1,6 @@
 //! Adversarial audit sampling — 5% daily random audit.
 //! Per coevo whitepaper Section 6.2.
 
-use coevo_store::repos::contract_repo::ContractRepo;
 use coevo_store::repos::reputation_repo::ReputationRepo;
 use rand::Rng;
 use sqlx::SqlitePool;

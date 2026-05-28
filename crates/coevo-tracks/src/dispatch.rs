@@ -1,7 +1,7 @@
 //! Track dispatcher — classifies tasks and routes to Green/Yellow/Red.
 //! Per coevo whitepaper Section 11.
 
-use coevo_core::track::{classify_track, Track};
+use coevo_core::track::Track;
 use sqlx::SqlitePool;
 
 use crate::green::{GreenTrackResult, GreenTrackRunner};
