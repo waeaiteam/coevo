@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { compileContract, routePlan, createWorkOrder, executeWorkOrder, listEmployees, seedEmployees, listExecutors, registerExecutor } from "../api/client";
+import { compileContract, routePlan, createWorkOrder, executeWorkOrder, listEmployees, seedEmployees, listExecutors, registerExecutor, modelStructured, modelChat } from "../api/client";
 import { useGovernance } from "../hooks/useGovernance";
 import { inferTrackFromIntent } from "../utils/trackInference";
 import MissionDraftCard, { type MissionDraft } from "../components/mission/MissionDraftCard";
@@ -95,6 +95,25 @@ export default function MissionChat() {
     }
 
     try {
+      // Try model-enhanced Mission Draft
+      let modelDraft: Record<string,unknown>|null = null;
+      try {
+        appendMsg("system", "text", "Generating model-enhanced Mission Draft...");
+        const md = await modelStructured({
+          role: "MissionDraft",
+          messages: [
+            {role:"system",content:"You are coevo Mission Draft assistant. Suggest mission boundaries only. Do not authorize actions."},
+            {role:"user",content:text}
+          ],
+        }) as Record<string,unknown>;
+        const mj = (md.json || md) as Record<string,unknown>;
+        modelDraft = mj;
+        const modelTrack = String(mj.suggested_track||"").toLowerCase();
+        const detTrack = inferTrackFromIntent(text).track;
+        appendMsg("system","text","Model-enhanced mission draft generated",
+          `goal: ${mj.goal_summary||"N/A"} | track: ${modelTrack}`+(modelTrack!==detTrack?` (governance override: ${detTrack})`:""));
+      } catch { /* model failed, fallback to deterministic */ }
+
       appendMsg("system", "text", "Compiling MCL contract...");
       const compileRes = await compileContract(text, "DRAFT");
       const c = compileRes.contract as Record<string,unknown>;
@@ -173,6 +192,18 @@ export default function MissionChat() {
 
       setPhase("completed");
       setGov({phase:"done",track,contractHash:draft.contractHash,planHash:draft.planHash,contract:null,agents:draft.selectedAgents,riskDecision:"ALLOW" as string,approvalMode:draft.approvalMode,actionModes:draft.allowedActions,approvalRequired:false,traceparent:""});
+      // Synthesizer summary
+      try {
+        const synth = await modelChat({
+          role:"Synthesizer",
+          messages:[
+            {role:"system",content:"You summarize coevo WorkOrder execution. Do not claim unauthorized actions."},
+            {role:"user",content:JSON.stringify({intent:draft.intent,work_order_id:woId,track,selected_agents:draft.selectedAgents,selected_executors:executorIds,executor_results:execRes.executor_results||[],memory_ids:memIds,status:execStatus})},
+          ]
+        }) as Record<string,unknown>;
+        appendMsg("system","text","Synthesizer Summary",(synth.content||"") as string);
+      } catch { /* fallback */ }
+
       appendMsg("system","text","coevo Governance Mesh completed. Human responsibility is anchored via ADR-A. Audit trail preserved.");
     } catch (e: unknown) {
       appendMsg("system","error",`Execution error: ${e instanceof Error?e.message:String(e)}`);

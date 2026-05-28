@@ -102,6 +102,13 @@ export async function executeWorkOrder(id: string, req: Record<string,unknown> =
 export async function cancelWorkOrder(id: string) { return post(`/opc/work-orders/${id}/cancel`, {}); }
 export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
 
+// === Model Gateway ===
+export async function getModelConfig() { return get("/opc/models/config"); }
+export async function updateModelConfig(config: Record<string,unknown>) { return put("/opc/models/config", config); }
+export async function testModelConnection() { return post("/opc/models/test", {}); }
+export async function modelChat(payload: Record<string,unknown>) { return post("/opc/models/chat", payload); }
+export async function modelStructured(payload: Record<string,unknown>) { return post("/opc/models/structured", payload); }
+
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
   return res.json();

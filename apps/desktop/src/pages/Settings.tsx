@@ -10,6 +10,7 @@ import PasswordField from "../components/PasswordField";
 import { useSettings } from "../hooks/useSettings";
 import { t, setLanguage, getLanguage } from "../settings/i18n";
 import { useState } from "react";
+import { updateModelConfig, testModelConnection } from "../api/client";
 
 const CATEGORIES = ["general","appearance","model_provider","agent_runtime","governance","risk_gate","cognitive_customs","policy_engine","privacy","developer"];
 
@@ -124,6 +125,21 @@ function ModelProviderPanel() {
   const { settings, update } = useSettings();
   const m = settings.model_provider;
   const [testResult, setTestResult] = useState<"idle"|"ok"|"fail">("idle");
+  const [testMsg, setTestMsg] = useState("");
+
+  async function handleTestConnection() {
+    setTestResult("idle"); setTestMsg("");
+    const providerMap: Record<string,string> = {"openai-compatible":"OpenAICompatible","openai":"OpenAI","anthropic":"Anthropic","gemini":"Gemini","deepseek":"DeepSeek","ollama":"Ollama","local":"Local"};
+    try {
+      await updateModelConfig({provider_id: "desktop", kind: providerMap[m.provider]||"Mock", base_url: m.base_url, api_key: m.api_key, default_model: m.default_model, fast_model: m.fast_model, reasoning_model: m.reasoning_model, structured_output_model: m.structured_output_model, max_tokens: m.max_tokens, temperature: m.temperature, timeout_ms: m.request_timeout_ms, max_cost_per_task_usd: m.max_cost_per_task_usd});
+      const r = await testModelConnection() as Record<string,unknown>;
+      setTestResult("ok"); setTestMsg(`${r.model||"ok"} | ${r.latency_ms}ms | ${r.provider_kind||""}`);
+      setTimeout(()=>setTestResult("idle"),4000);
+    } catch(e: unknown) {
+      setTestResult("fail");
+      setTestMsg(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   return (
     <SettingsSection title={t("settings.model_provider")}>
@@ -164,13 +180,13 @@ function ModelProviderPanel() {
       </SettingRow>
       <SettingRow label={t("settings.test_connection")}>
         <div className="flex items-center gap-2">
-          <button onClick={()=>{setTestResult("ok");setTimeout(()=>setTestResult("idle"),2000);}}
+          <button onClick={handleTestConnection}
             className="px-3 py-1.5 text-xs rounded-md border transition-colors"
             style={{borderColor:"var(--accent)",color:"var(--accent)"}}>
             {t("settings.test_connection")}
           </button>
-          {testResult==="ok" && <span className="text-xs" style={{color:"var(--green)"}}>✓ {t("settings.test_success")}</span>}
-          {testResult==="fail" && <span className="text-xs" style={{color:"var(--red)"}}>✗ {t("settings.test_failed")}</span>}
+          {testResult==="ok" && <span className="text-xs" style={{color:"var(--green)"}}>✓ {testMsg}</span>}
+          {testResult==="fail" && <span className="text-xs" style={{color:"var(--red)"}}>✗ {testMsg}</span>}
         </div>
       </SettingRow>
     </SettingsSection>
