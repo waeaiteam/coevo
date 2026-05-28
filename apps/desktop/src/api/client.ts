@@ -66,15 +66,36 @@ export async function runDemo(track: "green" | "yellow" | "red"): Promise<DemoRe
 // === OPC API ===
 export async function getUserProfile(): Promise<Record<string,unknown>> { return get("/opc/profile/user"); }
 export async function updateUserProfile(p: Record<string,unknown>) { return put("/opc/profile/user", p); }
+export async function getCompanyProfile(): Promise<Record<string,unknown>> { return get("/opc/profile/company"); }
+export async function updateCompanyProfile(p: Record<string,unknown>) { return put("/opc/profile/company", p); }
 export async function listMemory(params?: Record<string,string>) {
   const qs = params ? "?" + new URLSearchParams(params).toString() : "";
   return get(`/opc/memory${qs}`);
 }
 export async function createMemory(m: Record<string,unknown>) { return post("/opc/memory", m); }
-export async function staleMemory(id: string) { return post(`/opc/memory/${id}/stale`, {}); }
+export async function markMemoryStale(id: string) { return post(`/opc/memory/${id}/stale`, {}); }
 export async function revokeMemory(id: string) { return post(`/opc/memory/${id}/revoke`, {}); }
+export async function searchMemory(q: string) { return get(`/opc/memory?q=${encodeURIComponent(q)}`); }
 export async function listEmployees(): Promise<Record<string,unknown>[]> { return get("/opc/agents/employees"); }
 export async function seedEmployees() { return post("/opc/agents/employees/seed", {}); }
+export async function getAgentMemory(agentId: string) { return get(`/opc/agents/employees/${agentId}/memory`); }
+export async function listExecutors(): Promise<Record<string,unknown>[]> { return get("/opc/executors"); }
+export async function registerExecutor(p: Record<string,unknown>) { return post("/opc/executors/register", p); }
+export async function disableExecutor(id: string) { return post(`/opc/executors/${id}/disable`, {}); }
+export async function executorHealth(id: string) { return post(`/opc/executors/${id}/health`, {}); }
+export async function executorDryRun(executorId: string, workOrderId: string) { return post(`/opc/executors/${executorId}/dry-run`, { work_order_id: workOrderId }); }
+export async function listSkills(agentId?: string): Promise<Record<string,unknown>[]> {
+  const p = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return get(`/opc/skills${p}`);
+}
+export async function seedSkills() { return post("/opc/skills/seed", {}); }
+export async function activateSkill(skillId: string, version: string) { return post(`/opc/skills/${skillId}/${version}/activate`, {}); }
+export async function rollbackSkill(skillId: string, version: string) { return post(`/opc/skills/${skillId}/${version}/rollback`, {}); }
+export async function listSkillProposals(): Promise<Record<string,unknown>[]> { return get("/opc/skills/evolution/proposals"); }
+export async function runEvolution() { return post("/opc/skills/evolution/run", {}); }
+export async function verifySkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/verify`, {}); }
+export async function approveSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/approve`, {}); }
+export async function rejectSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/reject`, {}); }
 export async function listWorkOrders(): Promise<Record<string,unknown>[]> { return get("/opc/work-orders"); }
 export async function createWorkOrder(wo: Record<string,unknown>) { return post("/opc/work-orders", wo); }
 export async function executeWorkOrder(id: string, req: Record<string,unknown> = {}) { return post(`/opc/work-orders/${id}/execute`, req); }
