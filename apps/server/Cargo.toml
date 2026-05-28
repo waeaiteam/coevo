@@ -17,6 +17,7 @@ coevo-risk.workspace = true
 coevo-router.workspace = true
 coevo-evolution.workspace = true
 coevo-executors.workspace = true
+coevo-models.workspace = true
 axum.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true

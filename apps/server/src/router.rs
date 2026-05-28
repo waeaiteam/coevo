@@ -19,6 +19,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/openapi.json", get(docs::openapi_json))
         .route("/docs", get(docs::swagger_ui))
         .route("/redoc", get(docs::redoc))
+        // Model routes
+        .route("/opc/models/config", get(handlers::models::get_config_handler).put(handlers::models::put_config_handler))
+        .route("/opc/models/test", post(handlers::models::test_connection))
+        .route("/opc/models/chat", post(handlers::models::chat))
+        .route("/opc/models/structured", post(handlers::models::structured))
         // OPC routes — Profiles
         .route("/opc/profile/user", get(handlers::opc::get_user_profile).put(handlers::opc::put_user_profile))
         .route("/opc/profile/company", get(handlers::opc::get_company_profile).put(handlers::opc::put_company_profile))
