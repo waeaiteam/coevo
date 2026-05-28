@@ -28,3 +28,6 @@ data/
 # Environment
 .env
 .env.local
+
+# Local cargo overrides
+.cargo/config.local.toml
