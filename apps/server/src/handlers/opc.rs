@@ -12,7 +12,9 @@ use crate::state::AppState;
 #[derive(Deserialize)] pub struct MemoryQuery { pub scope: Option<String>, pub owner_id: Option<String>, pub include_revoked: Option<bool>, pub q: Option<String> }
 #[derive(Deserialize)] pub struct ExecutorDryRunReq { pub work_order_id: String }
 #[derive(Deserialize)] pub struct WorkOrderFeedback { pub feedback: String, pub agent_id: Option<String> }
+#[derive(Deserialize)] pub struct SkillsQuery { pub agent_id: Option<String> }
 #[derive(Deserialize)] pub struct ExecuteRequest { pub caller_identity_proof: Option<String>, pub monitoring_signature: Option<String>, pub diagnostic_signature: Option<String>, pub lease_id: Option<String> }
+#[derive(Deserialize)] pub struct CreateWORequest { pub work_order_id: Option<String>, pub contract_hash: String, pub plan_hash: String, pub user_id: String, pub opc_id: String, pub mission_intent: String, pub selected_agents: Vec<String>, pub selected_executors: Vec<String>, pub required_skills: Vec<String>, pub track: String, pub allowed_actions: Vec<String>, pub restricted_actions: Vec<String>, pub risk_summary: String }
 
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
@@ -80,7 +82,13 @@ pub async fn list_employees(State(s): State<AppState>) -> (StatusCode, Json<serd
     agent_employee_repo::AgentEmployeeRepo::list(&s.pool).await.map_or_else(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()), |items| ok!(serde_json::to_value(items).unwrap()))
 }
 pub async fn seed_employees_handler(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    agent_employee_repo::AgentEmployeeRepo::seed(&s.pool).await.ok(); ok!(serde_json::json!({"ok":true}))
+    match agent_employee_repo::AgentEmployeeRepo::seed(&s.pool).await {
+        Ok(()) => {
+            let count = agent_employee_repo::AgentEmployeeRepo::list(&s.pool).await.map(|v| v.len()).unwrap_or(0);
+            ok!(serde_json::json!({"ok":true,"inserted":count,"total":count}))
+        }
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 pub async fn get_agent_memory(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
     match agent_memory_repo::AgentMemoryRepo::get(&s.pool, &id).await {
@@ -125,14 +133,21 @@ pub async fn executor_dry_run(State(s): State<AppState>, Path(id): Path<String>,
 }
 
 // === Work Orders ===
-pub async fn create_work_order(State(s): State<AppState>, Json(wo): Json<WorkOrder>) -> (StatusCode, Json<serde_json::Value>) {
+pub async fn create_work_order(State(s): State<AppState>, Json(req): Json<CreateWORequest>) -> (StatusCode, Json<serde_json::Value>) {
+    if req.contract_hash.is_empty() || req.plan_hash.is_empty() { return err!(StatusCode::UNPROCESSABLE_ENTITY, "contract_hash and plan_hash required"); }
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let wo = WorkOrder{
+        work_order_id: req.work_order_id.unwrap_or_else(|| format!("wo-{}", uuid::Uuid::new_v4())),
+        contract_hash: req.contract_hash, plan_hash: req.plan_hash, user_id: req.user_id, opc_id: req.opc_id,
+        mission_intent: req.mission_intent, selected_agents: req.selected_agents,
+        selected_executors: req.selected_executors, required_skills: req.required_skills,
+        track: req.track, status: WorkOrderStatus::Planned,
+        allowed_actions: req.allowed_actions, restricted_actions: req.restricted_actions,
+        risk_summary: req.risk_summary, created_at_ms: now, updated_at_ms: now,
+    };
     match work_order_repo::WorkOrderRepo::create(&s.pool, &wo).await {
-        Ok(()) => ok!(serde_json::json!({"ok":true,"work_order_id":wo.work_order_id})),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("contract_hash") || msg.contains("plan_hash") { err!(StatusCode::UNPROCESSABLE_ENTITY, msg) }
-            else { err!(StatusCode::INTERNAL_SERVER_ERROR, msg) }
-        }
+        Ok(()) => ok!(serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","created_at_ms":now})),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 pub async fn list_work_orders(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
@@ -167,7 +182,12 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
         if ex.status != ExecutorStatus::Registered { return err!(StatusCode::FORBIDDEN, format!("Executor {} not registered", eid)); }
         if ex.risk_ceiling < risk { return err!(StatusCode::FORBIDDEN, format!("Executor {} risk_ceiling {} < track risk {}", eid, ex.risk_ceiling, risk)); }
     }
-    // 5. Red Track guards
+    // 5. Yellow Track: require explicit approval or return WaitingApproval
+    if wo.track == "yellow" {
+        work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "WaitingApproval").await.ok();
+        return ok!(serde_json::json!({"ok":true,"status":"WaitingApproval","approval_mode":"negative_consent","message":"Yellow Track requires approval. Use negative_consent timeout or explicit approval."}));
+    }
+    // 6. Red Track guards
     if wo.track == "red" {
         let missing: Vec<&str> = [
             ("caller_identity_proof", req.caller_identity_proof.as_ref().map(|s| !s.is_empty()).unwrap_or(false)),
@@ -228,8 +248,8 @@ pub async fn work_order_feedback(State(s): State<AppState>, Path(id): Path<Strin
 }
 
 // === Skills ===
-pub async fn list_skills(State(s): State<AppState>, Query(agent_id): Query<Option<String>>) -> (StatusCode, Json<serde_json::Value>) {
-    skill_repo::SkillRepo::list(&s.pool, agent_id.as_deref()).await.map_or_else(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()), |items| ok!(serde_json::to_value(items).unwrap()))
+pub async fn list_skills(State(s): State<AppState>, Query(q): Query<SkillsQuery>) -> (StatusCode, Json<serde_json::Value>) {
+    skill_repo::SkillRepo::list(&s.pool, q.agent_id.as_deref()).await.map_or_else(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()), |items| ok!(serde_json::to_value(items).unwrap()))
 }
 pub async fn seed_skills(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     skill_repo::SkillRepo::seed_default(&s.pool).await.ok(); ok!(serde_json::json!({"ok":true}))

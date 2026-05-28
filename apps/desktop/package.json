@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:synthetic-opc": "python ../scripts/synthetic_opc_user_test.py"
   },
   "dependencies": {
     "react": "^18.3.1",

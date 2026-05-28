@@ -141,24 +141,34 @@ export default function MissionChat() {
       appendMsg("system", "text", `Executing ${track.toUpperCase()} Track via WorkOrder...`);
       // Create WorkOrder first
       const woId = `wo-${crypto.randomUUID()}`;
-      await createWorkOrder({
+      const woResp = await createWorkOrder({
         work_order_id: woId, contract_hash: draft.contractHash, plan_hash: draft.planHash,
         user_id: "default-founder", opc_id: "default-opc", mission_intent: draft.intent,
         selected_agents: draft.selectedAgents, selected_executors: [], required_skills: [],
-        track, status: "Planned", allowed_actions: draft.allowedActions,
-        restricted_actions: draft.restrictedActions, risk_summary: draft.reason, created_at_ms: Date.now(), updated_at_ms: Date.now(),
+        track, allowed_actions: draft.allowedActions,
+        restricted_actions: draft.restrictedActions, risk_summary: draft.reason,
       });
+      const createdWoId = (woResp as Record<string,unknown>).work_order_id as string || woId;
       // Execute
-      const execRes = await executeWorkOrder(woId, track === "red" ? {
+      const execRes = await executeWorkOrder(createdWoId, track === "red" ? {
         caller_identity_proof: "mock-demo-proof",
         monitoring_signature: "mon-sig:demo",
         diagnostic_signature: "diag-sig:demo",
         lease_id: "lease-demo",
       } : {});
+      const execStatus = (execRes as Record<string,unknown>).status as string;
       const memIds = (execRes as Record<string,unknown>).memory_ids as string[] || [];
+      if (execStatus === "WaitingApproval") {
+        appendMsg("system", "warning",
+          `Yellow Track: ${(execRes as Record<string,unknown>).message || "Awaiting approval"}`,
+          `approval_mode: ${(execRes as Record<string,unknown>).approval_mode} | status: ${execStatus}`,
+          "yellow");
+        setPhase("review");
+        return;
+      }
       appendMsg("system", "execution_result",
         `${track.toUpperCase()} Track completed via WorkOrder`,
-        `status: ${(execRes as Record<string,unknown>).status} | memory_ids: ${memIds.length} | wo: ${woId}`,
+        `status: ${execStatus} | memory_ids: ${memIds.length} | wo: ${createdWoId}`,
         track);
       setPhase("completed");
       setGov({
