@@ -66,7 +66,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/workers/runs/{run_id}", get(handlers::workers::get_run))
         .route("/opc/workers/runs/{run_id}/steps", get(handlers::workers::get_run_steps))
         .route("/opc/workers/runs/{run_id}/events", get(handlers::workers::get_run_events))
-        .route("/opc/workers/runs/{run_id}/reflection", get(handlers::workers::get_run_reflection));
+        .route("/opc/workers/runs/{run_id}/reflection", get(handlers::workers::get_run_reflection))
+        .route("/opc/workers/assign", post(handlers::tools::assign_worker))
+        .route("/opc/workers/{id}/run", post(handlers::tools::run_worker))
+        .route("/opc/workers/{id}/cancel", post(handlers::tools::cancel_worker))
+        .route("/opc/tools", get(handlers::tools::list_tools))
+        .route("/opc/tools/{id}", get(handlers::tools::get_tool))
+        .route("/opc/tools/{id}/health", post(handlers::tools::tool_health))
+        .route("/opc/tools/{id}/dry-run", post(handlers::tools::tool_dry_run))
+        .route("/opc/tools/{id}/execute", post(handlers::tools::tool_execute));
 
     // Authenticated API routes (with metadata validation)
     let api = Router::new()

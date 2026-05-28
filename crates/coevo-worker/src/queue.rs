@@ -17,6 +17,10 @@ impl WorkerQueueService {
         WorkerQueueRepo::acquire(pool, session_id, run_id, ttl_ms).await.map_err(|e| WorkerError::Internal(e.to_string()))
     }
     pub async fn release(pool: &SqlitePool, session_id: &str, run_id: &str) -> Result<(), WorkerError> {
-        WorkerQueueRepo::release(pool, session_id, run_id).await.map_err(|e| WorkerError::Internal(e.to_string()))
+        let now = Utc::now().timestamp_millis();
+        let rows = sqlx::query("UPDATE worker_queue_lanes SET active_run_id=NULL,status='Idle',locked_until_ms=NULL,updated_at_ms=? WHERE session_id=? AND active_run_id=?")
+            .bind(now).bind(session_id).bind(run_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
+        if rows.rows_affected() == 0 { return Err(WorkerError::SessionBusy); }
+        Ok(())
     }
 }
