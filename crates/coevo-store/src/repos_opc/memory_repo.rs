@@ -32,11 +32,14 @@ impl MemoryRepo {
 
     pub async fn list(pool: &SqlitePool, scope: Option<&str>, owner_id: Option<&str>, include_revoked: bool) -> Result<Vec<MemoryRecord>, sqlx::Error> {
         let mut q = "SELECT * FROM memory_records WHERE 1=1".to_string();
-        if let Some(s) = scope { q.push_str(&format!(" AND scope='{}'", s)); }
-        if let Some(o) = owner_id { q.push_str(&format!(" AND owner_id='{}'", o)); }
+        if scope.is_some() { q.push_str(" AND scope=?"); }
+        if owner_id.is_some() { q.push_str(" AND owner_id=?"); }
         if !include_revoked { q.push_str(" AND status != 'Revoked'"); }
         q.push_str(" ORDER BY created_at_ms DESC LIMIT 100");
-        let rows = sqlx::query(&q).fetch_all(pool).await?;
+        let mut query = sqlx::query(&q);
+        if let Some(s) = scope { query = query.bind(s); }
+        if let Some(o) = owner_id { query = query.bind(o); }
+        let rows = query.fetch_all(pool).await?;
         Ok(rows.iter().map(|r| Self::from_row(r)).collect())
     }
 
@@ -64,11 +67,14 @@ impl MemoryRepo {
     }
     pub async fn search(pool: &SqlitePool, query: &str, scope: Option<&str>, owner_id: Option<&str>) -> Result<Vec<MemoryRecord>, sqlx::Error> {
         let mut q = "SELECT * FROM memory_records WHERE (title LIKE ? OR content LIKE ?) AND status != 'Revoked'".to_string();
-        if let Some(s) = scope { q.push_str(&format!(" AND scope='{}'", s)); }
-        if let Some(o) = owner_id { q.push_str(&format!(" AND owner_id='{}'", o)); }
+        if scope.is_some() { q.push_str(" AND scope=?"); }
+        if owner_id.is_some() { q.push_str(" AND owner_id=?"); }
         q.push_str(" ORDER BY created_at_ms DESC LIMIT 50");
         let pattern = format!("%{}%", query);
-        let rows = sqlx::query(&q).bind(&pattern).bind(&pattern).fetch_all(pool).await?;
+        let mut query = sqlx::query(&q).bind(&pattern).bind(&pattern);
+        if let Some(s) = scope { query = query.bind(s); }
+        if let Some(o) = owner_id { query = query.bind(o); }
+        let rows = query.fetch_all(pool).await?;
         Ok(rows.iter().map(|r| Self::from_row(r)).collect())
     }
 }

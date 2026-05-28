@@ -15,6 +15,7 @@ coevo-policy.workspace = true
 coevo-resolution.workspace = true
 coevo-risk.workspace = true
 coevo-router.workspace = true
+coevo-evolution.workspace = true
 axum.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
