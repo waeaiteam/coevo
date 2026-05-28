@@ -2,7 +2,7 @@ import type { HealthResponse, ContractResponse, DemoResponse } from "../types";
 
 export type { HealthResponse, ContractResponse, DemoResponse } from "../types";
 
-const API_BASE = "http://127.0.0.1:8717";
+const API_BASE = (() => { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } })();
 
 export function headers(): Record<string, string> {
   return {

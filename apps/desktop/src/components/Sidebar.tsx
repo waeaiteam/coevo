@@ -10,7 +10,7 @@ const links = [
   { to: "/resolution", label: "Resolution", icon: "⚖" },
   { to: "/audit", label: "Audit", icon: "☰" },
   { to: "/demos", label: "Demos", icon: "▶" },
-  { to: "/settings", label: "Settings", icon: "⚙" },
+  { to: "/settings/general", label: "Settings", icon: "⚙" },
 ];
 
 export default function Sidebar() {

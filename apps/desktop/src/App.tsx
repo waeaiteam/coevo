@@ -26,7 +26,7 @@ export default function App() {
           <Route path="/resolution" element={<Resolution />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/demos" element={<Demos />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/*" element={<Settings />} />
         </Route>
       </Routes>
     </GovernanceProvider>
