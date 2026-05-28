@@ -13,7 +13,7 @@ pub struct ExecutorHealth {
 }
 
 /// Result of a dry-run execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DryRunResult {
     pub passed: bool,
     pub estimated_cost_usd: f64,

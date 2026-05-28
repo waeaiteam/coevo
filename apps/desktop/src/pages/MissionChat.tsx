@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { compileContract, routePlan, runDemo } from "../api/client";
+import { compileContract, routePlan, runDemo, createWorkOrder, executeWorkOrder } from "../api/client";
 import { useGovernance } from "../hooks/useGovernance";
 import { inferTrackFromIntent } from "../utils/trackInference";
 import MissionDraftCard, { type MissionDraft } from "../components/mission/MissionDraftCard";
@@ -138,19 +138,35 @@ export default function MissionChat() {
     }
 
     try {
-      appendMsg("system", "text", `Executing ${track.toUpperCase()} Track per human decision...`);
-      const demoRes = await runDemo(track);
+      appendMsg("system", "text", `Executing ${track.toUpperCase()} Track via WorkOrder...`);
+      // Create WorkOrder first
+      const woId = `wo-${crypto.randomUUID()}`;
+      await createWorkOrder({
+        work_order_id: woId, contract_hash: draft.contractHash, plan_hash: draft.planHash,
+        user_id: "default-founder", opc_id: "default-opc", mission_intent: draft.intent,
+        selected_agents: draft.selectedAgents, selected_executors: [], required_skills: [],
+        track, status: "Planned", allowed_actions: draft.allowedActions,
+        restricted_actions: draft.restrictedActions, risk_summary: draft.reason, created_at_ms: Date.now(), updated_at_ms: Date.now(),
+      });
+      // Execute
+      const execRes = await executeWorkOrder(woId, track === "red" ? {
+        caller_identity_proof: "mock-demo-proof",
+        monitoring_signature: "mon-sig:demo",
+        diagnostic_signature: "diag-sig:demo",
+        lease_id: "lease-demo",
+      } : {});
+      const memIds = (execRes as Record<string,unknown>).memory_ids as string[] || [];
       appendMsg("system", "execution_result",
-        `${track.toUpperCase()} Track completed`,
-        `contract: ${demoRes.contract_hash.slice(0, 12)}... | plan: ${demoRes.plan_hash.slice(0, 12)}... | entries: ${demoRes.entries_created.length} | ${demoRes.elapsed_ms}ms`,
+        `${track.toUpperCase()} Track completed via WorkOrder`,
+        `status: ${(execRes as Record<string,unknown>).status} | memory_ids: ${memIds.length} | wo: ${woId}`,
         track);
       setPhase("completed");
       setGov({
-        phase: "done", track, contractHash: demoRes.contract_hash, planHash: demoRes.plan_hash,
+        phase: "done", track, contractHash: draft.contractHash, planHash: draft.planHash,
         contract: null, agents: draft.selectedAgents,
         riskDecision: track === "red" ? "ALLOW_WITH_LEASE" : "ALLOW",
         approvalMode: draft.approvalMode, actionModes: draft.allowedActions,
-        approvalRequired: false, traceparent: demoRes.traceparent,
+        approvalRequired: false, traceparent: "",
       });
       appendMsg("system", "text",
         "coevo Governance Mesh completed. Human responsibility is anchored via ADR-A. Audit trail preserved.");

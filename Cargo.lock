@@ -553,6 +553,7 @@ dependencies = [
  "coevo-core",
  "coevo-customs",
  "coevo-evolution",
+ "coevo-executors",
  "coevo-mcl",
  "coevo-policy",
  "coevo-reputation",

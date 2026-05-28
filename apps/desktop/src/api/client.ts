@@ -77,6 +77,9 @@ export async function listEmployees(): Promise<Record<string,unknown>[]> { retur
 export async function seedEmployees() { return post("/opc/agents/employees/seed", {}); }
 export async function listWorkOrders(): Promise<Record<string,unknown>[]> { return get("/opc/work-orders"); }
 export async function createWorkOrder(wo: Record<string,unknown>) { return post("/opc/work-orders", wo); }
+export async function executeWorkOrder(id: string, req: Record<string,unknown> = {}) { return post(`/opc/work-orders/${id}/execute`, req); }
+export async function cancelWorkOrder(id: string) { return post(`/opc/work-orders/${id}/cancel`, {}); }
+export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
 
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
