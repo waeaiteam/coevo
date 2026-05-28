@@ -167,7 +167,9 @@ pub async fn run_red_demo(
     .await
     .map_err(|e| {
         let err_str = e.to_string();
-        if err_str.contains("caller_identity_proof") {
+        if err_str.contains("caller_identity_proof") || err_str.contains("dual-sign")
+            || err_str.contains("monitoring_signature") || err_str.contains("diagnostic_signature")
+        {
             ProblemDetails::forbidden("/demo/red", &err_str)
         } else {
             ProblemDetails::internal_error("/demo/red", &err_str)

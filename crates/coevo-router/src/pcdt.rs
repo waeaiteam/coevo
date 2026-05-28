@@ -93,11 +93,12 @@ impl PcdtRouter {
             exploration_budget_quota: 0.0,
         };
 
-        // Hash the plan
+        // Hash the plan — include timestamp for uniqueness per execution
         let plan_json =
             serde_json::to_string(&plan).map_err(|e| RoutingError::Internal(e.to_string()))?;
         let mut hasher = Sha256::new();
         hasher.update(plan_json.as_bytes());
+        hasher.update(chrono::Utc::now().timestamp_millis().to_le_bytes());
         let plan_hash = hex::encode(hasher.finalize());
 
         Ok(RoutingResult {
