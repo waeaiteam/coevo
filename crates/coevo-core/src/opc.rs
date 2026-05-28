@@ -169,7 +169,7 @@ pub struct AgentEmployee {
 #[serde(rename_all = "snake_case")]
 pub enum Department {
     FounderOffice, Product, Engineering, Research, Growth,
-    Finance, Legal, SRE, Design, Content, Custom,
+    Finance, Legal, SRE, Design, Content, Governance, Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

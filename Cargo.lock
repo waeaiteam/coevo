@@ -417,6 +417,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "coevo-evolution"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "coevo-core",
+ "coevo-store",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "coevo-executors"
+version = "1.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "coevo-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "coevo-mcl"
 version = "1.0.0"
 dependencies = [

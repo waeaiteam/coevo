@@ -1,6 +1,6 @@
 //! OPC API handlers: Profile, Memory, Employees, Skills, Executors, Work Orders
 use axum::{extract::{Path, Query, State}, Json};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use coevo_core::opc::*;
 use coevo_store::repos_opc::{user_profile_repo::UserProfileRepo, memory_repo::MemoryRepo, agent_employee_repo::AgentEmployeeRepo};
 use crate::state::AppState;
@@ -55,7 +55,7 @@ pub async fn create_work_order(State(s): State<AppState>, Json(wo): Json<WorkOrd
         .bind(&wo.work_order_id).bind(&wo.contract_hash).bind(&wo.plan_hash).bind(&wo.user_id).bind(&wo.opc_id)
         .bind(&wo.mission_intent).bind(serde_json::to_string(&wo.selected_agents).unwrap())
         .bind(serde_json::to_string(&wo.selected_executors).unwrap()).bind(serde_json::to_string(&wo.required_skills).unwrap())
-        .bind(&wo.track).bind(&wo.status).bind(serde_json::to_string(&wo.allowed_actions).unwrap())
+        .bind(&wo.track).bind(serde_json::to_string(&wo.status).unwrap().trim_matches('"')).bind(serde_json::to_string(&wo.allowed_actions).unwrap())
         .bind(serde_json::to_string(&wo.restricted_actions).unwrap()).bind(&wo.risk_summary)
         .bind(now).bind(now)
         .execute(&s.pool).await.ok();

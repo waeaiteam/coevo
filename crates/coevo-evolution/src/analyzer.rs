@@ -10,7 +10,7 @@ impl FailureAnalyzer {
     pub fn analyze(
         error_message: &str,
         was_risk_denied: bool,
-        had_resolution_conflict: bool,
+        _had_resolution_conflict: bool,
         user_correction: Option<&str>,
     ) -> FailureAnalysis {
         let lower = error_message.to_lowercase();

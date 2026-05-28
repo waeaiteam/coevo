@@ -58,7 +58,7 @@ macro_rules! mock_executor {
                 }
                 Ok(DryRunResult { passed: true, estimated_cost_usd: 0.01, estimated_duration_ms: 100, warnings: vec![] })
             }
-            async fn execute(&self, wo: &WorkOrder, _lease: Option<&coevo_core::lease::EmergencyLease>)
+            async fn execute(&self, _wo: &WorkOrder, _lease: Option<&coevo_core::lease::EmergencyLease>)
                 -> Result<ExecutorResult, ExecutorError> {
                 if self.passport.status != ExecutorStatus::Registered {
                     return Err(ExecutorError::NotRegistered);

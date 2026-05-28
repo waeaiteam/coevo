@@ -1,25 +1,45 @@
-use sqlx::SqlitePool;
-use coevo_core::opc::MemoryRecord;
+use sqlx::{SqlitePool, Row};
+use coevo_core::opc::*;
 use coevo_core::cognitive::CognitiveLayer;
 
 pub struct MemoryRepo;
 impl MemoryRepo {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> MemoryRecord {
+        let scope_s: String = row.get("scope");
+        let status_s: String = row.get("status");
+        let layer_s: String = row.get("cognitive_layer");
+        MemoryRecord{
+            memory_id: row.get("memory_id"),
+            scope: serde_json::from_str(&format!("\"{}\"",scope_s)).unwrap_or(MemoryScope::Task),
+            owner_id: row.get("owner_id"),
+            title: row.get("title"),
+            content: row.get("content"),
+            tags: serde_json::from_str(row.get("tags_json")).unwrap_or_default(),
+            source: row.get("source"),
+            provenance: row.get("provenance"),
+            confidence: row.get("confidence"),
+            ttl_seconds: row.get("ttl_seconds"),
+            created_at_ms: row.get::<i64,_>("created_at_ms") as u64,
+            updated_at_ms: row.get::<i64,_>("updated_at_ms") as u64,
+            access_policy: row.get("access_policy"),
+            status: serde_json::from_str(&format!("\"{}\"",status_s)).unwrap_or(MemoryStatus::Active),
+            cognitive_layer: serde_json::from_str(&format!("\"{}\"",layer_s)).unwrap_or(CognitiveLayer::Hypothesis),
+            linked_contract_hash: row.get("linked_contract_hash"),
+            linked_plan_hash: row.get("linked_plan_hash"),
+            linked_adr_id: row.get("linked_adr_id"),
+        }
+    }
+
     pub async fn list(pool: &SqlitePool, scope: Option<&str>, owner_id: Option<&str>, include_revoked: bool) -> Result<Vec<MemoryRecord>, sqlx::Error> {
         let mut q = "SELECT * FROM memory_records WHERE 1=1".to_string();
         if let Some(s) = scope { q.push_str(&format!(" AND scope='{}'", s)); }
         if let Some(o) = owner_id { q.push_str(&format!(" AND owner_id='{}'", o)); }
         if !include_revoked { q.push_str(" AND status != 'Revoked'"); }
         q.push_str(" ORDER BY created_at_ms DESC LIMIT 100");
-        let rows: Vec<(String,String,String,String,String,String,String,String,String,f64,i64,i64,i64,String,String,String,String,String,String)> = sqlx::query_as(&q).fetch_all(pool).await?;
-        Ok(rows.into_iter().map(|r| MemoryRecord{
-            memory_id:r.0,scope:serde_json::from_str(&format!("\"{}\"",r.1)).unwrap(),owner_id:r.2,title:r.3,content:r.4,
-            tags:serde_json::from_str(&r.5).unwrap_or_default(),source:r.6,provenance:r.7,confidence:r.8,
-            ttl_seconds:r.9,created_at_ms:r.10 as u64,updated_at_ms:r.11 as u64,access_policy:r.12,
-            status:serde_json::from_str(&format!("\"{}\"",r.13)).unwrap(),
-            cognitive_layer:serde_json::from_str(&format!("\"{}\"",r.14)).unwrap(),
-            linked_contract_hash:r.15,linked_plan_hash:r.16,linked_adr_id:r.17,
-        }).collect())
+        let rows = sqlx::query(&q).fetch_all(pool).await?;
+        Ok(rows.iter().map(|r| Self::from_row(r)).collect())
     }
+
     pub async fn create(pool: &SqlitePool, m: &MemoryRecord) -> Result<(), sqlx::Error> {
         if m.cognitive_layer == CognitiveLayer::Fact && m.provenance.is_empty() {
             return Err(sqlx::Error::Protocol("Fact memory requires provenance".to_string()));
@@ -35,6 +55,7 @@ impl MemoryRepo {
             .execute(pool).await?;
         Ok(())
     }
+
     pub async fn mark_stale(pool: &SqlitePool, mid: &str) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE memory_records SET status='Stale',updated_at_ms=? WHERE memory_id=?").bind(chrono::Utc::now().timestamp_millis()).bind(mid).execute(pool).await?; Ok(())
     }
@@ -47,14 +68,7 @@ impl MemoryRepo {
         if let Some(o) = owner_id { q.push_str(&format!(" AND owner_id='{}'", o)); }
         q.push_str(" ORDER BY created_at_ms DESC LIMIT 50");
         let pattern = format!("%{}%", query);
-        let rows: Vec<(String,String,String,String,String,String,String,String,String,f64,i64,i64,i64,String,String,String,String,String,String)> = sqlx::query_as(&q).bind(&pattern).bind(&pattern).fetch_all(pool).await?;
-        Ok(rows.into_iter().map(|r| MemoryRecord{
-            memory_id:r.0,scope:serde_json::from_str(&format!("\"{}\"",r.1)).unwrap(),owner_id:r.2,title:r.3,content:r.4,
-            tags:serde_json::from_str(&r.5).unwrap_or_default(),source:r.6,provenance:r.7,confidence:r.8,
-            ttl_seconds:r.9,created_at_ms:r.10 as u64,updated_at_ms:r.11 as u64,access_policy:r.12,
-            status:serde_json::from_str(&format!("\"{}\"",r.13)).unwrap(),
-            cognitive_layer:serde_json::from_str(&format!("\"{}\"",r.14)).unwrap(),
-            linked_contract_hash:r.15,linked_plan_hash:r.16,linked_adr_id:r.17,
-        }).collect())
+        let rows = sqlx::query(&q).bind(&pattern).bind(&pattern).fetch_all(pool).await?;
+        Ok(rows.iter().map(|r| Self::from_row(r)).collect())
     }
 }

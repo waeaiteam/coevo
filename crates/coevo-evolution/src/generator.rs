@@ -30,7 +30,7 @@ impl SkillGenerator {
             diagnosis: format!("{:?}: {}", analysis.category, analysis.root_cause),
             proposed_changes: "Auto-generated patch based on failure analysis".to_string(),
             expected_benefit: "Prevent recurrence of diagnosed failure".to_string(),
-            risk_assessment: self.assess_risk(analysis),
+            risk_assessment: SkillGenerator::assess_risk(analysis),
             generated_tests: vec![],
             status: EvolutionProposalStatus::Draft,
             created_by_agent: created_by_agent.to_string(),
@@ -38,7 +38,7 @@ impl SkillGenerator {
         }
     }
 
-    fn assess_risk(&self, analysis: &FailureAnalysis) -> String {
+    fn assess_risk(analysis: &FailureAnalysis) -> String {
         match analysis.category {
             FailureCategory::PolicyViolation | FailureCategory::ExternalExecutorFailure => {
                 "HIGH — requires human review".to_string()
