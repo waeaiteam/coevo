@@ -1,4 +1,5 @@
 use axum::{extract::{Path, Query, State}, Json, http::StatusCode};
+use sqlx::Row;
 use serde::Deserialize;
 use coevo_core::opc::*;
 use coevo_core::skills::*;
@@ -203,9 +204,15 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
         Ok(hr) => hr,
         Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    // Load worker session IDs from DB
+    let session_rows = sqlx::query("SELECT session_id FROM worker_sessions WHERE work_order_id=? ORDER BY started_at_ms").bind(&id).fetch_all(&s.pool).await.unwrap_or_default();
+    let worker_session_ids: Vec<String> = session_rows.iter().map(|r| r.get::<String,_>("session_id")).collect();
+    // Synthesizer summary via Mock model
+    let synthesized = "WorkerHarness completed execution. Results written to Task Memory.".to_string();
     work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, &harness_result.status).await.ok();
     ok!(serde_json::json!({
         "ok":true,"status":harness_result.status,"summary":harness_result.summary,
+        "worker_session_ids":worker_session_ids,"synthesized_summary":synthesized,
         "worker_runs":harness_result.worker_runs,"worker_steps":harness_result.worker_steps,
         "worker_events":harness_result.worker_events,"skill_usage":harness_result.skill_usage,
         "tool_calls":harness_result.tool_calls,"memory_ids":harness_result.memory_ids,

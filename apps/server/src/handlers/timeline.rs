@@ -11,28 +11,36 @@ fn to_json(rows: &[sqlx::sqlite::SqliteRow]) -> Vec<serde_json::Value> {
 }
 
 pub async fn timeline(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    let mut items: Vec<serde_json::Value> = vec![];
-    let now = chrono::Utc::now().timestamp_millis();
+    // Check WorkOrder exists
+    let wo_exists = sqlx::query("SELECT 1 FROM work_orders WHERE work_order_id=?").bind(&id).fetch_optional(&s.pool).await.ok().flatten().is_some();
+    if !wo_exists { return err!(StatusCode::NOT_FOUND, "WorkOrder not found"); }
 
+    let mut items: Vec<serde_json::Value> = vec![];
     // Load sessions
     if let Ok(sessions) = WorkerSessionRepo::list_by_work_order(&s.pool, &id).await {
         for sess in &sessions {
             let sid: String = sess.get("session_id");
             let st: String = sess.get("status");
             let start: i64 = sess.get("started_at_ms");
-            items.push(serde_json::json!({"time_ms":start,"type":"WorkerSessionCreated","title":format!("Session {} created", &sid[..8.min(sid.len())]),"details":{"session_id":sid,"status":st}}));
+            items.push(serde_json::json!({"time_ms":start,"type":"WorkerSessionCreated","title":format!("Worker session started"),"details":{"session_id":sid,"status":st}}));
             // Load steps
-            if let Ok(steps) = sqlx::query("SELECT * FROM worker_steps WHERE run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?) ORDER BY step_index").bind(&id).fetch_all(&s.pool).await {
+            if let Ok(steps) = sqlx::query("SELECT * FROM worker_run_steps WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await {
                 for step in &steps {
                     let tp: String = step.get("step_type");
-                    let tm: i64 = step.get("started_at_ms");
-                    items.push(serde_json::json!({"time_ms":tm,"type":format!("WorkerStep_{}",tp),"title":tp,"details":{"step_id":step.get::<String,_>("step_id")}}));
+                    let tm: i64 = step.get("created_at_ms");
+                    items.push(serde_json::json!({"time_ms":tm,"type":tp,"title":tp,"details":{"step_id":step.get::<String,_>("step_id"),"session_id":&sid}}));
+                }
+            }
+            // Load events
+            if let Ok(evts) = sqlx::query("SELECT * FROM worker_events WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await {
+                for evt in &evts {
+                    let et: String = evt.get("event_type");
+                    let tm: i64 = evt.get("created_at_ms");
+                    items.push(serde_json::json!({"time_ms":tm,"type":et,"title":et,"details":{"event_id":evt.get::<String,_>("event_id"),"session_id":&sid}}));
                 }
             }
         }
     }
-
-    // Sort by time
     items.sort_by_key(|i| i["time_ms"].as_i64().unwrap_or(0));
     ok!(serde_json::json!(items))
 }

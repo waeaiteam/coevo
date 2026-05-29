@@ -13,3 +13,4 @@ pub mod agent_worker_repo;
 pub mod model_config_repo;
 pub mod worker_run_repo;
 pub mod worker_session_repo;
+pub mod worker_step_event_repo;
