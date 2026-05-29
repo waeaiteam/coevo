@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { GovernanceProvider } from "./hooks/useGovernance";
+import BootPage from "./components/BootPage";
 import Layout from "./components/Layout";
 import MissionChat from "./pages/MissionChat";
 import Dashboard from "./pages/Dashboard";
@@ -19,6 +21,8 @@ import Demos from "./pages/Demos";
 import Settings from "./pages/Settings";
 
 export default function App() {
+  const [booted, setBooted] = useState(false);
+  if (!booted) return <BootPage onReady={() => setBooted(true)} />;
   return (
     <GovernanceProvider>
       <Routes>
