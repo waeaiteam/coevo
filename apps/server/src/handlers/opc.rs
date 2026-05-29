@@ -5,6 +5,7 @@ use coevo_core::opc::*;
 use coevo_core::skills::*;
 use coevo_core::cognitive::CognitiveLayer;
 use coevo_store::repos_opc::*;
+use coevo_store::repos::worker_step_event_repo::{WorkerRunStepRepo, WorkerEventRepo};
 use coevo_evolution::{analyzer::FailureAnalyzer, generator::SkillGenerator, verifier::SkillVerifier};
 use coevo_executors::adapters::*;
 use coevo_executors::traits::*;
@@ -207,22 +208,26 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
     // Load worker session IDs from DB
     let session_rows = sqlx::query("SELECT session_id FROM worker_sessions WHERE work_order_id=? ORDER BY started_at_ms").bind(&id).fetch_all(&s.pool).await.unwrap_or_default();
     let worker_session_ids: Vec<String> = session_rows.iter().map(|r| r.get::<String,_>("session_id")).collect();
-    // Write WorkerRunSteps + WorkerEvents for each agent
+    // Write steps + events using repos, not direct SQL
     let now_ms = chrono::Utc::now().timestamp_millis();
     for sid in &worker_session_ids {
-        let steps = [("ModelReasoning", "Model reasoning completed"), ("ToolDryRun", "Tool dry-run completed"), ("ToolExecute", "Tool execution completed"), ("MemoryWrite", "Memory written"), ("Reflection", "Post-execution reflection")];
-        for (i, (stype, _summary)) in steps.iter().enumerate() {
-            let _ = sqlx::query("INSERT INTO worker_run_steps (step_id, session_id, step_type, input_json, output_json, status, created_at_ms) VALUES (?,?,?,?,?,?,?)")
-                .bind(format!("step-{}-{}", sid, i)).bind(sid).bind(stype).bind("{}").bind(Option::<String>::None).bind("Completed").bind(now_ms).execute(&s.pool).await;
+        for (i, stype) in ["ModelReasoning","ToolDryRun","ToolExecute","MemoryWrite","Reflection"].iter().enumerate() {
+            if let Err(e) = WorkerRunStepRepo::append(&s.pool, &format!("step-{}-{}", sid, i), sid, stype, "{}", None, "Completed", now_ms).await {
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write step: {}", e));
+            }
         }
-        let _ = sqlx::query("INSERT INTO worker_session_events (event_id, session_id, event_type, payload_json, created_at_ms) VALUES (?,?,?,?,?)")
-            .bind(format!("ev-{}-created", sid)).bind(sid).bind("SessionCreated").bind("{}").bind(now_ms).execute(&s.pool).await;
-        let _ = sqlx::query("INSERT INTO worker_session_events (event_id, session_id, event_type, payload_json, created_at_ms) VALUES (?,?,?,?,?)")
-            .bind(format!("ev-{}-completed", sid)).bind(sid).bind("SessionCompleted").bind("{}").bind(now_ms).execute(&s.pool).await;
+        if let Err(e) = WorkerEventRepo::append(&s.pool, &format!("ev-{}-created", sid), sid, "SessionCreated", "{}", now_ms).await {
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write event: {}", e));
+        }
+        if let Err(e) = WorkerEventRepo::append(&s.pool, &format!("ev-{}-completed", sid), sid, "SessionCompleted", "{}", now_ms).await {
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write event: {}", e));
+        }
     }
     // Synthesizer summary via Mock model
     let synthesized = "WorkerHarness completed execution. Results written to Task Memory.".to_string();
-    work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, &harness_result.status).await.ok();
+    if let Err(e) = work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, &harness_result.status).await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update status: {}", e));
+    }
     ok!(serde_json::json!({
         "ok":true,"status":harness_result.status,"summary":harness_result.summary,
         "worker_session_ids":worker_session_ids,"synthesized_summary":synthesized,
@@ -239,8 +244,12 @@ pub async fn cancel_work_order(State(s): State<AppState>, Path(id): Path<String>
 pub async fn work_order_feedback(State(s): State<AppState>, Path(id): Path<String>, Json(req): Json<WorkOrderFeedback>) -> (StatusCode, Json<serde_json::Value>) {
     let analysis = FailureAnalyzer::analyze(&req.feedback, false, false, None);
     let proposal = SkillGenerator::generate_from_failure(&analysis, "skill-mission-draft", req.agent_id.as_deref().unwrap_or("system"));
-    skill_evolution_repo::SkillEvolutionRepo::create_proposal(&s.pool, &proposal).await.ok();
-    work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Failed").await.ok();
+    if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::create_proposal(&s.pool, &proposal).await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create proposal: {}", e));
+    }
+    if let Err(e) = work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Failed").await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update status: {}", e));
+    }
     ok!(serde_json::json!({"ok":true,"proposal_id":proposal.proposal_id}))
 }
 
@@ -258,11 +267,11 @@ pub async fn activate_skill(State(s): State<AppState>, Path((id,ver)): Path<(Str
     }
 }
 pub async fn rollback_skill(State(s): State<AppState>, Path((id,ver)): Path<(String,String)>) -> (StatusCode, Json<serde_json::Value>) {
-    skill_repo::SkillRepo::rollback(&s.pool, &id, &ver).await.ok();
+    if let Err(e) = skill_repo::SkillRepo::rollback(&s.pool, &id, &ver).await { return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()); }
     let now = chrono::Utc::now().timestamp_millis() as u64;
     let vr = SkillVersionRecord{skill_id:id.clone(),version:ver.clone(),parent_version:"active".into(),diff_summary:"rollback".into(),
         change_reason:"manual rollback".into(),verifier_result:None,approved_by:Some("api".into()),rollback_available:true,created_at_ms:now};
-    skill_evolution_repo::SkillEvolutionRepo::record_version(&s.pool, &vr).await.ok();
+    if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::record_version(&s.pool, &vr).await { return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()); }
     ok!(serde_json::json!({"ok":true}))
 }
 
@@ -320,8 +329,8 @@ pub async fn approve_proposal(State(s): State<AppState>, Path(id): Path<String>)
         }
     }
     let vr = SkillVersionRecord{skill_id:proposal.target_skill_id.clone(),version:"1.1.0".into(),parent_version:"1.0.0".into(),diff_summary:proposal.proposed_changes.clone(),change_reason:proposal.diagnosis.clone(),verifier_result:None,approved_by:Some("api".into()),rollback_available:true,created_at_ms:now};
-    skill_evolution_repo::SkillEvolutionRepo::record_version(&s.pool, &vr).await.ok();
-    skill_evolution_repo::SkillEvolutionRepo::update_status(&s.pool, &id, "Applied").await.ok();
+    if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::record_version(&s.pool, &vr).await { return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()); }
+    if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::update_status(&s.pool, &id, "Applied").await { return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()); }
     ok!(serde_json::json!({"ok":true,"proposal_id":id}))
 }
 pub async fn reject_proposal(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {

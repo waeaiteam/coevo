@@ -32,7 +32,7 @@ pub async fn timeline(State(s): State<AppState>, Path(id): Path<String>) -> (Sta
                 }
             }
             // Load events
-            if let Ok(evts) = sqlx::query("SELECT * FROM worker_session_events WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await {
+            if let Ok(evts) = sqlx::query("SELECT * FROM worker_events WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await {
                 for evt in &evts {
                     let et: String = evt.get("event_type");
                     let tm: i64 = evt.get("created_at_ms");
@@ -61,6 +61,6 @@ pub async fn get_session_steps(State(s): State<AppState>, Path(sid): Path<String
     ok!(serde_json::json!(to_json(&rows)))
 }
 pub async fn get_session_events(State(s): State<AppState>, Path(sid): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    let rows = sqlx::query("SELECT * FROM worker_session_events WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await.unwrap_or_default();
+    let rows = sqlx::query("SELECT * FROM worker_events WHERE session_id=? ORDER BY created_at_ms").bind(&sid).fetch_all(&s.pool).await.unwrap_or_default();
     ok!(serde_json::json!(to_json(&rows)))
 }

@@ -14,10 +14,10 @@ impl WorkerRunStepRepo {
 pub struct WorkerEventRepo;
 impl WorkerEventRepo {
     pub async fn append(pool: &SqlitePool, event_id: &str, session_id: &str, event_type: &str, payload: &str, created: i64) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO worker_session_events (event_id, session_id, event_type, payload_json, created_at_ms) VALUES (?,?,?,?,?)")
+        sqlx::query("INSERT INTO worker_events (event_id, session_id, event_type, payload_json, created_at_ms) VALUES (?,?,?,?,?)")
             .bind(event_id).bind(session_id).bind(event_type).bind(payload).bind(created).execute(pool).await?; Ok(())
     }
     pub async fn list_by_session(pool: &SqlitePool, session_id: &str) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-        sqlx::query("SELECT * FROM worker_session_events WHERE session_id=? ORDER BY created_at_ms").bind(session_id).fetch_all(pool).await
+        sqlx::query("SELECT * FROM worker_events WHERE session_id=? ORDER BY created_at_ms").bind(session_id).fetch_all(pool).await
     }
 }
