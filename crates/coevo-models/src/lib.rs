@@ -4,4 +4,5 @@
 pub mod gateway;
 pub mod mock;
 pub mod openai;
+pub mod router;
 pub mod types;

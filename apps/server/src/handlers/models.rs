@@ -2,6 +2,7 @@ use axum::{Json, http::StatusCode};
 use serde::Deserialize;
 use coevo_models::types::*;
 use coevo_models::gateway::select_gateway;
+use coevo_models::router::{ModelRouter, default_model_profiles, ModelRoutingRequest};
 use std::sync::Mutex;
 
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
@@ -54,6 +55,17 @@ pub async fn structured(Json(req): Json<StructuredRequest>) -> (StatusCode, Json
     let schema = req.schema.unwrap_or(serde_json::json!({"type":"object"}));
     match gateway.structured(&mr, &schema).await {
         Ok(r) => ok!(serde_json::to_value(&r).unwrap()),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":e.to_string()}))),
+    }
+}
+
+pub async fn list_model_profiles() -> (StatusCode, Json<serde_json::Value>) {
+    ok!(serde_json::to_value(default_model_profiles()).unwrap())
+}
+
+pub async fn route_model(Json(req): Json<ModelRoutingRequest>) -> (StatusCode, Json<serde_json::Value>) {
+    match ModelRouter::route(&req, &default_model_profiles(), None) {
+        Ok(decision) => ok!(serde_json::to_value(&decision).unwrap()),
         Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":e.to_string()}))),
     }
 }

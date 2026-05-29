@@ -24,6 +24,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/models/test", post(handlers::models::test_connection))
         .route("/opc/models/chat", post(handlers::models::chat))
         .route("/opc/models/structured", post(handlers::models::structured))
+        .route("/opc/models/profiles", get(handlers::models::list_model_profiles))
+        .route("/opc/models/route", post(handlers::models::route_model))
         // OPC routes — Profiles
         .route("/opc/profile/user", get(handlers::opc::get_user_profile).put(handlers::opc::put_user_profile))
         .route("/opc/profile/company", get(handlers::opc::get_company_profile).put(handlers::opc::put_company_profile))
