@@ -3,6 +3,12 @@ import { compileContract, routePlan, createWorkOrder, executeWorkOrder, listEmpl
 import { useGovernance } from "../hooks/useGovernance";
 import { inferTrackFromIntent } from "../utils/trackInference";
 import MissionDraftCard, { type MissionDraft } from "../components/mission/MissionDraftCard";
+import WorkerRunCard from "../components/WorkerRunCard";
+import WorkerStepList from "../components/WorkerStepList";
+import ModelRoutingPanel from "../components/ModelRoutingPanel";
+import ToolCallPanel from "../components/ToolCallPanel";
+import ReviewPanel from "../components/ReviewPanel";
+import SkillEvolutionCTA from "../components/SkillEvolutionCTA";
 
 type MissionPhase = "idle" | "drafting" | "review" | "executing" | "completed" | "cancelled" | "error";
 type MessageKind = "text" | "draft" | "plan" | "execution_result" | "warning" | "error";
@@ -17,32 +23,25 @@ function selectAgents(intent: string, employees: Record<string,unknown>[], track
   const lower = intent.toLowerCase();
   const active = employees.filter(e => e.lifecycle_status === "Active");
   const picks: Set<string> = new Set();
-  const name = (e:Record<string,unknown>) => e.display_name as string;
   const id = (e:Record<string,unknown>) => e.agent_id as string;
-  // Founder/Synthesizer always
   const founder = active.find(e => id(e).includes("founder")) || active.find(e => id(e).includes("synth"));
   if (founder) picks.add(id(founder));
-  // Red/Yellow need risk/critic
   if (track === "red" || track === "yellow") {
     const risk = active.find(e => id(e).includes("risk") || id(e).includes("critic"));
     if (risk) picks.add(id(risk));
   }
-  // Code/PR → engineer
   if (lower.includes("code")||lower.includes("pr")||lower.includes("review")) {
     const eng = active.find(e => id(e).includes("engineer"));
     if (eng) picks.add(id(eng));
   }
-  // Production/incident/database → SRE
   if (lower.includes("production")||lower.includes("incident")||lower.includes("database")||lower.includes("db")) {
     const sre = active.find(e => id(e).includes("sre"));
     if (sre) picks.add(id(sre));
   }
-  // Report/summary → synthesizer
   if (lower.includes("report")||lower.includes("summary")||lower.includes("generate")) {
     const synth = active.find(e => id(e).includes("synth"));
     if (synth) picks.add(id(synth));
   }
-  // Fill to 2-3
   for (const e of active) { if (picks.size >= 3) break; picks.add(id(e)); }
   return [...picks].slice(0, 3);
 }
@@ -55,10 +54,11 @@ export default function MissionChat() {
   const [employees, setEmployees] = useState<Record<string,unknown>[]>([]);
   const [executors, setExecutors] = useState<Record<string,unknown>[]>([]);
   const [lastTrack, setLastTrack] = useState<Track | null>(null);
+  const [lastExecution, setLastExecution] = useState<Record<string, unknown> | null>(null);
   const { set: setGov, reset: resetGov } = useGovernance();
   const chatEnd = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, draft, phase]);
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, draft, phase, lastExecution]);
   useEffect(() => { loadEmployees(); loadExecutors(); }, []);
 
   async function loadEmployees() { try { setEmployees(await listEmployees()||[]); } catch { setEmployees([]); } }
@@ -68,21 +68,18 @@ export default function MissionChat() {
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, kind, content, detail, track }]);
   }
 
-  // ============ STAGE 1: Create Mission Draft ============
   async function createMissionDraft(intent?: string) {
     const text = (intent ?? input).trim();
     if (!text || phase === "drafting" || phase === "executing") return;
-    setInput(""); setPhase("drafting"); setDraft(null); resetGov();
+    setInput(""); setPhase("drafting"); setDraft(null); setLastExecution(null); resetGov();
     appendMsg("user", "text", text);
 
-    // Check employees
     let emps = employees;
     if (emps.length === 0) {
       appendMsg("system", "warning", "AI Employees are not initialized. Please seed employees first.");
       try { await seedEmployees(); await loadEmployees(); emps = await listEmployees()||[]; appendMsg("system", "text", `Seeded ${emps.length} AI Employees.`); }
       catch { appendMsg("system", "error", "Failed to seed employees. Please use AI Employees page."); setPhase("idle"); return; }
     }
-    // Check executors
     let execs = executors;
     const registered = execs.filter(e => e.status === "Registered");
     if (registered.length === 0) {
@@ -95,23 +92,13 @@ export default function MissionChat() {
     }
 
     try {
-      // Try model-enhanced Mission Draft
-      let modelDraft: Record<string,unknown>|null = null;
       try {
         appendMsg("system", "text", "Generating model-enhanced Mission Draft...");
-        const md = await modelStructured({
-          role: "MissionDraft",
-          messages: [
-            {role:"system",content:"You are coevo Mission Draft assistant. Suggest mission boundaries only. Do not authorize actions."},
-            {role:"user",content:text}
-          ],
-        }) as Record<string,unknown>;
+        const md = await modelStructured({ role: "MissionDraft", messages: [{role:"system",content:"You are coevo Mission Draft assistant. Suggest mission boundaries only. Do not authorize actions."},{role:"user",content:text}] }) as Record<string,unknown>;
         const mj = (md.json || md) as Record<string,unknown>;
-        modelDraft = mj;
         const modelTrack = String(mj.suggested_track||"").toLowerCase();
         const detTrack = inferTrackFromIntent(text).track;
-        appendMsg("system","text","Model-enhanced mission draft generated",
-          `goal: ${mj.goal_summary||"N/A"} | track: ${modelTrack}`+(modelTrack!==detTrack?` (governance override: ${detTrack})`:""));
+        appendMsg("system","text","Model-enhanced mission draft generated", `goal: ${mj.goal_summary||"N/A"} | track: ${modelTrack}`+(modelTrack!==detTrack?` (governance override: ${detTrack})`:""));
       } catch { appendMsg("system","warning","Model Gateway unavailable. Falling back to deterministic Mission Draft."); }
 
       appendMsg("system", "text", "Compiling MCL contract...");
@@ -119,116 +106,58 @@ export default function MissionChat() {
       const c = compileRes.contract as Record<string,unknown>;
       const hp = (c.human_approval_policy as Record<string,unknown>) || {};
       const actionModes = (c.allowed_action_modes as string[]) || [];
-
       const inferred = inferTrackFromIntent(text);
       setLastTrack(inferred.track);
-
       const selectedAgents = selectAgents(text, emps, inferred.track);
-      appendMsg("system", "text", "Selected AI Employees from Registry",
-        selectedAgents.map(a=>{const e=emps.find(x=>x.agent_id===a);return e?`${e.display_name} (${e.department})`:a;}).join(", "));
-
+      appendMsg("system", "text", "Selected AI Employees from Registry", selectedAgents.map(a=>{const e=emps.find(x=>x.agent_id===a);return e?`${e.display_name} (${e.department})`:a;}).join(", "));
       appendMsg("system", "text", "Computing execution plan...");
       const routeRes = await routePlan(compileRes.contract, selectedAgents);
       const planHash = (routeRes as {plan_hash:string}).plan_hash;
-
       const allowed = actionModes.length>0?actionModes.map(a=>a.replace(/_/g," ").toLowerCase()):["read metrics","analyze logs"];
       const restricted = inferred.track==="red"?["production rollback","database mutation","external write","customer data delete"]:inferred.track==="yellow"?["production write","financial transfer"]:["any write operation"];
-
-      const dr: MissionDraft = {
-        intent:text,suggestedTrack:inferred.track,reason:inferred.reason,
-        contractHash:compileRes.contract_hash,planHash,ambiguityScore:compileRes.ambiguity_score,
-        selectedAgents,allowedActions:allowed,restrictedActions:restricted,
-        approvalRequired:inferred.track==="yellow"||inferred.track==="red",
-        approvalMode:(hp.approval_mode as string)||"NEGATIVE_CONSENT",compileResult:compileRes,routeResult:routeRes,
-      };
+      const dr: MissionDraft = { intent:text,suggestedTrack:inferred.track,reason:inferred.reason, contractHash:compileRes.contract_hash,planHash,ambiguityScore:compileRes.ambiguity_score, selectedAgents,allowedActions:allowed,restrictedActions:restricted, approvalRequired:inferred.track==="yellow"||inferred.track==="red", approvalMode:(hp.approval_mode as string)||"NEGATIVE_CONSENT",compileResult:compileRes,routeResult:routeRes };
       setDraft(dr); setPhase("review");
       setGov({phase:"review",track:inferred.track,contractHash:dr.contractHash,planHash:dr.planHash,contract:c,agents:dr.selectedAgents,riskDecision:"pending_human_choice",approvalMode:dr.approvalMode,actionModes:allowed,approvalRequired:dr.approvalRequired,traceparent:""});
     } catch (e: unknown) { appendMsg("system", "error", `Error: ${e instanceof Error?e.message:String(e)}`); setPhase("error"); }
   }
 
-  // ============ STAGE 2: Execute ============
   async function executeMission(track: Track) {
     if (!draft) return;
     const execs = await listExecutors()||[];
     const registered = execs.filter((e:Record<string,unknown>) => e.status === "Registered");
     if (registered.length === 0) { appendMsg("system","error","No registered executor. Please register one before execution."); return; }
     const executorIds = registered.map(e => e.executor_id as string).slice(0, 2);
-
     if (track === "red") {
-      appendMsg("system","warning","Red Approval Required",
-        "Red Track needs: caller_identity_proof, monitoring_signature, diagnostic_signature, lease_id. The Alpha version blocks direct Red execution.",
-        "red");
-      appendMsg("system","text","Red Track blocked. Use the 'Create Approval Request' workflow or run in Demo mode from the Demos page.");
+      appendMsg("system","warning","Red Approval Required", "Red Track needs: caller_identity_proof, monitoring_signature, diagnostic_signature, lease_id. The Alpha version blocks direct Red execution.", "red");
+      appendMsg("system","text","Red Track blocked. Use the approval workflow or run in Demo mode from the Demos page.");
       return;
     }
-
-    setPhase("executing"); setDraft(null);
+    setPhase("executing"); setDraft(null); setLastExecution(null);
     setGov({phase:"executing",track,contractHash:draft.contractHash,planHash:draft.planHash,contract:null,agents:draft.selectedAgents,riskDecision:"executing",approvalMode:draft.approvalMode,actionModes:draft.allowedActions,approvalRequired:false,traceparent:""});
-
     try {
       appendMsg("system","text",`Executing ${track.toUpperCase()} Track via WorkOrder...`);
-      const woResp = await createWorkOrder({
-        contract_hash:draft.contractHash,plan_hash:draft.planHash,
-        user_id:"default-founder",opc_id:"default-opc",mission_intent:draft.intent,
-        selected_agents:draft.selectedAgents,selected_executors:executorIds,required_skills:[],
-        track,allowed_actions:draft.allowedActions,restricted_actions:draft.restrictedActions,risk_summary:draft.reason,
-      });
+      const woResp = await createWorkOrder({ contract_hash:draft.contractHash,plan_hash:draft.planHash, user_id:"default-founder",opc_id:"default-opc",mission_intent:draft.intent, selected_agents:draft.selectedAgents,selected_executors:executorIds,required_skills:[], track,allowed_actions:draft.allowedActions,restricted_actions:draft.restrictedActions,risk_summary:draft.reason });
       const woId = (woResp as Record<string,unknown>).work_order_id as string;
       const execRes = await executeWorkOrder(woId) as Record<string,unknown>;
+      setLastExecution(execRes);
       const execStatus = execRes.status as string;
       const memIds = execRes.memory_ids as string[] || [];
-
       if (execStatus === "WaitingApproval") {
-        appendMsg("system","warning",`Yellow Track: ${execRes.message||"Awaiting approval"}`,
-          `approval_mode: ${execRes.approval_mode} | status: ${execStatus}`,"yellow");
+        appendMsg("system","warning",`Yellow Track: ${execRes.message||"Awaiting approval"}`, `approval_mode: ${execRes.approval_mode} | status: ${execStatus}`,"yellow");
         setPhase("review"); return;
       }
-
-      // Structured WorkerHarness result display
-      const workerRuns = (execRes.worker_runs as Record<string,unknown>[]) || [];
       const workerSteps = (execRes.worker_steps as Record<string,unknown>[]) || [];
-      const workerEvents = (execRes.worker_events as Record<string,unknown>[]) || [];
       const toolCalls = (execRes.tool_calls as Record<string,unknown>[]) || [];
       const refId = execRes.reflection_id as string || "";
       const propId = execRes.proposal_id as string || "";
-      const stepsSummary = workerSteps.map((s:Record<string,unknown>) => `${s.step_type}`).join(" → ");
-      const modelStep = workerSteps.find((s:Record<string,unknown>) => s.step_type === "ModelCall");
-      const modelOutput = modelStep ? (typeof modelStep.output_json === "string" ? JSON.parse(modelStep.output_json as string) : modelStep.output_json) as Record<string,unknown> : null;
-
-      appendMsg("system","execution_result",`${track.toUpperCase()} Track completed via WorkerHarness`,
-        `wo: ${woId} | status: ${execStatus} | steps: ${workerSteps.length} [${stepsSummary}] | tool_calls: ${toolCalls.length} | memory_ids: ${memIds.length} | reflection: ${refId||"none"} | proposal: ${propId||"none"}`,
-        track);
-
-      if (modelOutput) {
-        appendMsg("system","text","Model Routing",
-          `Model: ${modelOutput.selected_model_id} (${modelOutput.selected_provider_id})\nReason: ${modelOutput.reason || "N/A"}\nModel provides cognition, not authorization. Execution governed by WorkOrder, RiskGate, and ToolPolicy.`);
-      }
-      if (workerRuns.length > 0) {
-        const run = workerRuns[0] as Record<string,unknown>;
-        appendMsg("system","text","WorkerRun",
-          `run_id: ${run.run_id} | status: ${run.status} | worker: ${run.worker_id||"N/A"} | session: ${run.session_id||"N/A"}`);
-      }
-      if (propId) {
-        appendMsg("system","text","Skill Evolution Proposal Created",
-          `proposal_id: ${propId} — Review and verify in Skills page.`);
-      }
-
+      appendMsg("system","execution_result",`${track.toUpperCase()} Track completed via WorkerHarness`, `wo: ${woId} | status: ${execStatus} | steps: ${workerSteps.length} | tool_calls: ${toolCalls.length} | memory_ids: ${memIds.length} | reflection: ${refId||"none"} | proposal: ${propId||"none"}`, track);
       if (memIds.length === 0) appendMsg("system","warning","Execution completed but no task memory was written.","Check executor results.","yellow");
-
       setPhase("completed");
       setGov({phase:"done",track,contractHash:draft.contractHash,planHash:draft.planHash,contract:null,agents:draft.selectedAgents,riskDecision:"ALLOW" as string,approvalMode:draft.approvalMode,actionModes:draft.allowedActions,approvalRequired:false,traceparent:""});
-      // Synthesizer summary
       try {
-        const synth = await modelChat({
-          role:"Synthesizer",
-          messages:[
-            {role:"system",content:"You summarize coevo WorkOrder execution. Do not claim unauthorized actions."},
-            {role:"user",content:JSON.stringify({intent:draft.intent,work_order_id:woId,track,selected_agents:draft.selectedAgents,selected_executors:executorIds,executor_results:execRes.executor_results||[],memory_ids:memIds,status:execStatus})},
-          ]
-        }) as Record<string,unknown>;
+        const synth = await modelChat({ role:"Synthesizer", messages:[{role:"system",content:"You summarize coevo WorkOrder execution. Do not claim unauthorized actions."},{role:"user",content:JSON.stringify({intent:draft.intent,work_order_id:woId,track,selected_agents:draft.selectedAgents,selected_executors:executorIds,memory_ids:memIds,status:execStatus})}] }) as Record<string,unknown>;
         appendMsg("system","text","Synthesizer Summary",(synth.content||"") as string);
       } catch { appendMsg("system","warning","Synthesizer model unavailable. Showing raw execution result."); }
-
       appendMsg("system","text","coevo Governance Mesh completed. Human responsibility is anchored via ADR-A. Audit trail preserved.");
     } catch (e: unknown) {
       appendMsg("system","error",`Execution error: ${e instanceof Error?e.message:String(e)}`);
@@ -276,6 +205,16 @@ export default function MissionChat() {
             </div>
           </div>
         ))}
+        {lastExecution && (
+          <div className="space-y-3">
+            <WorkerRunCard result={lastExecution} />
+            <WorkerStepList steps={lastExecution.worker_steps} />
+            <ModelRoutingPanel steps={lastExecution.worker_steps} />
+            <ToolCallPanel toolCalls={lastExecution.tool_calls} />
+            <ReviewPanel reviewId={lastExecution.reflection_id} />
+            <SkillEvolutionCTA proposalId={lastExecution.proposal_id} />
+          </div>
+        )}
         {draft && phase==="review" && <MissionDraftCard draft={draft} loading={isLoading} onExecute={executeMission} onPlanOnly={planOnly} onCancel={cancelMission} />}
         {isLoading && !draft && <div className="flex justify-start"><div className="chat-msg" style={{background:"#fff",border:"1px solid var(--border-subtle)"}}><span className="text-xs" style={{color:"var(--accent)"}}>{phase==="drafting"?"Generating Mission Draft...":"Executing..."}</span></div></div>}
         <div ref={chatEnd} />
