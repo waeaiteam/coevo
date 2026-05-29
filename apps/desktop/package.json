@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:synthetic-opc": "python ../scripts/synthetic_opc_user_test.py"
+    "test:synthetic-opc": "python ../scripts/synthetic_opc_user_test.py",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
+    "build:tauri": "npm run build:sidecar && npm run build && npx tauri build"
   },
   "dependencies": {
     "react": "^18.3.1",

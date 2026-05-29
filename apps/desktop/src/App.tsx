@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import { GovernanceProvider } from "./hooks/useGovernance";
+import { listEmployees } from "./api/client";
 import BootPage from "./components/BootPage";
 import FirstRun from "./components/FirstRun";
 import Layout from "./components/Layout";
@@ -27,9 +28,7 @@ export default function App() {
 
   useEffect(() => {
     if (booted) {
-      // Check if first run (no config/app.json)
-      const apiBase = localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717";
-      fetch(`${apiBase}/opc/agents/employees`).then(r => r.json()).then((data: unknown) => {
+      listEmployees().then((data) => {
         if (!Array.isArray(data) || data.length === 0) setShowFirstRun(true);
       }).catch(() => setShowFirstRun(true));
     }

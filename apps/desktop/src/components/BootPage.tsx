@@ -30,16 +30,17 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   async function boot() {
     try {
       setStage(0);
-      let apiBase = "http://127.0.0.1:8717";
-
       // Try Tauri launch_server — returns dynamic apiBase
       const invoke = await getInvoke();
+      let apiBase = "";
       if (invoke) {
-        try { apiBase = await invoke("launch_server"); } catch { /* already running */ }
-        try { apiBase = await invoke("get_api_base"); } catch {}
-        if (!apiBase || apiBase === "http://127.0.0.1:8717") {
-          try { apiBase = `http://127.0.0.1:${await invoke("get_server_port")}`; } catch {}
+        try { apiBase = await invoke("launch_server"); } catch (e: unknown) {
+          setError(`Server start failed: ${e instanceof Error ? e.message : String(e)}`); return;
         }
+        if (!apiBase) { setError("Server returned empty API base URL"); return; }
+      } else {
+        // Web dev mode: try existing server
+        apiBase = "http://127.0.0.1:8717";
       }
       setApiBase(apiBase);
 
