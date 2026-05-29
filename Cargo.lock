@@ -602,6 +602,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "coevo-core",
+ "coevo-models",
  "serde",
  "serde_json",
  "sqlx",

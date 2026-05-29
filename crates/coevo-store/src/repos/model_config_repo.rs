@@ -1,4 +1,5 @@
 use sqlx::{SqlitePool, Row};
+use coevo_models::types::*;
 
 pub struct ModelConfigRepo;
 impl ModelConfigRepo {
@@ -8,6 +9,26 @@ impl ModelConfigRepo {
         if key.is_empty() { return "****".into(); }
         if key.len() <= 8 { return format!("{}****", &key[..key.len().min(4)]); }
         format!("{}****{}", &key[..4], &key[key.len()-4..])
+    }
+
+    fn parse_config(row: &sqlx::sqlite::SqliteRow) -> Result<ModelProviderConfig, sqlx::Error> {
+        let kind_str: String = row.get("kind");
+        let kind: ModelProviderKind = serde_json::from_str(&format!("\"{}\"", kind_str))
+            .map_err(|_| sqlx::Error::Protocol(format!("MODEL_CONFIG_INVALID_KIND: {}", kind_str)))?;
+        Ok(ModelProviderConfig {
+            provider_id: row.get("provider_id"),
+            kind,
+            base_url: row.get("base_url"),
+            api_key: row.get("api_key_ciphertext"),
+            default_model: row.get("default_model"),
+            fast_model: row.get("fast_model"),
+            reasoning_model: row.get("reasoning_model"),
+            structured_output_model: row.get("structured_output_model"),
+            max_tokens: row.get::<i64,_>("max_tokens") as u32,
+            temperature: row.get("temperature"),
+            timeout_ms: row.get::<i64,_>("timeout_ms") as u64,
+            max_cost_per_task_usd: row.get("max_cost_per_task_usd"),
+        })
     }
 
     pub async fn seed_mock_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -22,31 +43,18 @@ impl ModelConfigRepo {
         Ok(())
     }
 
-    pub async fn get_active(pool: &SqlitePool) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-        sqlx::query("SELECT * FROM model_provider_configs WHERE is_active=1 LIMIT 1").fetch_optional(pool).await
+    pub async fn get_active_config(pool: &SqlitePool) -> Result<Option<ModelProviderConfig>, sqlx::Error> {
+        let row = sqlx::query("SELECT * FROM model_provider_configs WHERE is_active=1 LIMIT 1")
+            .fetch_optional(pool).await?;
+        match row {
+            Some(ref r) => Ok(Some(Self::parse_config(r)?)),
+            None => Ok(None),
+        }
     }
 
-    pub async fn upsert(pool: &SqlitePool, r: &sqlx::sqlite::SqliteRow) -> Result<(), sqlx::Error> {
-        let now = chrono::Utc::now().timestamp_millis();
-        let pid: String = r.get("provider_id");
-        let kind: String = r.get("kind");
-        let bu: String = r.get("base_url");
-        let key: String = r.get("api_key_ciphertext");
-        let msk: String = r.get("api_key_masked");
-        let dm: String = r.get("default_model");
-        let fm: String = r.get("fast_model");
-        let rm: String = r.get("reasoning_model");
-        let sm: String = r.get("structured_output_model");
-        let mt: i64 = r.get("max_tokens");
-        let temp: f64 = r.get("temperature");
-        let to: i64 = r.get("timeout_ms");
-        let cost: f64 = r.get("max_cost_per_task_usd");
-        sqlx::query("INSERT OR REPLACE INTO model_provider_configs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&pid).bind(&kind).bind(&bu).bind(&key).bind(&msk).bind(&dm).bind(&fm).bind(&rm).bind(&sm)
-            .bind(mt).bind(temp).bind(to).bind(cost).bind(1).bind(now).bind(now).execute(pool).await?;
-        // Deactivate others
-        sqlx::query("UPDATE model_provider_configs SET is_active=0,updated_at_ms=? WHERE provider_id!=?").bind(now).bind(&pid).execute(pool).await?;
-        Ok(())
+    pub async fn get_active_config_or_seed(pool: &SqlitePool) -> Result<ModelProviderConfig, sqlx::Error> {
+        Self::seed_mock_if_empty(pool).await?;
+        Self::get_active_config(pool).await?.ok_or(sqlx::Error::RowNotFound)
     }
 
     pub async fn set_active(pool: &SqlitePool, provider_id: &str) -> Result<(), sqlx::Error> {

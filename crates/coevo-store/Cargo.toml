@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 coevo-core.workspace = true
+coevo-models.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 serde.workspace = true

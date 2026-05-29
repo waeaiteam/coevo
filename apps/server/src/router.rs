@@ -76,7 +76,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/tools/{id}", get(handlers::tools::get_tool))
         .route("/opc/tools/{id}/health", post(handlers::tools::tool_health))
         .route("/opc/tools/{id}/dry-run", post(handlers::tools::tool_dry_run))
-        .route("/opc/tools/{id}/execute", post(handlers::tools::tool_execute));
+        .route("/opc/tools/{id}/execute", post(handlers::tools::tool_execute))
+        // Worker sessions + timeline
+        .route("/opc/workers/sessions", get(handlers::timeline::list_worker_sessions))
+        .route("/opc/workers/sessions/{id}", get(handlers::timeline::get_worker_session))
+        .route("/opc/workers/sessions/{id}/steps", get(handlers::timeline::get_session_steps))
+        .route("/opc/workers/sessions/{id}/events", get(handlers::timeline::get_session_events))
+        .route("/opc/work-orders/{id}/timeline", get(handlers::timeline::timeline));
 
     // Authenticated API routes (with metadata validation)
     let api = Router::new()
