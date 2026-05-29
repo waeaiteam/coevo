@@ -19,7 +19,10 @@ async fn get_active_config(pool: &sqlx::SqlitePool) -> Result<ModelProviderConfi
     let row = ModelConfigRepo::get_active(pool).await?.ok_or(sqlx::Error::RowNotFound)?;
     Ok(ModelProviderConfig{
         provider_id: row.get("provider_id"),
-        kind: serde_json::from_str(&format!("\"{}\"", row.get::<String,_>("kind"))).unwrap_or(ModelProviderKind::Mock),
+        kind: {
+            let k: String = row.get("kind");
+            serde_json::from_str(&format!("\"{}\"", k)).unwrap_or(ModelProviderKind::Mock)
+        },
         base_url: row.get("base_url"),
         api_key: row.get("api_key_ciphertext"),
         default_model: row.get("default_model"),
@@ -41,23 +44,55 @@ pub async fn get_config_handler(State(s): State<AppState>) -> (StatusCode, Json<
 }
 
 pub async fn put_config_handler(State(s): State<AppState>, Json(req): Json<PutConfigRequest>) -> (StatusCode, Json<serde_json::Value>) {
-    // Get existing key if not clearing and no new key provided
-    let existing_key = if !req.clear_api_key.unwrap_or(false) && req.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
-        ModelConfigRepo::get_active(&s.pool).await.ok().flatten().map(|r| r.get::<String,_>("api_key_ciphertext")).unwrap_or_default()
-    } else { req.api_key.clone().unwrap_or_default() };
+    let kind_str = req.kind.clone();
+    // Validate kind
+    let valid_kinds = ["Mock","OpenAICompatible","OpenAI","Anthropic","Gemini","DeepSeek","Ollama","Local"];
+    if !valid_kinds.contains(&kind_str.as_str()) {
+        return err!(StatusCode::BAD_REQUEST, format!("MODEL_CONFIG_INVALID_KIND: {}", kind_str));
+    }
+    // Validate per kind
+    if kind_str == "OpenAICompatible" {
+        let bu = req.base_url.as_deref().unwrap_or("");
+        if bu.is_empty() { return err!(StatusCode::UNPROCESSABLE_ENTITY, "INVALID_BASE_URL: base_url required for OpenAICompatible"); }
+        if req.default_model.as_deref().map(|m| m.is_empty()).unwrap_or(true) { return err!(StatusCode::UNPROCESSABLE_ENTITY, "MODEL_CONFIG_INVALID: default_model required"); }
+        let temp = req.temperature.unwrap_or(0.7);
+        if temp < 0.0 || temp > 2.0 { return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("INVALID_TEMPERATURE: {}", temp)); }
+        let to = req.timeout_ms.unwrap_or(30000);
+        if to <= 0 { return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("INVALID_TIMEOUT: {}", to)); }
+        let mt = req.max_tokens.unwrap_or(4096);
+        if mt <= 0 { return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("INVALID_MAX_TOKENS: {}", mt)); }
+        if let Some(cost) = req.max_cost_per_task_usd { if cost < 0.0 { return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("INVALID_COST: {}", cost)); } }
+    }
+    // Get existing key
+    let existing_key = if req.clear_api_key.unwrap_or(false) {
+        String::new()
+    } else if req.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false) {
+        req.api_key.clone().unwrap_or_default()
+    } else {
+        ModelConfigRepo::get_active(&s.pool).await.ok().flatten()
+            .and_then(|r| r.get::<Option<String>,_>("api_key_ciphertext"))
+            .unwrap_or_default()
+    };
+    // Check missing key for OpenAICompatible
+    if kind_str == "OpenAICompatible" && existing_key.is_empty() {
+        return err!(StatusCode::UNPROCESSABLE_ENTITY, "MISSING_API_KEY");
+    }
     let mask = ModelConfigRepo::mask_key(&existing_key);
     let now = chrono::Utc::now().timestamp_millis();
     let pid = req.provider_id.clone();
-    let kind = req.kind.clone();
-    // Upsert via raw SQL
-    sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(provider_id) DO UPDATE SET kind=excluded.kind,base_url=excluded.base_url,api_key_ciphertext=excluded.api_key_ciphertext,api_key_masked=excluded.api_key_masked,default_model=excluded.default_model,fast_model=excluded.fast_model,reasoning_model=excluded.reasoning_model,structured_output_model=excluded.structured_output_model,max_tokens=excluded.max_tokens,temperature=excluded.temperature,timeout_ms=excluded.timeout_ms,max_cost_per_task_usd=excluded.max_cost_per_task_usd,is_active=1,updated_at_ms=excluded.updated_at_ms")
-        .bind(&pid).bind(&kind).bind(req.base_url.unwrap_or_default()).bind(&existing_key).bind(&mask)
+    // Upsert
+    if let Err(e) = sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(provider_id) DO UPDATE SET kind=excluded.kind,base_url=excluded.base_url,api_key_ciphertext=excluded.api_key_ciphertext,api_key_masked=excluded.api_key_masked,default_model=excluded.default_model,fast_model=excluded.fast_model,reasoning_model=excluded.reasoning_model,structured_output_model=excluded.structured_output_model,max_tokens=excluded.max_tokens,temperature=excluded.temperature,timeout_ms=excluded.timeout_ms,max_cost_per_task_usd=excluded.max_cost_per_task_usd,is_active=1,updated_at_ms=excluded.updated_at_ms")
+        .bind(&pid).bind(&kind_str).bind(req.base_url.unwrap_or_default()).bind(&existing_key).bind(&mask)
         .bind(req.default_model.unwrap_or_default()).bind(req.fast_model.unwrap_or_default()).bind(req.reasoning_model.unwrap_or_default()).bind(req.structured_output_model.unwrap_or_default())
         .bind(req.max_tokens.unwrap_or(4096)).bind(req.temperature.unwrap_or(0.7)).bind(req.timeout_ms.unwrap_or(30000)).bind(req.max_cost_per_task_usd.unwrap_or(0.0))
-        .bind(now).bind(now).execute(&s.pool).await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();
+        .bind(now).bind(now).execute(&s.pool).await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save config: {}", e));
+    }
     // Deactivate others
-    sqlx::query("UPDATE model_provider_configs SET is_active=0,updated_at_ms=? WHERE provider_id!=?").bind(now).bind(&pid).execute(&s.pool).await.ok();
-    ok!(serde_json::json!({"ok":true,"provider_id":pid,"kind":kind,"api_key_masked":mask}))
+    if let Err(e) = sqlx::query("UPDATE model_provider_configs SET is_active=0,updated_at_ms=? WHERE provider_id!=?").bind(now).bind(&pid).execute(&s.pool).await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to deactivate: {}", e));
+    }
+    ok!(serde_json::json!({"ok":true,"provider_id":pid,"kind":kind_str,"api_key_masked":mask}))
 }
 
 pub async fn test_connection(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
