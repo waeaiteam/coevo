@@ -1,6 +1,6 @@
 // build-sidecar.mjs — Build coevo-server and copy to Tauri sidecar directory
 import { execSync } from "child_process";
-import { existsSync, mkdirSync, copyFileSync } from "fs";
+import { existsSync, mkdirSync, copyFileSync, readdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -27,8 +27,12 @@ execSync(`${cargo} build --release -p coevo-server`, {
   stdio: "inherit" 
 });
 
-// Copy to sidecar directory
+// Clean old sidecar binaries
 mkdirSync(sidecarDir, { recursive: true });
+for (const f of readdirSync(sidecarDir)) {
+  if (f.startsWith("coevo-server-")) rmSync(join(sidecarDir, f));
+}
+// Copy to sidecar directory
 const src = join(repoRoot, "target", "release", 
   process.platform === "win32" ? "coevo-server.exe" : "coevo-server");
 const dest = join(sidecarDir, 

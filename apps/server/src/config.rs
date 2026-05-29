@@ -49,18 +49,22 @@ impl ServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    static LOCK: Mutex<()> = Mutex::new(());
     #[test]
     fn test_default_db_is_raw_path() {
+        let _lock = LOCK.lock().unwrap();
         let config = ServerConfig::from_env();
-        // Default should not have sqlite: prefix on desktop (COEVO_HOME falls back to .coevo)
-        // In CI/sandbox, it may be .coevo/data/coevo.db — either way it's a path
         assert!(!config.database_url.is_empty());
+        assert!(!config.database_url.starts_with("sqlite:"), "default should be raw path, got: {}", config.database_url);
     }
     #[test]
     fn test_coevo_db_path_env_raw() {
+        let _lock = LOCK.lock().unwrap();
         std::env::set_var("COEVO_DB_PATH", "C:\\Users\\test\\.coevo\\data\\coevo.db");
         let config = ServerConfig::from_env();
-        assert!(!config.database_url.starts_with("sqlite:"));
+        assert!(!config.database_url.starts_with("sqlite:"), "COEVO_DB_PATH should be raw, got: {}", config.database_url);
+        assert!(config.database_url.contains("coevo.db"));
         std::env::remove_var("COEVO_DB_PATH");
     }
 }

@@ -2,11 +2,11 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::fs;
-use tauri::Manager;
+use std::io::Write;
 use tauri_plugin_shell::ShellExt;
 
 static API_BASE: Mutex<String> = Mutex::new(String::new());
-static SIDECAR_PID: Mutex<Option<u32>> = Mutex::new(None);
+static SIDECAR: Mutex<Option<tauri_plugin_shell::process::CommandChild>> = Mutex::new(None);
 
 fn coevo_home() -> PathBuf {
     if let Ok(h) = std::env::var("COEVO_HOME") { return PathBuf::from(h); }
@@ -14,20 +14,16 @@ fn coevo_home() -> PathBuf {
 }
 
 fn ensure_dirs(home: &PathBuf) {
-    let dirs = [
-        "config","data","logs","runtime","cache","memory","temp",
-        "skills/installed","skills/generated","skills/pending","skills/archived",
-        "executors/openclaw","executors/hermes","executors/mcp","executors/302ai","executors/local-process",
-        "backups/daily","backups/manual",
-    ];
-    for d in &dirs { fs::create_dir_all(home.join(d)).ok(); }
+    for d in &["config","data","logs","runtime","cache","memory","temp","skills/installed","skills/generated","skills/pending","skills/archived","executors/openclaw","executors/hermes","executors/mcp","executors/302ai","executors/local-process","backups/daily","backups/manual"] {
+        fs::create_dir_all(home.join(d)).ok();
+    }
 }
 
 fn find_free_port(start: u16) -> Result<u16, String> {
     for p in start..start+100 {
         if std::net::TcpListener::bind(("127.0.0.1", p)).is_ok() { return Ok(p); }
     }
-    Err(format!("No free port found in range {}-{}", start, start+99))
+    Err(format!("No free port in {}-{}", start, start+99))
 }
 
 #[tauri::command]
@@ -49,19 +45,27 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
     if let Some(parent) = db_path.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
     let log_dir = home.join("logs");
     fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let log_path = log_dir.join("coevo-server.log");
 
-    // Use Tauri sidecar API
+    // Open log file synchronously, fail early if can't
+    let mut log_file = fs::OpenOptions::new().create(true).append(true).open(&log_path)
+        .map_err(|e| format!("Cannot open log file {}: {}", log_path.display(), e))?;
+
+    // Write boot entry
+    writeln!(log_file, "[boot] Starting coevo-server sidecar at {}", chrono::Utc::now()).ok();
+
     let sidecar = app.shell().sidecar("coevo-server")
-        .map_err(|e| format!("Sidecar not found: {}. Is coevo-server built and in binaries/? {}", e, "Run npm run build:sidecar"))?
+        .map_err(|e| format!("Sidecar 'coevo-server' not found: {}. Run: npm run build:sidecar", e))?
         .env("COEVO_HOME", home.to_string_lossy().to_string())
         .env("COEVO_PORT", port.to_string())
         .env("COEVO_DB_PATH", db_path.to_string_lossy().to_string())
         .env("COEVO_LOG_DIR", log_dir.to_string_lossy().to_string())
         .env("RUST_LOG", "coevo=info");
 
-    let (mut rx, child) = sidecar.spawn().map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
+    let (mut rx, child) = sidecar.spawn()
+        .map_err(|e| format!("Failed to spawn coevo-server: {}", e))?;
     let pid = child.pid();
-    *SIDECAR_PID.lock().unwrap() = Some(pid);
+    *SIDECAR.lock().unwrap() = Some(child);
 
     // Write runtime files
     let rt = home.join("runtime");
@@ -69,41 +73,44 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
     fs::write(rt.join("server.port"), port.to_string()).ok();
     fs::write(rt.join("server.pid"), pid.to_string()).ok();
 
-    // Spawn async reader for sidecar stdout/stderr → log
-    let log_file = log_dir.join("coevo-server.log");
+    // Async stdout/stderr → log file
     tauri::async_runtime::spawn(async move {
-        let mut file = fs::OpenOptions::new().create(true).append(true).open(&log_file).unwrap();
-        use std::io::Write;
         while let Some(event) = rx.recv().await {
-            match event {
-                tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                    writeln!(file, "[stdout] {}", String::from_utf8_lossy(&line)).ok();
+            let line = match event {
+                tauri_plugin_shell::process::CommandEvent::Stdout(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                tauri_plugin_shell::process::CommandEvent::Stderr(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                tauri_plugin_shell::process::CommandEvent::Terminated(status) => {
+                    let _ = writeln!(log_file, "[boot] coevo-server exited with {:?}", status.code());
+                    break;
                 }
-                tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                    writeln!(file, "[stderr] {}", String::from_utf8_lossy(&line)).ok();
-                }
-                tauri_plugin_shell::process::CommandEvent::Terminated(_) => break,
-                _ => {}
-            }
+                _ => continue,
+            };
+            let _ = writeln!(log_file, "{}", line);
         }
     });
 
+    // Wait for TCP to become available (health check), up to 15 seconds
     let api_base = format!("http://127.0.0.1:{}", port);
-    *API_BASE.lock().unwrap() = api_base.clone();
-    Ok(api_base)
+    for _ in 0..30 {
+        if reqwest::get(format!("{}/health", api_base)).await.is_ok() {
+            *API_BASE.lock().unwrap() = api_base.clone();
+            return Ok(api_base);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    // Server didn't come up — kill sidecar and return error
+    if let Some(child) = SIDECAR.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    Err(format!("coevo-server started but health check failed. Check logs: {}", log_path.display()))
 }
 
 #[tauri::command]
-fn stop_server(app: tauri::AppHandle) {
-    if let Some(pid) = SIDECAR_PID.lock().unwrap().take() {
-        // Kill by PID on Windows
-        #[cfg(target_os = "windows")]
-        { let _ = std::process::Command::new("taskkill").args(["/F","/PID",&pid.to_string()]).output(); }
-        #[cfg(not(target_os = "windows"))]
-        { unsafe { libc::kill(pid as i32, libc::SIGTERM); } }
+fn stop_server() {
+    if let Some(child) = SIDECAR.lock().unwrap().take() {
+        let _ = child.kill();
     }
     *API_BASE.lock().unwrap() = String::new();
-    let _ = app;
 }
 
 #[tauri::command]
@@ -134,9 +141,8 @@ fn main() {
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(pid) = SIDECAR_PID.lock().unwrap().take() {
-                    #[cfg(target_os = "windows")]
-                    { let _ = std::process::Command::new("taskkill").args(["/F","/PID",&pid.to_string()]).output(); }
+                if let Some(child) = SIDECAR.lock().unwrap().take() {
+                    let _ = child.kill();
                 }
             }
         })

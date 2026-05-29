@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "identifier": "dev.coevo.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:sidecar && npm run dev",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm run build:sidecar && npm run build",
     "frontendDist": "../dist"
