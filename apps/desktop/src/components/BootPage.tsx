@@ -12,44 +12,59 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
     { label: "Loading AI Employees...", done: false },
   ]);
   const [error, setError] = useState("");
-  const [ready, setReady] = useState(false);
 
   useEffect(() => { boot(); }, []);
 
+  async function getInvoke() {
+    try {
+      const w = window as any;
+      if (w.__TAURI_INTERNALS__) {
+        const mod = await (Function('return import("@tauri-apps/api/core")')());
+        return mod.invoke;
+      }
+    } catch { /* web */ }
+    return null;
+  }
+
   async function boot() {
     try {
-      setStage(0, true);
-      const apiBase = localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717";
+      setStage(0);
+      let apiBase = "http://127.0.0.1:8717";
 
-      // Try to start server via Tauri
-      try { const tauriWindow = (window as any).__TAURI__ || (window as any).__TAURI_INTERNALS__;
-        if (tauriWindow) {
-          const invoke = tauriWindow?.invoke || tauriWindow?.core?.invoke;
-          if (invoke) { try { await invoke("launch_server"); } catch { /* may be running */ } }
+      // Try Tauri launch_server
+      const invoke = await getInvoke();
+      if (invoke) {
+        try { apiBase = await invoke("launch_server"); } catch { /* already running */ }
+        try { apiBase = `http://127.0.0.1:${await invoke("get_server_port")}`; } catch {}
+      }
+      // Check if server was already on port file
+      try {
+        if (invoke) {
+          const home = await invoke("get_coevo_home");
+          // Just use the port from get_server_port
         }
-      } catch { /* non-Tauri / web dev */ }
+      } catch {}
+      localStorage.setItem("coevo-api-base", apiBase);
 
-      setStage(1, true);
-      // Health check with retry
+      setStage(1);
       let healthy = false;
       for (let i = 0; i < 20; i++) {
-        try {
-          const r = await fetch(`${apiBase}/health`);
-          if (r.ok) { healthy = true; break; }
-        } catch { await sleep(500); }
+        try { const r = await fetch(`${apiBase}/health`); if (r.ok) { healthy = true; break; } } catch { await sleep(500); }
       }
-      if (!healthy) { setStage(1, false, "Server failed to start"); setError("Server did not respond. Check logs."); return; }
-      setStage(2, true);
-      setStage(3, true);
-      setStage(4, true);
-      setStage(5, true);
-      setReady(true);
-      setTimeout(onReady, 800);
+      if (!healthy) { setStage(1, "Server did not respond. Check logs."); setError("Server did not respond. Check logs."); return; }
+      setStage(2); setStage(3); setStage(4); setStage(5);
+      setTimeout(onReady, 600);
     } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
-  function setStage(idx: number, done: boolean, err?: string) {
-    setStages(prev => prev.map((s, i) => i === idx ? { ...s, done, error: err } : s));
+  function setStage(idx: number, err?: string) {
+    setStages(prev => prev.map((s, i) => i <= idx ? { ...s, done: i < idx ? true : !err, error: i === idx ? err : undefined } : { ...s, error: undefined }));
+  }
+
+  async function openLogs() {
+    const invoke = await getInvoke();
+    if (invoke) { try { await invoke("open_logs_dir"); return; } catch {} }
+    alert("Logs: ~/.coevo/logs");
   }
 
   if (error) return (
@@ -59,7 +74,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       <div className="text-sm mb-4" style={{color:"var(--red)"}}>{error}</div>
       <div className="flex gap-3">
         <button onClick={() => { setError(""); boot(); }} className="px-4 py-2 text-sm rounded-md text-white" style={{background:"var(--accent)"}}>Retry</button>
-        <button onClick={() => alert("Logs: " + (localStorage.getItem("coevo-api-base") || "~/.coevo/logs"))} className="px-4 py-2 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Open Logs</button>
+        <button onClick={openLogs} className="px-4 py-2 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Open Logs</button>
       </div>
     </div>
   );
@@ -71,13 +86,11 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       <div className="space-y-2 w-80">
         {stages.map((s, i) => (
           <div key={i} className="flex items-center gap-3">
-            {s.done ? <span style={{color:"var(--green)"}}>✓</span> : !s.error ? <span className="animate-spin">◌</span> : <span style={{color:"var(--red)"}}>✗</span>}
+            {s.done ? <span style={{color:"var(--green)"}}>✓</span> : s.error ? <span style={{color:"var(--red)"}}>✗</span> : <span className="animate-spin">◌</span>}
             <span className="text-sm" style={{color: s.error ? "var(--red)" : s.done ? "var(--text-secondary)" : "var(--text-primary)"}}>{s.label}</span>
-            {s.error && <span className="text-xs" style={{color:"var(--red)"}}>{s.error}</span>}
           </div>
         ))}
       </div>
-      {ready && <div className="text-sm mt-4" style={{color:"var(--green)"}}>Ready — launching coevo...</div>}
     </div>
   );
 }

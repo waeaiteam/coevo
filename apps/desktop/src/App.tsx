@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import { GovernanceProvider } from "./hooks/useGovernance";
 import BootPage from "./components/BootPage";
+import FirstRun from "./components/FirstRun";
 import Layout from "./components/Layout";
 import MissionChat from "./pages/MissionChat";
 import Dashboard from "./pages/Dashboard";
@@ -22,7 +23,20 @@ import Settings from "./pages/Settings";
 
 export default function App() {
   const [booted, setBooted] = useState(false);
+  const [showFirstRun, setShowFirstRun] = useState(false);
+
+  useEffect(() => {
+    if (booted) {
+      // Check if first run (no config/app.json)
+      const apiBase = localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717";
+      fetch(`${apiBase}/opc/agents/employees`).then(r => r.json()).then((data: unknown) => {
+        if (!Array.isArray(data) || data.length === 0) setShowFirstRun(true);
+      }).catch(() => setShowFirstRun(true));
+    }
+  }, [booted]);
+
   if (!booted) return <BootPage onReady={() => setBooted(true)} />;
+  if (showFirstRun) return <FirstRun onDone={() => setShowFirstRun(false)} />;
   return (
     <GovernanceProvider>
       <Routes>
