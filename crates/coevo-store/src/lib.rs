@@ -1,4 +1,5 @@
 //! coevo-store: SQLite persistence layer with sqlx.
+pub(crate) mod enum_db;
 pub mod migrate;
 pub mod models;
 pub mod pool;
