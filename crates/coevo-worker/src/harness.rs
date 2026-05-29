@@ -12,6 +12,7 @@ use coevo_store::repos::worker_run_repo::{WorkerRunRepo, WorkerStepRepo, WorkerE
 use coevo_store::repos_opc::{work_order_repo, memory_repo};
 use sqlx::{Row, Column};
 use crate::types::WorkerRun;
+use coevo_models::router::{ModelRouter, default_model_profiles, required_capabilities_for_step, ModelRoutingRequest, PrivacyLevel};
 use coevo_core::opc::*;
 use coevo_core::cognitive::CognitiveLayer;
 
@@ -107,6 +108,28 @@ impl WorkerHarness {
             WorkerQueueService::release(pool, &session_id, &worker_id).await?;
             return Self::build_result(pool, work_order_id, &run_id, steps, vec![], None, None, "WaitingApproval", "Yellow Track: WaitingApproval.".into()).await;
         }
+
+        // ModelRouter: record routing decision for Think step (cognition only, not authorization)
+        let route_req = ModelRoutingRequest{
+            work_order_id: work_order_id.into(), agent_id: agent_id.clone(),
+            worker_step_type: "Think".into(), intent: wo.mission_intent.clone(),
+            required_capabilities: required_capabilities_for_step("Think", &wo.mission_intent),
+            track: wo.track.clone(), risk_score: if wo.track=="red"{0.9}else if wo.track=="yellow"{0.6}else{0.3},
+            max_latency_ms: options.max_runtime_ms.map(|m| m as u64),
+            max_cost_usd: None, privacy_boundary: PrivacyLevel::PublicApi,
+            preferred_model_id: None,
+        };
+        let route_decision = ModelRouter::route(&route_req, &default_model_profiles(), None).unwrap_or_else(|_|
+            coevo_models::router::ModelRoutingDecision{
+                selected_provider_id:"mock".into(),selected_model_id:"mock-fast".into(),
+                selected_capabilities:vec![],reason:"NoModelAvailable — using mock".into(),
+                fallback_model_ids:vec![],estimated_cost_usd:None,estimated_latency_ms:None,
+                governance_notes:vec!["ModelRouter failed, using mock fallback".into()],
+                decision_id:format!("mrd-{}",uuid::Uuid::new_v4()),created_at_ms:now(),
+            });
+        step_create(pool, &mut steps, &run_id, "ModelCall",
+            &serde_json::json!({"intent":wo.mission_intent}),
+            Some(&serde_json::to_value(&route_decision).unwrap())).await?;
 
         // ToolPolicy + Tool execution
         let registry = ToolRegistry::default_registry();

@@ -129,6 +129,27 @@ export async function updateModelConfig(config: Record<string,unknown>) { return
 export async function testModelConnection() { return post("/opc/models/test", {}); }
 export async function modelChat(payload: Record<string,unknown>) { return post("/opc/models/chat", payload); }
 export async function modelStructured(payload: Record<string,unknown>) { return post("/opc/models/structured", payload); }
+export async function listModelProfiles(): Promise<Record<string,unknown>[]> { return get("/opc/models/profiles"); }
+export async function routeModel(payload: Record<string,unknown>) { return post("/opc/models/route", payload); }
+
+// === Worker API ===
+export async function listWorkers(): Promise<Record<string,unknown>[]> { return get("/opc/workers"); }
+export async function getWorker(id: string) { return get(`/opc/workers/${id}`); }
+export async function assignWorker(payload: Record<string,unknown>) { return post("/opc/workers/assign", payload); }
+export async function runWorker(id: string, payload: Record<string,unknown>) { return post(`/opc/workers/${id}/run`, payload); }
+export async function cancelWorker(id: string) { return post(`/opc/workers/${id}/cancel`, {}); }
+export async function listWorkerRuns(workerId: string) { return get(`/opc/workers/${workerId}/runs`); }
+export async function getWorkerRun(runId: string) { return get(`/opc/workers/runs/${runId}`); }
+export async function listWorkerRunSteps(runId: string) { return get(`/opc/workers/runs/${runId}/steps`); }
+export async function listWorkerRunEvents(runId: string) { return get(`/opc/workers/runs/${runId}/events`); }
+export async function getWorkerRunReflection(runId: string) { return get(`/opc/workers/runs/${runId}/reflection`); }
+
+// === Tool API ===
+export async function listTools(): Promise<Record<string,unknown>[]> { return get("/opc/tools"); }
+export async function getTool(id: string) { return get(`/opc/tools/${id}`); }
+export async function toolHealth(id: string) { return post(`/opc/tools/${id}/health`, {}); }
+export async function toolDryRun(id: string, payload: Record<string,unknown>) { return post(`/opc/tools/${id}/dry-run`, payload); }
+export async function toolExecute(id: string, payload: Record<string,unknown>) { return post(`/opc/tools/${id}/execute`, payload); }
 
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
