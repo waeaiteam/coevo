@@ -103,6 +103,13 @@ pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) ->
             sqlx::query("UPDATE worker_sessions SET status='Cancelled',updated_at_ms=? WHERE session_id=?")
                 .bind(chrono::Utc::now().timestamp_millis()).bind(session_id).execute(&s.pool).await.ok();
             cancelled_session = Some(session_id.clone());
+            // Emit cancel event
+            if let Some(ref rid) = cancelled_run {
+                let _ = sqlx::query("INSERT INTO worker_events VALUES (?,?,?,?,?,?)")
+                    .bind(format!("ev-{}-cancel", rid)).bind(rid).bind(999i64)
+                    .bind("LifecycleEnd").bind(serde_json::to_string(&serde_json::json!({"reason":"CancelledByUser"})).unwrap())
+                    .bind(chrono::Utc::now().timestamp_millis()).execute(&s.pool);
+            }
         }
     }
     AgentWorkerRepo::set_status(&s.pool, &id, "Cancelled").await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();
