@@ -62,7 +62,7 @@ pub struct Tool { pub tool_id: String, pub name: String, pub tool_type: ToolType
 pub struct ToolPolicyDecision { pub allowed: bool, pub reason: String, pub hidden_from_model: bool, pub required_approval: bool }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryContext { pub user_profile: Option<serde_json::Value>, pub company_memory: Vec<serde_json::Value>, pub agent_memory: Vec<serde_json::Value>, pub task_memory: Vec<serde_json::Value>, pub relevant_skill_memory: Vec<serde_json::Value>, pub stale_memory_ids: Vec<String>, pub excluded_revoked_count: usize, pub context_budget_chars: usize }
+pub struct MemoryContext { pub user_profile: Option<serde_json::Value>, pub company_profile: Vec<serde_json::Value>, pub company_memory: Vec<serde_json::Value>, pub agent_memory: Vec<serde_json::Value>, pub task_memory: Vec<serde_json::Value>, pub relevant_skill_memory: Vec<serde_json::Value>, pub stale_memory_ids: Vec<String>, pub excluded_revoked_count: usize, pub context_budget_chars: usize, pub fact_without_provenance: usize }
 
 #[derive(Debug, Clone)]
 pub struct TransitionContext { pub track: String, pub has_approval_receipt: bool, pub has_valid_lease: bool, pub reason: String }

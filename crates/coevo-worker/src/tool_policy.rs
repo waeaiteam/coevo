@@ -1,5 +1,16 @@
 use crate::types::*;
 
+fn action_match(allowed: &str, supported: &str) -> bool {
+    let a = allowed.to_lowercase();
+    let s = supported.to_lowercase();
+    if s.contains(&a) || a.contains(&s) { return true; }
+    // alias: read matches ReadReadme, ReadFile, ReadRepositoryMetadata, ListFiles
+    if a == "read" && (s.contains("read") || s.contains("list")) { return true; }
+    if a == "list" && s.contains("list") { return true; }
+    if a == "analyze" && (s.contains("read") || s.contains("list")) { return true; }
+    false
+}
+
 pub struct ToolPolicyEngine;
 impl ToolPolicyEngine {
     fn track_risk(track: &str) -> f64 { match track { "red" => 0.9, "yellow" => 0.6, _ => 0.3 } }
@@ -15,10 +26,10 @@ impl ToolPolicyEngine {
         if tool.risk_ceiling < risk {
             return ToolPolicyDecision{allowed:false,reason:format!("Tool risk ceiling {} < track risk {}", tool.risk_ceiling, risk),hidden_from_model:true,required_approval:false};
         }
-        if restricted_actions.iter().any(|a| tool.tool_id.contains(a) || tool.supported_actions.iter().any(|sa| sa.contains(a))) {
+        if restricted_actions.iter().any(|a| tool.tool_id.to_lowercase().contains(&a.to_lowercase()) || tool.supported_actions.iter().any(|sa| sa.to_lowercase().contains(&a.to_lowercase()))) {
             return ToolPolicyDecision{allowed:false,reason:"Tool in restricted actions".into(),hidden_from_model:true,required_approval:false};
         }
-        if !allowed_actions.is_empty() && !allowed_actions.iter().any(|a| tool.supported_actions.iter().any(|sa| sa.contains(a) || a.contains(sa))) {
+        if !allowed_actions.is_empty() && !allowed_actions.iter().any(|a| tool.supported_actions.iter().any(|sa| action_match(a, sa))) {
             return ToolPolicyDecision{allowed:false,reason:"No overlap with allowed actions".into(),hidden_from_model:true,required_approval:false};
         }
         if tool.requires_credential && tool.credential_ref.is_none() {

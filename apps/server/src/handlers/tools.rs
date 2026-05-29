@@ -1,50 +1,79 @@
 use axum::{extract::{Path, State}, Json, http::StatusCode};
+use sqlx::Row;
+use serde::Deserialize;
 use coevo_worker::tool_registry::ToolRegistry;
+use coevo_worker::tool_policy::ToolPolicyEngine;
+use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
+use coevo_store::repos::agent_worker_repo::AgentWorkerRepo;
+use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
 use crate::state::AppState;
 
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
 
+#[derive(Deserialize)] pub struct ToolExecReq { pub work_order_id: String, pub input: serde_json::Value }
+#[derive(Deserialize)] pub struct AssignReq { pub agent_id: String, pub work_order_id: Option<String> }
+#[derive(Deserialize)] pub struct RunReq { pub work_order_id: String }
+
 pub async fn list_tools() -> (StatusCode, Json<serde_json::Value>) {
-    let registry = ToolRegistry::default_registry();
-    ok!(serde_json::to_value(registry.list()).unwrap())
+    ok!(serde_json::to_value(ToolRegistry::default_registry().list()).unwrap())
 }
 pub async fn get_tool(Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    let registry = ToolRegistry::default_registry();
-    match registry.list().iter().find(|t| t.tool_id == id) {
+    let r = ToolRegistry::default_registry();
+    match r.list().iter().find(|t| t.tool_id == id) {
         Some(t) => ok!(serde_json::to_value(t).unwrap()),
         None => err!(StatusCode::NOT_FOUND, "Tool not found"),
     }
 }
 pub async fn tool_health(Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    let registry = ToolRegistry::default_registry();
-    match registry.execute(&id, serde_json::json!({"action":"health"})).await {
+    let r = ToolRegistry::default_registry();
+    match r.execute(&id, serde_json::json!({"action":"health"})).await {
         Ok(_) => ok!(serde_json::json!({"online":true})),
         _ => ok!(serde_json::json!({"online":false})),
     }
 }
-pub async fn tool_dry_run(Path(id): Path<String>, Json(input): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
-    let registry = ToolRegistry::default_registry();
-    match registry.get(&id) {
+pub async fn tool_dry_run(Path(id): Path<String>, Json(_input): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
+    let r = ToolRegistry::default_registry();
+    match r.get(&id) {
         Some(_) => ok!(serde_json::json!({"dry_run":true,"tool_id":id})),
         None => err!(StatusCode::NOT_FOUND, "Tool not found"),
     }
 }
-pub async fn tool_execute(Path(id): Path<String>, Json(input): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
-    let registry = ToolRegistry::default_registry();
-    match registry.execute(&id, input).await {
-        Ok(r) => ok!(r),
+pub async fn tool_execute(State(s): State<AppState>, Path(id): Path<String>, Json(req): Json<ToolExecReq>) -> (StatusCode, Json<serde_json::Value>) {
+    let wo = match WorkOrderRepo::get(&s.pool, &req.work_order_id).await {
+        Ok(Some(w)) => w, _ => return err!(StatusCode::BAD_REQUEST, "WorkOrder not found"),
+    };
+    let r = ToolRegistry::default_registry();
+    let tool = match r.list().iter().find(|t| t.tool_id == id) {
+        Some(t) => t, None => return err!(StatusCode::NOT_FOUND, "Tool not found"),
+    };
+    let decision = ToolPolicyEngine::evaluate(tool, &wo.track, &wo.allowed_actions, &wo.restricted_actions);
+    if !decision.allowed { return err!(StatusCode::FORBIDDEN, format!("ToolDeniedByPolicy: {}", decision.reason)); }
+    match r.execute(&id, req.input).await {
+        Ok(result) => ok!(result),
         Err(e) => err!(StatusCode::BAD_REQUEST, e.to_string()),
     }
 }
 
-// Worker operations
-pub async fn assign_worker(State(_s): State<AppState>, Json(body): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
-    ok!(serde_json::json!({"ok":true,"worker_id":body["agent_id"].as_str().unwrap_or("default")}))
+// Worker operations — real implementations
+pub async fn assign_worker(State(s): State<AppState>, Json(body): Json<AssignReq>) -> (StatusCode, Json<serde_json::Value>) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let wid = format!("worker-{}", body.agent_id);
+    if let Err(e) = AgentWorkerRepo::upsert(&s.pool, &wid, &body.agent_id, "Default", "Assigned", body.work_order_id.as_deref(), None, "[]", "Task", "[]", now, now).await {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    match AgentWorkerRepo::get(&s.pool, &wid).await {
+        Ok(Some(row)) => ok!(serde_json::json!({"worker_id":row.get::<String,_>("worker_id"),"agent_id":row.get::<String,_>("agent_id"),"status":row.get::<String,_>("status")})),
+        _ => ok!(serde_json::json!({"worker_id":wid}))
+    }
 }
-pub async fn run_worker(Path(id): Path<String>, State(_s): State<AppState>, Json(body): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
-    ok!(serde_json::json!({"ok":true,"worker_id":id}))
+pub async fn run_worker(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<RunReq>) -> (StatusCode, Json<serde_json::Value>) {
+    match WorkerHarness::run_work_order(&s.pool, &body.work_order_id, WorkerHarnessOptions{approval_receipt:None,max_runtime_ms:None,deterministic_mode:true,preferred_tool_ids:vec![]}).await {
+        Ok(r) => ok!(serde_json::to_value(&r).unwrap()),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
-pub async fn cancel_worker(Path(id): Path<String>, State(_s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    ok!(serde_json::json!({"ok":true,"worker_id":id,"status":"Cancelled"}))
+pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    AgentWorkerRepo::set_status(&s.pool, &id, "Cancelled").await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();
+    ok!(serde_json::json!({"worker_id":id,"status":"Cancelled"}))
 }
