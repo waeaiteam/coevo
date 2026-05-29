@@ -32,9 +32,19 @@ fn find_free_port(start: u16) -> u16 {
 fn start_server(home: &PathBuf, port: u16, db: &PathBuf, log_dir: &PathBuf) -> Option<Child> {
     let log = log_dir.join("coevo-server.log");
     fs::create_dir_all(log_dir).ok();
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let server_path = exe_dir.join("coevo-server.exe");
-    let server_path = if server_path.exists() { server_path } else { return None; };
+    // Find coevo-server sidecar
+    let server_path = {
+        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+        let candidates = [
+            exe_dir.join("coevo-server.exe"),
+            exe_dir.join("binaries/coevo-server-x86_64-pc-windows-msvc.exe"),
+            exe_dir.join("binaries/coevo-server.exe"),
+            // Dev fallback: cargo build output
+            PathBuf::from("target/release/coevo-server.exe"),
+            PathBuf::from("../target/release/coevo-server.exe"),
+        ];
+        candidates.iter().find(|p| p.exists())?.clone()
+    };
     let child = Command::new(&server_path)
         .env("COEVO_HOME", home)
         .env("COEVO_DB_PATH", db)
