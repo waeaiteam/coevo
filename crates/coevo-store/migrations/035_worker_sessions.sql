@@ -10,4 +10,4 @@ CREATE TABLE IF NOT EXISTS worker_sessions (
     started_at_ms INTEGER NOT NULL,
     ended_at_ms INTEGER
 );
-CREATE INDEX idx_ws_wo ON worker_sessions(work_order_id);
+CREATE INDEX idx_wrksess_wo ON worker_sessions(work_order_id);

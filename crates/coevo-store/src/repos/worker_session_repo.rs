@@ -1,12 +1,16 @@
-use sqlx::{SqlitePool, Row};
+use sqlx::SqlitePool;
 
 pub struct WorkerSessionRepo;
 impl WorkerSessionRepo {
     pub async fn create(pool: &SqlitePool, session_id: &str, work_order_id: &str, agent_id: &str, worker_id: &str, status: &str, skills: &str, tools: &str, mem: &str, started: i64) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO worker_sessions VALUES (?,?,?,?,?,?,?,?,?,?)").bind(session_id).bind(work_order_id).bind(agent_id).bind(worker_id).bind(skills).bind(tools).bind(mem).bind(status).bind(started).bind(Option::<i64>::None).execute(pool).await?; Ok(())
+        sqlx::query("INSERT INTO worker_sessions (session_id, work_order_id, agent_id, worker_id, selected_skills_json, selected_tools_json, memory_context_ids_json, status, started_at_ms) VALUES (?,?,?,?,?,?,?,?,?)")
+            .bind(session_id).bind(work_order_id).bind(agent_id).bind(worker_id).bind(skills).bind(tools).bind(mem).bind(status).bind(started).execute(pool).await?; Ok(())
     }
     pub async fn get(pool: &SqlitePool, session_id: &str) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
         sqlx::query("SELECT * FROM worker_sessions WHERE session_id=?").bind(session_id).fetch_optional(pool).await
+    }
+    pub async fn list_all(pool: &SqlitePool) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
+        sqlx::query("SELECT * FROM worker_sessions ORDER BY started_at_ms DESC LIMIT 50").fetch_all(pool).await
     }
     pub async fn list_by_work_order(pool: &SqlitePool, wo_id: &str) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
         sqlx::query("SELECT * FROM worker_sessions WHERE work_order_id=? ORDER BY started_at_ms").bind(wo_id).fetch_all(pool).await
