@@ -15,7 +15,21 @@ macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({
 
 pub async fn get_config_handler(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match ModelConfigRepo::get_active_config_or_seed(&s.pool).await {
-        Ok(mut c) => { c.api_key = c.mask_key(); ok!(serde_json::to_value(&c).unwrap()) }
+        Ok(c) => ok!(serde_json::json!({
+            "provider_id": c.provider_id,
+            "kind": c.kind,
+            "base_url": c.base_url,
+            "api_key_masked": c.mask_key(),
+            "has_api_key": !c.api_key.is_empty(),
+            "default_model": c.default_model,
+            "fast_model": c.fast_model,
+            "reasoning_model": c.reasoning_model,
+            "structured_output_model": c.structured_output_model,
+            "max_tokens": c.max_tokens,
+            "temperature": c.temperature,
+            "timeout_ms": c.timeout_ms,
+            "max_cost_per_task_usd": c.max_cost_per_task_usd,
+        })),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("MODEL_CONFIG_INVALID_KIND") || msg.contains("invalid type") {
@@ -58,14 +72,10 @@ pub async fn put_config_handler(State(s): State<AppState>, Json(req): Json<PutCo
     let mask = ModelConfigRepo::mask_key(&existing_key);
     let now = chrono::Utc::now().timestamp_millis();
     let pid = req.provider_id.clone();
-    if let Err(e) = sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(provider_id) DO UPDATE SET kind=excluded.kind,base_url=excluded.base_url,api_key_ciphertext=excluded.api_key_ciphertext,api_key_masked=excluded.api_key_masked,default_model=excluded.default_model,fast_model=excluded.fast_model,reasoning_model=excluded.reasoning_model,structured_output_model=excluded.structured_output_model,max_tokens=excluded.max_tokens,temperature=excluded.temperature,timeout_ms=excluded.timeout_ms,max_cost_per_task_usd=excluded.max_cost_per_task_usd,is_active=1,updated_at_ms=excluded.updated_at_ms")
-        .bind(&pid).bind(&kind_str).bind(req.base_url.unwrap_or_default()).bind(&existing_key).bind(&mask)
-        .bind(req.default_model.unwrap_or_default()).bind(req.fast_model.unwrap_or_default()).bind(req.reasoning_model.unwrap_or_default()).bind(req.structured_output_model.unwrap_or_default())
-        .bind(req.max_tokens.unwrap_or(4096)).bind(req.temperature.unwrap_or(0.7)).bind(req.timeout_ms.unwrap_or(30000)).bind(req.max_cost_per_task_usd.unwrap_or(0.0))
-        .bind(now).bind(now).execute(&s.pool).await {
+    if let Err(e) = ModelConfigRepo::upsert_config(&s.pool, &pid, &kind_str, &req.base_url.unwrap_or_default(), &existing_key, &mask, &req.default_model.unwrap_or_default(), &req.fast_model.unwrap_or_default(), &req.reasoning_model.unwrap_or_default(), &req.structured_output_model.unwrap_or_default(), req.max_tokens.unwrap_or(4096), req.temperature.unwrap_or(0.7), req.timeout_ms.unwrap_or(30000), req.max_cost_per_task_usd.unwrap_or(0.0)).await {
         return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e));
     }
-    if let Err(e) = sqlx::query("UPDATE model_provider_configs SET is_active=0,updated_at_ms=? WHERE provider_id!=?").bind(now).bind(&pid).execute(&s.pool).await {
+    if let Err(e) = ModelConfigRepo::deactivate_others(&s.pool, &pid).await {
         return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e));
     }
     ok!(serde_json::json!({"ok":true,"provider_id":pid,"kind":kind_str,"api_key_masked":mask}))
@@ -89,7 +99,11 @@ pub async fn chat(State(s): State<AppState>, Json(req): Json<ChatRequest>) -> (S
         Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Config error: {}", e)),
     };
     let gateway = select_gateway(config.kind);
-    let role: ModelRole = serde_json::from_str(&format!("\"{}\"", req.role.unwrap_or_default())).unwrap_or(ModelRole::Synthesizer);
+    let role_str = req.role.clone().unwrap_or_default();
+    let role: ModelRole = match serde_json::from_str(&format!("\"{}\"", &role_str)) {
+        Ok(r) => r,
+        Err(_) => return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("MODEL_ROLE_INVALID: {}", role_str)),
+    };
     let mr = ModelRequest { config: config.clone(), role, model: config.default_model.clone(), messages: req.messages, temperature: req.temperature.unwrap_or(config.temperature), max_tokens: req.max_tokens.unwrap_or(config.max_tokens), response_format: ResponseFormat::Text };
     match gateway.chat(&mr).await {
         Ok(r) => ok!(serde_json::to_value(&r).unwrap()),
@@ -103,7 +117,11 @@ pub async fn structured(State(s): State<AppState>, Json(req): Json<StructuredReq
         Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, format!("Config error: {}", e)),
     };
     let gateway = select_gateway(config.kind);
-    let role: ModelRole = serde_json::from_str(&format!("\"{}\"",req.role.unwrap_or_default())).unwrap_or(ModelRole::MissionDraft);
+    let role_str = req.role.clone().unwrap_or_default();
+    let role: ModelRole = match serde_json::from_str(&format!("\"{}\"", &role_str)) {
+        Ok(r) => r,
+        Err(_) => return err!(StatusCode::UNPROCESSABLE_ENTITY, format!("MODEL_ROLE_INVALID: {}", role_str)),
+    };
     let mr = ModelRequest { config: config.clone(), role, model: config.structured_output_model.clone(), messages: req.messages, temperature: req.temperature.unwrap_or(config.temperature), max_tokens: req.max_tokens.unwrap_or(config.max_tokens), response_format: ResponseFormat::Json };
     let schema = req.schema.unwrap_or(serde_json::json!({"type":"object"}));
     match gateway.structured(&mr, &schema).await {

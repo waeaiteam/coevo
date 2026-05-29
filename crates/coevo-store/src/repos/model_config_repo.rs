@@ -64,6 +64,17 @@ impl ModelConfigRepo {
         Ok(())
     }
 
+    pub async fn upsert_config(pool: &SqlitePool, pid: &str, kind_str: &str, base_url: &str, api_key: &str, masked: &str, default_model: &str, fast_model: &str, reasoning_model: &str, structured_model: &str, max_tokens: i64, temperature: f64, timeout_ms: i64, max_cost: f64) -> Result<(), sqlx::Error> {
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(provider_id) DO UPDATE SET kind=excluded.kind,base_url=excluded.base_url,api_key_ciphertext=excluded.api_key_ciphertext,api_key_masked=excluded.api_key_masked,default_model=excluded.default_model,fast_model=excluded.fast_model,reasoning_model=excluded.reasoning_model,structured_output_model=excluded.structured_output_model,max_tokens=excluded.max_tokens,temperature=excluded.temperature,timeout_ms=excluded.timeout_ms,max_cost_per_task_usd=excluded.max_cost_per_task_usd,is_active=1,updated_at_ms=excluded.updated_at_ms")
+            .bind(pid).bind(kind_str).bind(base_url).bind(api_key).bind(masked).bind(default_model).bind(fast_model).bind(reasoning_model).bind(structured_model)
+            .bind(max_tokens).bind(temperature).bind(timeout_ms).bind(max_cost).bind(now).bind(now).execute(pool).await?;
+        Ok(())
+    }
+    pub async fn deactivate_others(pool: &SqlitePool, provider_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE model_provider_configs SET is_active=0,updated_at_ms=? WHERE provider_id!=?")
+            .bind(chrono::Utc::now().timestamp_millis()).bind(provider_id).execute(pool).await?; Ok(())
+    }
     pub async fn clear_api_key(pool: &SqlitePool, provider_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE model_provider_configs SET api_key_ciphertext='',api_key_masked='',updated_at_ms=? WHERE provider_id=?")
             .bind(chrono::Utc::now().timestamp_millis()).bind(provider_id).execute(pool).await?; Ok(())
