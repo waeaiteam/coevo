@@ -224,7 +224,7 @@ impl WorkerHarness {
         WorkerEventRepo::append(pool, run_id, "WorkerBlocked", &serde_json::to_string(&serde_json::json!({"reason":"Red Track blocked"})).unwrap()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         WorkerRunRepo::set_status(pool, run_id, status).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         sqlx::query("UPDATE worker_sessions SET status=?,updated_at_ms=? WHERE session_id=?").bind(status).bind(now).bind(session_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
-        WorkerQueueService::release(pool, session_id, worker_id).await?;
+        WorkerQueueService::release(pool, session_id, run_id).await?;
 
         let run = WorkerRun{run_id:run_id.into(),work_order_id:wo_id.into(),agent_id:agent_id.into(),worker_id:worker_id.into(),session_id:session_id.into(),status:crate::types::WorkerRunStatus::Blocked,result_json:serde_json::json!({}),memory_ids_json:serde_json::json!([]),errors_json:serde_json::json!([]),audit_ref:None,started_at_ms:now,ended_at_ms:Some(now)};
         let reflection = ReflectionEngine::reflect(pool, run_id, wo_id, agent_id, worker_id, &steps, &[], &[]).await?;
