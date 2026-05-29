@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { setApiBase } from "../api/client";
 
 interface BootStatus { label: string; done: boolean; error?: string }
 
@@ -31,20 +32,16 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       setStage(0);
       let apiBase = "http://127.0.0.1:8717";
 
-      // Try Tauri launch_server
+      // Try Tauri launch_server — returns dynamic apiBase
       const invoke = await getInvoke();
       if (invoke) {
         try { apiBase = await invoke("launch_server"); } catch { /* already running */ }
-        try { apiBase = `http://127.0.0.1:${await invoke("get_server_port")}`; } catch {}
-      }
-      // Check if server was already on port file
-      try {
-        if (invoke) {
-          const home = await invoke("get_coevo_home");
-          // Just use the port from get_server_port
+        try { apiBase = await invoke("get_api_base"); } catch {}
+        if (!apiBase || apiBase === "http://127.0.0.1:8717") {
+          try { apiBase = `http://127.0.0.1:${await invoke("get_server_port")}`; } catch {}
         }
-      } catch {}
-      localStorage.setItem("coevo-api-base", apiBase);
+      }
+      setApiBase(apiBase);
 
       setStage(1);
       let healthy = false;

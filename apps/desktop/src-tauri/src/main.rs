@@ -4,8 +4,9 @@ use std::process::{Command, Child};
 use std::sync::Mutex;
 use std::fs;
 
-static mut SERVER: Option<Child> = None;
-static SERVER_PORT: Mutex<u16> = Mutex::new(8717);
+static SERVER: Mutex<Option<Child>> = Mutex::new(None);
+static SERVER_PORT: Mutex<u16> = Mutex::new(0);
+static API_BASE: Mutex<String> = Mutex::new(String::new());
 
 fn coevo_home() -> PathBuf {
     if let Ok(h) = std::env::var("COEVO_HOME") { return PathBuf::from(h); }
@@ -29,62 +30,81 @@ fn find_free_port(start: u16) -> u16 {
     start
 }
 
-fn start_server(home: &PathBuf, port: u16, db: &PathBuf, log_dir: &PathBuf) -> Option<Child> {
-    let log = log_dir.join("coevo-server.log");
-    fs::create_dir_all(log_dir).ok();
-    // Find coevo-server sidecar
-    let server_path = {
-        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-        let candidates = [
-            exe_dir.join("coevo-server.exe"),
-            exe_dir.join("binaries/coevo-server-x86_64-pc-windows-msvc.exe"),
-            exe_dir.join("binaries/coevo-server.exe"),
-            // Dev fallback: cargo build output
-            PathBuf::from("target/release/coevo-server.exe"),
-            PathBuf::from("../target/release/coevo-server.exe"),
-        ];
-        candidates.iter().find(|p| p.exists())?.clone()
-    };
-    let child = Command::new(&server_path)
-        .env("COEVO_HOME", home)
-        .env("COEVO_DB_PATH", db)
-        .env("COEVO_LOG_DIR", log_dir)
-        .env("COEVO_PORT", port.to_string())
-        .stdout(fs::File::create(&log).ok()?)
-        .stderr(fs::File::create(&log).ok()?)
-        .spawn().ok()?;
-    // Write runtime files
-    let rt = home.join("runtime");
-    fs::create_dir_all(&rt).ok();
-    fs::write(rt.join("server.port"), port.to_string()).ok();
-    fs::write(rt.join("server.pid"), child.id().to_string()).ok();
-    fs::write(rt.join("health.json"), r#"{"status":"starting"}"#).ok();
-    Some(child)
+fn resolve_server_binary() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidates = [
+        exe_dir.join("coevo-server.exe"),
+        exe_dir.join("binaries").join("coevo-server.exe"),
+        // find with target triple suffix
+        std::fs::read_dir(exe_dir.join("binaries")).ok().and_then(|mut d| {
+            d.find_map(|e| e.ok().filter(|e| e.file_name().to_string_lossy().starts_with("coevo-server")).map(|e| e.path()))
+        }).unwrap_or(PathBuf::new()),
+        PathBuf::from("target/release/coevo-server.exe"),
+    ];
+    candidates.iter().find(|p| p.exists()).cloned()
 }
 
 #[tauri::command]
 fn get_coevo_home() -> String { coevo_home().to_string_lossy().to_string() }
 
 #[tauri::command]
-fn get_server_port() -> u16 { *SERVER_PORT.lock().unwrap() }
+fn get_server_port() -> u16 {
+    let port = *SERVER_PORT.lock().unwrap();
+    if port > 0 { return port; }
+    // Try to read from runtime file
+    let home = coevo_home();
+    if let Ok(p) = fs::read_to_string(home.join("runtime").join("server.port")) {
+        if let Ok(port) = p.trim().parse() { return port; }
+    }
+    8717
+}
+
+#[tauri::command]
+fn get_api_base() -> String { API_BASE.lock().unwrap().clone() }
 
 #[tauri::command]
 fn launch_server() -> Result<String, String> {
+    // If already running, return current apiBase
+    {
+        let api = API_BASE.lock().unwrap();
+        if !api.is_empty() { return Ok(api.clone()); }
+    }
     let home = coevo_home();
     ensure_dirs(&home);
-    let db = home.join("data").join("coevo.db");
-    let log_dir = home.join("logs");
     let port = find_free_port(8717);
     *SERVER_PORT.lock().unwrap() = port;
-    match start_server(&home, port, &db, &log_dir) {
-        Some(child) => { unsafe { SERVER = Some(child); } Ok(format!("http://127.0.0.1:{}", port)) }
-        None => Err("Server binary not found at coevo-server.exe".into())
-    }
+    let db = home.join("data").join("coevo.db");
+    let log_dir = home.join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    let server_path = resolve_server_binary().ok_or("coevo-server binary not found")?;
+    let log_file = log_dir.join("coevo-server.log");
+    let child = Command::new(&server_path)
+        .env("COEVO_HOME", &home)
+        .env("COEVO_PORT", port.to_string())
+        .env("COEVO_DB_PATH", db.to_string_lossy().to_string())
+        .env("COEVO_LOG_DIR", log_dir.to_string_lossy().to_string())
+        .env("RUST_LOG", "coevo=info")
+        .stdout(fs::File::create(&log_file).map_err(|e| e.to_string())?)
+        .stderr(fs::File::create(&log_file).map_err(|e| e.to_string())?)
+        .spawn().map_err(|e| format!("Failed to start server: {}", e))?;
+    // Write runtime files
+    let rt = home.join("runtime");
+    fs::create_dir_all(&rt).ok();
+    fs::write(rt.join("server.port"), port.to_string()).ok();
+    fs::write(rt.join("server.pid"), child.id().to_string()).ok();
+    let api_base = format!("http://127.0.0.1:{}", port);
+    *API_BASE.lock().unwrap() = api_base.clone();
+    *SERVER.lock().unwrap() = Some(child);
+    Ok(api_base)
 }
 
 #[tauri::command]
 fn stop_server() {
-    unsafe { if let Some(ref mut s) = SERVER { s.kill().ok(); SERVER = None; } }
+    if let Some(mut child) = SERVER.lock().unwrap().take() {
+        child.kill().ok();
+    }
+    *API_BASE.lock().unwrap() = String::new();
+    *SERVER_PORT.lock().unwrap() = 0;
 }
 
 #[tauri::command]
@@ -109,13 +129,12 @@ fn open_coevo_dir() -> Result<String, String> {
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            get_coevo_home, get_server_port, launch_server, stop_server,
+            get_coevo_home, get_server_port, get_api_base, launch_server, stop_server,
             open_logs_dir, open_coevo_dir
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                unsafe { if let Some(ref mut s) = SERVER { s.kill().ok(); SERVER = None; } }
-                let _ = window;
+                if let Some(mut child) = SERVER.lock().unwrap().take() { child.kill().ok(); }
             }
         })
         .run(tauri::generate_context!())

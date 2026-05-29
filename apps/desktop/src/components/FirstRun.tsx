@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { seedEmployees, registerExecutor, seedSkills, updateModelConfig } from "../api/client";
 
 export default function FirstRun({ onDone }: { onDone: () => void }) {
+  const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -26,7 +28,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
       <p className="text-sm mb-6" style={{color:"var(--text-secondary)"}}>Your one-person company AI operating system</p>
       <div className="space-y-3 w-80">
         <button onClick={quickStart} className="w-full py-3 text-sm rounded-md text-white font-semibold" style={{background:"var(--accent)"}}>Quick Start with Mock</button>
-        <button onClick={onDone} className="w-full py-3 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Configure Real Model</button>
+        <button onClick={() => navigate("/settings/model_provider")} className="w-full py-3 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Configure Real Model</button>
       </div>
       {step > 0 && (
         <div className="mt-6 text-sm text-center" style={{color:"var(--text-secondary)"}}>

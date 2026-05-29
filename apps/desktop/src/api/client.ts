@@ -2,7 +2,8 @@ import type { HealthResponse, ContractResponse, DemoResponse } from "../types";
 
 export type { HealthResponse, ContractResponse, DemoResponse } from "../types";
 
-const API_BASE = (() => { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } })();
+export function getApiBase(): string { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } }
+export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-base", url); } catch {} }
 
 export function headers(): Record<string, string> {
   return {
@@ -43,12 +44,12 @@ async function handleResponse(res: Response) {
 }
 
 export async function get<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { headers: headers() });
+  const res = await fetch(`${getApiBase()}${path}`, { headers: headers() });
   return handleResponse(res) as Promise<T>;
 }
 
 export async function post<T = unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify(body),
@@ -152,6 +153,6 @@ export async function toolDryRun(id: string, payload: Record<string,unknown>) { 
 export async function toolExecute(id: string, payload: Record<string,unknown>) { return post(`/opc/tools/${id}/execute`, payload); }
 
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
+  const res = await fetch(`${getApiBase()}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
   return handleResponse(res) as Promise<T>;
 }
