@@ -71,7 +71,7 @@ export const defaults: CoevoSettings = {
     replay_mode_blocks_fact_write: true,
   },
   policy_engine: {
-    policy_engine: "mock",
+    policy_engine: "opa",
     policy_bundle_path: "",
     policy_version: "0".repeat(64),
     decision_log_enabled: true,
@@ -89,7 +89,6 @@ export const defaults: CoevoSettings = {
   developer: {
     api_base_url: "http://127.0.0.1:8717",
     openapi_url: "http://127.0.0.1:8717/openapi.json",
-    mock_mode_enabled: true,
     debug_logs_enabled: false,
     show_traceparent: false,
     show_raw_json_panels: false,

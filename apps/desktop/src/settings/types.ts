@@ -8,7 +8,7 @@ export type HomePage = "mission-chat" | "dashboard";
 export type StartupBehavior = "last-task" | "new-task";
 export type MissionMode = "auto" | "readonly" | "collaborative" | "high-risk";
 export type ApprovalMode = "negative_consent" | "explicit_approval";
-export type PolicyEngineType = "mock" | "opa" | "custom";
+export type PolicyEngineType = "opa" | "custom";
 export type InvalidationStrategy = "direct_only" | "transitive";
 export type ProviderType = "openai-compatible" | "openai" | "anthropic" | "gemini" | "deepseek" | "ollama" | "local";
 export type EvidenceLevel = "unit_tests_passing" | "integration_verified" | "manual_review";
@@ -110,7 +110,6 @@ export interface PrivacySettings {
 export interface DeveloperSettings {
   api_base_url: string;
   openapi_url: string;
-  mock_mode_enabled: boolean;
   debug_logs_enabled: boolean;
   show_traceparent: boolean;
   show_raw_json_panels: boolean;

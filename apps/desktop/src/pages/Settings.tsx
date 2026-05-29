@@ -1,26 +1,28 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import SettingsLayout from "../components/SettingsLayout";
-import SettingsSection from "../components/SettingsSection";
-import SettingRow from "../components/SettingRow";
-import SelectField from "../components/SelectField";
-import ToggleField from "../components/ToggleField";
-import TextField from "../components/TextField";
+import { useEffect, useState } from "react";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import NumberField from "../components/NumberField";
 import PasswordField from "../components/PasswordField";
-import { useSettings } from "../hooks/useSettings";
-import { t, setLanguage, getLanguage } from "../settings/i18n";
-import { useState, useEffect } from "react";
-import { getApiBase, updateModelConfig, testModelConnection } from "../api/client";
+import SelectField from "../components/SelectField";
+import SettingRow from "../components/SettingRow";
+import SettingsLayout from "../components/SettingsLayout";
+import SettingsSection from "../components/SettingsSection";
+import TextField from "../components/TextField";
+import ToggleField from "../components/ToggleField";
+import { getApiBase, testModelConnection, updateModelConfig } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
+import { useSettings } from "../hooks/useSettings";
+import { t, setLanguage } from "../settings/i18n";
+import { markModelProviderConfigured } from "../settings/onboarding";
+import type { PolicyEngineType, ProviderType } from "../settings/types";
 
 const CATEGORIES = ["general","appearance","model_provider","agent_runtime","governance","risk_gate","cognitive_customs","policy_engine","privacy","developer","data_management"];
 
 export default function Settings() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/settings/general" replace />} />
+      <Route index element={<Navigate to="general" replace />} />
       {CATEGORIES.map((cat) => (
-        <Route key={cat} path={`/${cat}`} element={<SettingsCategory cat={cat as keyof typeof panels} />} />
+        <Route key={cat} path={cat} element={<SettingsCategory cat={cat as keyof typeof panels} />} />
       ))}
     </Routes>
   );
@@ -42,12 +44,9 @@ const panels: Record<string, React.FC> = {
 
 function SettingsCategory({ cat }: { cat: string }) {
   const Panel = panels[cat] || GeneralPanel;
-  return (
-    <SettingsLayout section={cat as never} content={<Panel />} />
-  );
+  return <SettingsLayout section={cat as never} content={<Panel />} />;
 }
 
-/* ============ GENERAL ============ */
 function GeneralPanel() {
   const { settings, update } = useSettings();
   const g = settings.general;
@@ -81,7 +80,6 @@ function GeneralPanel() {
   );
 }
 
-/* ============ APPEARANCE ============ */
 function AppearancePanel() {
   const { settings, update } = useSettings();
   const a = settings.appearance;
@@ -89,7 +87,7 @@ function AppearancePanel() {
     <SettingsSection title={t("settings.appearance")}>
       <SettingRow label={t("settings.language")}>
         <SelectField value={a.language} options={[
-          {value:"en",label:"English"},{value:"zh",label:"中文"}
+          {value:"en",label:"English"},{value:"zh",label:"Chinese"}
         ]} onChange={(v)=>{update("appearance",{language:v as never});setLanguage(v as never);}} />
       </SettingRow>
       <SettingRow label={t("settings.theme")}>
@@ -122,21 +120,56 @@ function AppearancePanel() {
   );
 }
 
-/* ============ MODEL PROVIDER ============ */
 function ModelProviderPanel() {
-  const { settings, update } = useSettings();
+  const { settings, update, saveNow } = useSettings();
+  const navigate = useNavigate();
   const m = settings.model_provider;
   const [testResult, setTestResult] = useState<"idle"|"ok"|"fail">("idle");
   const [testMsg, setTestMsg] = useState("");
+  const providerKinds: Record<ProviderType,string> = {
+    "openai-compatible": "OpenAICompatible",
+    openai: "OpenAI",
+    anthropic: "Anthropic",
+    gemini: "Gemini",
+    deepseek: "DeepSeek",
+    ollama: "Ollama",
+    local: "Local",
+  };
+  const providerOptions: { value: ProviderType; label: string }[] = [
+    {value:"openai-compatible",label:"OpenAI Compatible"},
+    {value:"openai",label:"OpenAI"},
+    {value:"anthropic",label:"Anthropic"},
+    {value:"gemini",label:"Gemini"},
+    {value:"deepseek",label:"DeepSeek"},
+    {value:"ollama",label:"Ollama"},
+    {value:"local",label:"Local"},
+  ];
+  const selectedProvider = providerKinds[m.provider] ? m.provider : "openai-compatible";
 
-  async function handleTestConnection() {
-    setTestResult("idle"); setTestMsg("");
-    const providerMap: Record<string,string> = {"mock":"Mock","openai-compatible":"OpenAICompatible","openai":"OpenAI","anthropic":"Anthropic","gemini":"Gemini","deepseek":"DeepSeek","ollama":"Ollama","local":"Local"};
+  async function handleSaveAndTestConnection() {
+    setTestResult("idle");
+    setTestMsg("");
+    const provider = providerKinds[m.provider] ? m.provider : "openai-compatible";
     try {
-      await updateModelConfig({provider_id: "desktop", kind: providerMap[m.provider]||"Mock", base_url: m.base_url, api_key: m.api_key, default_model: m.default_model, fast_model: m.fast_model, reasoning_model: m.reasoning_model, structured_output_model: m.structured_output_model, max_tokens: m.max_tokens, temperature: m.temperature, timeout_ms: m.request_timeout_ms, max_cost_per_task_usd: m.max_cost_per_task_usd});
+      await updateModelConfig({
+        provider_id: "desktop",
+        kind: providerKinds[provider],
+        base_url: m.base_url,
+        api_key: m.api_key,
+        default_model: m.default_model,
+        fast_model: m.fast_model,
+        reasoning_model: m.reasoning_model,
+        structured_output_model: m.structured_output_model,
+        max_tokens: m.max_tokens,
+        temperature: m.temperature,
+        timeout_ms: m.request_timeout_ms,
+        max_cost_per_task_usd: m.max_cost_per_task_usd,
+      });
       const r = await testModelConnection() as Record<string,unknown>;
-      setTestResult("ok"); setTestMsg(`${r.model||"ok"} | ${r.latency_ms}ms | ${r.provider_kind||""}`);
-      setTimeout(()=>setTestResult("idle"),4000);
+      saveNow();
+      markModelProviderConfigured();
+      setTestResult("ok");
+      setTestMsg(`${r.model || "ok"} | ${r.latency_ms}ms | ${r.provider_kind || ""}`);
     } catch(e: unknown) {
       setTestResult("fail");
       setTestMsg(e instanceof Error ? e.message : String(e));
@@ -146,9 +179,7 @@ function ModelProviderPanel() {
   return (
     <SettingsSection title={t("settings.model_provider")}>
       <SettingRow label={t("settings.provider")}>
-        <SelectField value={m.provider} options={[
-          {value:"mock",label:"Mock / Local Test Provider"},{value:"openai-compatible",label:"OpenAI Compatible"},{value:"openai",label:"OpenAI"},{value:"anthropic",label:"Anthropic"},{value:"gemini",label:"Gemini"},{value:"deepseek",label:"DeepSeek"},{value:"ollama",label:"Ollama"},{value:"local",label:"Local"}
-        ]} onChange={(v)=>update("model_provider",{provider:v as never})} />
+        <SelectField value={selectedProvider} options={providerOptions} onChange={(v)=>update("model_provider",{provider:v as ProviderType})} />
       </SettingRow>
       <SettingRow label={t("settings.base_url")}>
         <TextField monospace value={m.base_url} onChange={(v)=>update("model_provider",{base_url:v})} />
@@ -180,27 +211,37 @@ function ModelProviderPanel() {
       <SettingRow label="Max Cost/Task (USD)">
         <NumberField value={m.max_cost_per_task_usd} onChange={(v)=>update("model_provider",{max_cost_per_task_usd:v})} min={0} max={100} step={0.1} />
       </SettingRow>
-      <SettingRow label={t("settings.test_connection")}>
-        <div className="flex items-center gap-2">
-          <button onClick={handleTestConnection}
+      <SettingRow label="Save & Test Connection">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleSaveAndTestConnection}
             className="px-3 py-1.5 text-xs rounded-md border transition-colors"
-            style={{borderColor:"var(--accent)",color:"var(--accent)"}}>
-            {t("settings.test_connection")}
+            style={{borderColor:"var(--accent)",color:"var(--accent)"}}
+          >
+            Save & Test Connection
           </button>
-          {testResult==="ok" && <span className="text-xs" style={{color:"var(--green)"}}>✓ {testMsg}</span>}
-          {testResult==="fail" && <span className="text-xs" style={{color:"var(--red)"}}>✗ {testMsg}</span>}
+          {testResult==="ok" && <span className="text-xs" style={{color:"var(--green)"}}>Saved and connected: {testMsg}</span>}
+          {testResult==="fail" && <span className="text-xs" style={{color:"var(--red)"}}>Connection failed: {testMsg}</span>}
+          {testResult==="ok" && (
+            <button
+              onClick={() => navigate("/")}
+              className="px-3 py-1.5 text-xs rounded-md text-white transition-colors"
+              style={{background:"var(--accent)"}}
+            >
+              Continue to Mission Chat
+            </button>
+          )}
         </div>
       </SettingRow>
     </SettingsSection>
   );
 }
 
-/* ============ AGENT RUNTIME ============ */
 function AgentRuntimePanel() {
   const { settings, update } = useSettings();
   const a = settings.agent_runtime;
   return (
-    <SettingsSection title={t("settings.agent_runtime")} desc="coevo will never create unconstrained agents. It selects from Agent Registry. Task Agent Instances are short-lived. Ephemeral Sub-Agents default to low privilege — Hypothesis/Suggestion only.">
+    <SettingsSection title={t("settings.agent_runtime")} desc="coevo will never create unconstrained agents. It selects from Agent Registry. Task Agent Instances are short-lived. Ephemeral Sub-Agents default to low privilege - Hypothesis/Suggestion only.">
       <SettingRow label="Default Agent Registry">
         <TextField monospace value={a.default_agent_registry} onChange={(v)=>update("agent_runtime",{default_agent_registry:v})} />
       </SettingRow>
@@ -229,7 +270,6 @@ function AgentRuntimePanel() {
   );
 }
 
-/* ============ GOVERNANCE ============ */
 function GovernancePanel() {
   const { settings, update } = useSettings();
   const g = settings.governance;
@@ -262,61 +302,33 @@ function GovernancePanel() {
   );
 }
 
-/* ============ RISK GATE ============ */
 function RiskGatePanel() {
   const { settings, update } = useSettings();
   const r = settings.risk_gate;
   return (
     <SettingsSection title={t("settings.risk_gate")}>
-      <SettingRow label="Green Threshold">
-        <NumberField value={r.green_threshold} onChange={(v)=>update("risk_gate",{green_threshold:v})} min={0} max={1} step={0.1} />
-      </SettingRow>
-      <SettingRow label="Yellow Threshold">
-        <NumberField value={r.yellow_threshold} onChange={(v)=>update("risk_gate",{yellow_threshold:v})} min={0} max={1} step={0.1} />
-      </SettingRow>
-      <SettingRow label="Red Threshold">
-        <NumberField value={r.red_threshold} onChange={(v)=>update("risk_gate",{red_threshold:v})} min={0} max={1} step={0.1} />
-      </SettingRow>
-      <SettingRow label="ActionRisk w1 (Blast Radius)">
-        <NumberField value={r.action_risk_weight_blast_radius} onChange={(v)=>update("risk_gate",{action_risk_weight_blast_radius:v})} min={0} max={1} step={0.05} />
-      </SettingRow>
-      <SettingRow label="ActionRisk w2 (Irreversibility)">
-        <NumberField value={r.action_risk_weight_irreversibility} onChange={(v)=>update("risk_gate",{action_risk_weight_irreversibility:v})} min={0} max={1} step={0.05} />
-      </SettingRow>
-      <SettingRow label="InactionRisk w5 (Service Impact)">
-        <NumberField value={r.inaction_risk_weight_service_impact} onChange={(v)=>update("risk_gate",{inaction_risk_weight_service_impact:v})} min={0} max={1} step={0.05} />
-      </SettingRow>
-      <SettingRow label="Emergency Lease Enabled">
-        <ToggleField checked={r.emergency_lease_enabled} onChange={(v)=>update("risk_gate",{emergency_lease_enabled:v})} />
-      </SettingRow>
-      <SettingRow label="Default Lease Duration (s)">
-        <NumberField value={r.default_lease_duration_seconds} onChange={(v)=>update("risk_gate",{default_lease_duration_seconds:v})} min={60} max={3600} />
-      </SettingRow>
-      <SettingRow label="Default Lease Budget">
-        <NumberField value={r.default_lease_budget} onChange={(v)=>update("risk_gate",{default_lease_budget:v})} min={1} max={20} />
-      </SettingRow>
-      <SettingRow label="Require Dual-Sign for Emergency">
-        <ToggleField checked={r.require_dual_sign_for_emergency} onChange={(v)=>update("risk_gate",{require_dual_sign_for_emergency:v})} />
-      </SettingRow>
+      <SettingRow label="Green Threshold"><NumberField value={r.green_threshold} onChange={(v)=>update("risk_gate",{green_threshold:v})} min={0} max={1} step={0.1} /></SettingRow>
+      <SettingRow label="Yellow Threshold"><NumberField value={r.yellow_threshold} onChange={(v)=>update("risk_gate",{yellow_threshold:v})} min={0} max={1} step={0.1} /></SettingRow>
+      <SettingRow label="Red Threshold"><NumberField value={r.red_threshold} onChange={(v)=>update("risk_gate",{red_threshold:v})} min={0} max={1} step={0.1} /></SettingRow>
+      <SettingRow label="ActionRisk w1 (Blast Radius)"><NumberField value={r.action_risk_weight_blast_radius} onChange={(v)=>update("risk_gate",{action_risk_weight_blast_radius:v})} min={0} max={1} step={0.05} /></SettingRow>
+      <SettingRow label="ActionRisk w2 (Irreversibility)"><NumberField value={r.action_risk_weight_irreversibility} onChange={(v)=>update("risk_gate",{action_risk_weight_irreversibility:v})} min={0} max={1} step={0.05} /></SettingRow>
+      <SettingRow label="InactionRisk w5 (Service Impact)"><NumberField value={r.inaction_risk_weight_service_impact} onChange={(v)=>update("risk_gate",{inaction_risk_weight_service_impact:v})} min={0} max={1} step={0.05} /></SettingRow>
+      <SettingRow label="Emergency Lease Enabled"><ToggleField checked={r.emergency_lease_enabled} onChange={(v)=>update("risk_gate",{emergency_lease_enabled:v})} /></SettingRow>
+      <SettingRow label="Default Lease Duration (s)"><NumberField value={r.default_lease_duration_seconds} onChange={(v)=>update("risk_gate",{default_lease_duration_seconds:v})} min={60} max={3600} /></SettingRow>
+      <SettingRow label="Default Lease Budget"><NumberField value={r.default_lease_budget} onChange={(v)=>update("risk_gate",{default_lease_budget:v})} min={1} max={20} /></SettingRow>
+      <SettingRow label="Require Dual-Sign for Emergency"><ToggleField checked={r.require_dual_sign_for_emergency} onChange={(v)=>update("risk_gate",{require_dual_sign_for_emergency:v})} /></SettingRow>
     </SettingsSection>
   );
 }
 
-/* ============ COGNITIVE CUSTOMS ============ */
 function CognitiveCustomsPanel() {
   const { settings, update } = useSettings();
   const c = settings.cognitive_customs;
   return (
     <SettingsSection title={t("settings.cognitive_customs")}>
-      <SettingRow label="Default Fact TTL (s)">
-        <NumberField value={c.default_fact_ttl_seconds} onChange={(v)=>update("cognitive_customs",{default_fact_ttl_seconds:v})} min={60} max={86400} />
-      </SettingRow>
-      <SettingRow label="Require Provenance for Fact">
-        <ToggleField checked={c.require_provenance_for_fact} onChange={(v)=>update("cognitive_customs",{require_provenance_for_fact:v})} />
-      </SettingRow>
-      <SettingRow label="Allow Hypothesis Auto-Promotion">
-        <ToggleField checked={c.allow_hypothesis_auto_promotion} onChange={(v)=>update("cognitive_customs",{allow_hypothesis_auto_promotion:v})} />
-      </SettingRow>
+      <SettingRow label="Default Fact TTL (s)"><NumberField value={c.default_fact_ttl_seconds} onChange={(v)=>update("cognitive_customs",{default_fact_ttl_seconds:v})} min={60} max={86400} /></SettingRow>
+      <SettingRow label="Require Provenance for Fact"><ToggleField checked={c.require_provenance_for_fact} onChange={(v)=>update("cognitive_customs",{require_provenance_for_fact:v})} /></SettingRow>
+      <SettingRow label="Allow Hypothesis Auto-Promotion"><ToggleField checked={c.allow_hypothesis_auto_promotion} onChange={(v)=>update("cognitive_customs",{allow_hypothesis_auto_promotion:v})} /></SettingRow>
       <SettingRow label="Fact Promotion Evidence Level">
         <SelectField value={c.fact_promotion_evidence_level} options={[
           {value:"unit_tests_passing",label:"Unit Tests Passing"},{value:"integration_verified",label:"Integration Verified"},{value:"manual_review",label:"Manual Review"}
@@ -327,70 +339,45 @@ function CognitiveCustomsPanel() {
           {value:"direct_only",label:"Direct Only"},{value:"transitive",label:"Transitive"}
         ]} onChange={(v)=>update("cognitive_customs",{revoked_fact_invalidation_strategy:v as never})} />
       </SettingRow>
-      <SettingRow label="Replay Mode Blocks Fact Write">
-        <ToggleField checked={c.replay_mode_blocks_fact_write} onChange={(v)=>update("cognitive_customs",{replay_mode_blocks_fact_write:v})} />
-      </SettingRow>
+      <SettingRow label="Replay Mode Blocks Fact Write"><ToggleField checked={c.replay_mode_blocks_fact_write} onChange={(v)=>update("cognitive_customs",{replay_mode_blocks_fact_write:v})} /></SettingRow>
     </SettingsSection>
   );
 }
 
-/* ============ POLICY ENGINE ============ */
 function PolicyEnginePanel() {
   const { settings, update } = useSettings();
   const p = settings.policy_engine;
+  const selectedPolicyEngine: PolicyEngineType = p.policy_engine === "custom" ? "custom" : "opa";
   return (
     <SettingsSection title={t("settings.policy_engine")} desc="Protocol layer does not bind to OPA. OPA is a reference implementation profile.">
       <SettingRow label="Policy Engine">
-        <SelectField value={p.policy_engine} options={[
-          {value:"mock",label:"Mock"},{value:"opa",label:"OPA"},{value:"custom",label:"Custom"}
-        ]} onChange={(v)=>update("policy_engine",{policy_engine:v as never})} />
+        <SelectField value={selectedPolicyEngine} options={[
+          {value:"opa",label:"OPA"},{value:"custom",label:"Custom"}
+        ]} onChange={(v)=>update("policy_engine",{policy_engine:v as PolicyEngineType})} />
       </SettingRow>
-      <SettingRow label="Policy Bundle Path">
-        <TextField monospace value={p.policy_bundle_path} onChange={(v)=>update("policy_engine",{policy_bundle_path:v})} />
-      </SettingRow>
-      <SettingRow label="Policy Version">
-        <TextField monospace value={p.policy_version} onChange={(v)=>update("policy_engine",{policy_version:v})} />
-      </SettingRow>
-      <SettingRow label="Decision Log Enabled">
-        <ToggleField checked={p.decision_log_enabled} onChange={(v)=>update("policy_engine",{decision_log_enabled:v})} />
-      </SettingRow>
-      <SettingRow label="Policy Simulation Enabled">
-        <ToggleField checked={p.policy_simulation_enabled} onChange={(v)=>update("policy_engine",{policy_simulation_enabled:v})} />
-      </SettingRow>
-      <SettingRow label="Policy Diff Enabled">
-        <ToggleField checked={p.policy_diff_enabled} onChange={(v)=>update("policy_engine",{policy_diff_enabled:v})} />
-      </SettingRow>
-      <SettingRow label="Health Check URL">
-        <TextField monospace value={p.health_check_url} onChange={(v)=>update("policy_engine",{health_check_url:v})} />
-      </SettingRow>
+      <SettingRow label="Policy Bundle Path"><TextField monospace value={p.policy_bundle_path} onChange={(v)=>update("policy_engine",{policy_bundle_path:v})} /></SettingRow>
+      <SettingRow label="Policy Version"><TextField monospace value={p.policy_version} onChange={(v)=>update("policy_engine",{policy_version:v})} /></SettingRow>
+      <SettingRow label="Decision Log Enabled"><ToggleField checked={p.decision_log_enabled} onChange={(v)=>update("policy_engine",{decision_log_enabled:v})} /></SettingRow>
+      <SettingRow label="Policy Simulation Enabled"><ToggleField checked={p.policy_simulation_enabled} onChange={(v)=>update("policy_engine",{policy_simulation_enabled:v})} /></SettingRow>
+      <SettingRow label="Policy Diff Enabled"><ToggleField checked={p.policy_diff_enabled} onChange={(v)=>update("policy_engine",{policy_diff_enabled:v})} /></SettingRow>
+      <SettingRow label="Health Check URL"><TextField monospace value={p.health_check_url} onChange={(v)=>update("policy_engine",{health_check_url:v})} /></SettingRow>
     </SettingsSection>
   );
 }
 
-/* ============ PRIVACY ============ */
 function PrivacyPanel() {
   const { settings, update } = useSettings();
   const p = settings.privacy;
   return (
     <SettingsSection title={t("settings.privacy")}>
-      <SettingRow label="Log Retention (days)">
-        <NumberField value={p.log_retention_days} onChange={(v)=>update("privacy",{log_retention_days:v})} min={1} max={365} />
-      </SettingRow>
-      <SettingRow label="Store Full Prompts">
-        <ToggleField checked={p.store_full_prompts} onChange={(v)=>update("privacy",{store_full_prompts:v})} />
-      </SettingRow>
-      <SettingRow label="Store Model Outputs">
-        <ToggleField checked={p.store_model_outputs} onChange={(v)=>update("privacy",{store_model_outputs:v})} />
-      </SettingRow>
-      <SettingRow label="PII Redaction Enabled">
-        <ToggleField checked={p.pii_redaction_enabled} onChange={(v)=>update("privacy",{pii_redaction_enabled:v})} />
-      </SettingRow>
-      <SettingRow label="Local Database Path">
-        <TextField monospace value={p.local_database_path} onChange={(v)=>update("privacy",{local_database_path:v})} />
-      </SettingRow>
+      <SettingRow label="Log Retention (days)"><NumberField value={p.log_retention_days} onChange={(v)=>update("privacy",{log_retention_days:v})} min={1} max={365} /></SettingRow>
+      <SettingRow label="Store Full Prompts"><ToggleField checked={p.store_full_prompts} onChange={(v)=>update("privacy",{store_full_prompts:v})} /></SettingRow>
+      <SettingRow label="Store Model Outputs"><ToggleField checked={p.store_model_outputs} onChange={(v)=>update("privacy",{store_model_outputs:v})} /></SettingRow>
+      <SettingRow label="PII Redaction Enabled"><ToggleField checked={p.pii_redaction_enabled} onChange={(v)=>update("privacy",{pii_redaction_enabled:v})} /></SettingRow>
+      <SettingRow label="Local Database Path"><TextField monospace value={p.local_database_path} onChange={(v)=>update("privacy",{local_database_path:v})} /></SettingRow>
       <SettingRow label="Export Audit Log">
         <button className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}
-          onClick={()=>{const blob=new Blob(['[]'],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='coevo-audit.json';a.click();}}>
+          onClick={()=>{const blob=new Blob(["[]"],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="coevo-audit.json";a.click();}}>
           Export
         </button>
       </SettingRow>
@@ -404,7 +391,6 @@ function PrivacyPanel() {
   );
 }
 
-/* ============ DATA MANAGEMENT ============ */
 function DataManagementPanel() {
   const [coevoHome, setCoevoHome] = useState<string>("Loading...");
 
@@ -438,9 +424,9 @@ function DataManagementPanel() {
   return (
     <SettingsSection title="Data Management">
       <SettingRow label="COEVO_HOME"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}</div></SettingRow>
-      <SettingRow label="Database"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\data\\coevo.db</div></SettingRow>
-      <SettingRow label="Logs"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\logs\\</div></SettingRow>
-      <SettingRow label="Runtime"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\runtime\\server.port, server.pid</div></SettingRow>
+      <SettingRow label="Database"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{`${coevoHome}\\data\\coevo.db`}</div></SettingRow>
+      <SettingRow label="Logs"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{`${coevoHome}\\logs\\`}</div></SettingRow>
+      <SettingRow label="Runtime"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{`${coevoHome}\\runtime\\server.port, server.pid`}</div></SettingRow>
       <SettingRow label="API Base"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{getApiBase()}</div></SettingRow>
       <SettingRow label="Actions">
         <div className="flex gap-2">
@@ -452,7 +438,6 @@ function DataManagementPanel() {
   );
 }
 
-/* ============ DEVELOPER ============ */
 function DeveloperPanel() {
   const { settings, update } = useSettings();
   const d = settings.developer;
@@ -463,9 +448,6 @@ function DeveloperPanel() {
       </SettingRow>
       <SettingRow label="OpenAPI URL">
         <TextField monospace value={d.openapi_url} onChange={(v)=>update("developer",{openapi_url:v})} />
-      </SettingRow>
-      <SettingRow label="Mock Mode Enabled">
-        <ToggleField checked={d.mock_mode_enabled} onChange={(v)=>update("developer",{mock_mode_enabled:v})} />
       </SettingRow>
       <SettingRow label="Debug Logs Enabled">
         <ToggleField checked={d.debug_logs_enabled} onChange={(v)=>update("developer",{debug_logs_enabled:v})} />
@@ -481,7 +463,7 @@ function DeveloperPanel() {
       </SettingRow>
       <SettingRow label="Reset Demo Data">
         <button className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"rgba(239,68,68,0.4)",color:"var(--red)"}}
-          onClick={()=>{if(confirm("Reset demo data?")){alert("Demo data reset (mock)");}}}>
+          onClick={()=>{if(confirm("Reset demo data?")){alert("Demo data reset.");}}}>
           Reset
         </button>
       </SettingRow>

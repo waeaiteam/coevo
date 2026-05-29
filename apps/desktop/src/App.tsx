@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { GovernanceProvider } from "./hooks/useGovernance";
-import { listEmployees } from "./api/client";
+import { isModelProviderConfigured } from "./settings/onboarding";
 import BootPage from "./components/BootPage";
 import FirstRun from "./components/FirstRun";
 import Layout from "./components/Layout";
@@ -26,15 +26,12 @@ export default function App() {
   const [booted, setBooted] = useState(false);
   const [showFirstRun, setShowFirstRun] = useState(false);
 
-  useEffect(() => {
-    if (booted) {
-      listEmployees().then((data) => {
-        if (!Array.isArray(data) || data.length === 0) setShowFirstRun(true);
-      }).catch(() => setShowFirstRun(true));
-    }
-  }, [booted]);
+  function handleBootReady() {
+    setShowFirstRun(!isModelProviderConfigured());
+    setBooted(true);
+  }
 
-  if (!booted) return <BootPage onReady={() => setBooted(true)} />;
+  if (!booted) return <BootPage onReady={handleBootReady} />;
   if (showFirstRun) return <FirstRun onDone={() => setShowFirstRun(false)} />;
   return (
     <GovernanceProvider>

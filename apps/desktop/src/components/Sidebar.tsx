@@ -15,7 +15,6 @@ const links = [
   { to: "/risk", label: "Risk Gate", icon: "⚠" },
   { to: "/resolution", label: "Resolution", icon: "⚖" },
   { to: "/audit", label: "Audit", icon: "☰" },
-  { to: "/demos", label: "Demos", icon: "▶" },
   { to: "/settings/general", label: "Settings", icon: "⚙" },
 ];
 
@@ -50,7 +49,7 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="p-3 border-t text-xs" style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>v1.0.0 — OPC</div>
+      <div className="p-3 border-t text-xs" style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>v1.0.0 - OPC</div>
     </aside>
   );
 }
