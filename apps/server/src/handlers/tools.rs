@@ -78,38 +78,29 @@ pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) ->
     let mut cancelled_run = None;
     let mut cancelled_session = None;
     let mut queue_released = false;
-    // Get worker to find active session
     if let Ok(Some(row)) = AgentWorkerRepo::get(&s.pool, &id).await {
         let sid: Option<String> = row.get("current_session_id");
         if let Some(ref session_id) = sid {
-            // Cancel active run
-            if let Ok(runs) = WorkerRunRepo::list_by_work_order(&s.pool, session_id).await {
-                for run in &runs {
-                    let run_id: String = run.get("run_id");
-                    let status: String = run.get("status");
-                    if status != "Completed" && status != "Cancelled" && status != "Failed" {
-                        WorkerRunRepo::set_status(&s.pool, &run_id, "Cancelled").await.ok();
-                        cancelled_run = Some(run_id);
-                    }
-                }
-            }
-            // Release queue
-            let rid: Option<String> = row.get("current_work_order_id");
-            if let Some(ref rid) = rid {
-                WorkerQueueService::release(&s.pool, session_id, rid).await.ok();
+            // Get active_run_id from queue lane
+            let active_run_id: Option<String> = sqlx::query("SELECT active_run_id FROM worker_queue_lanes WHERE session_id=?")
+                .bind(session_id).fetch_optional(&s.pool).await.ok().flatten()
+                .and_then(|r| r.get::<Option<String>,_>("active_run_id"));
+            if let Some(ref run_id) = active_run_id {
+                WorkerRunRepo::set_status(&s.pool, run_id, "Cancelled").await.ok();
+                cancelled_run = Some(run_id.clone());
+                // Release queue
+                WorkerQueueService::release(&s.pool, session_id, run_id).await.ok();
                 queue_released = true;
+                // Emit cancel event
+                let _ = sqlx::query("INSERT INTO worker_events VALUES (?,?,?,?,?,?)")
+                    .bind(format!("ev-{}-cancel", run_id)).bind(run_id).bind(999i64)
+                    .bind("LifecycleEnd").bind(serde_json::to_string(&serde_json::json!({"reason":"CancelledByUser"})).unwrap())
+                    .bind(chrono::Utc::now().timestamp_millis()).execute(&s.pool);
             }
             // Update session
             sqlx::query("UPDATE worker_sessions SET status='Cancelled',updated_at_ms=? WHERE session_id=?")
                 .bind(chrono::Utc::now().timestamp_millis()).bind(session_id).execute(&s.pool).await.ok();
             cancelled_session = Some(session_id.clone());
-            // Emit cancel event
-            if let Some(ref rid) = cancelled_run {
-                let _ = sqlx::query("INSERT INTO worker_events VALUES (?,?,?,?,?,?)")
-                    .bind(format!("ev-{}-cancel", rid)).bind(rid).bind(999i64)
-                    .bind("LifecycleEnd").bind(serde_json::to_string(&serde_json::json!({"reason":"CancelledByUser"})).unwrap())
-                    .bind(chrono::Utc::now().timestamp_millis()).execute(&s.pool);
-            }
         }
     }
     AgentWorkerRepo::set_status(&s.pool, &id, "Cancelled").await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();

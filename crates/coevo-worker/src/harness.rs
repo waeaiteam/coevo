@@ -69,10 +69,12 @@ impl WorkerHarness {
             .bind("[]").bind("[]").bind("[]").bind("[]").bind("Running").bind(now()).bind(now())
             .execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         sqlx::query("UPDATE worker_sessions SET status='Running',updated_at_ms=? WHERE session_id=?").bind(now()).bind(&session_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
-        WorkerQueueService::acquire(pool, &session_id, &worker_id, 120_000).await?;
 
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         WorkerRunRepo::create(pool, &run_id, work_order_id, &agent_id, &worker_id, &session_id, "Running", "{}", "[]", "[]", None, now(), None).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
+        // Acquire queue with run_id and update AgentWorker
+        WorkerQueueService::acquire(pool, &session_id, &run_id, 120_000).await?;
+        AgentWorkerRepo::upsert(pool, &worker_id, &agent_id, "Default", "Executing", Some(work_order_id), Some(&session_id), "[]", "Task", "[]", now(), now()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         WorkerEventRepo::append(pool, &run_id, "LifecycleStart", &serde_json::to_string(&serde_json::json!({"status":"Running"})).unwrap()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
 
         // MemoryContext with real data
@@ -105,7 +107,7 @@ impl WorkerHarness {
             WorkerEventRepo::append(pool, &run_id, "ApprovalRequired", &serde_json::to_string(&serde_json::json!({"reason":"Yellow requires approval"})).unwrap()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
             WorkerRunRepo::set_status(pool, &run_id, "WaitingApproval").await.map_err(|e| WorkerError::Internal(e.to_string()))?;
             sqlx::query("UPDATE worker_sessions SET status='WaitingApproval',updated_at_ms=? WHERE session_id=?").bind(now()).bind(&session_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
-            WorkerQueueService::release(pool, &session_id, &worker_id).await?;
+            WorkerQueueService::release(pool, &session_id, &run_id).await?;
             return Self::build_result(pool, work_order_id, &run_id, steps, vec![], None, None, "WaitingApproval", "Yellow Track: WaitingApproval.".into()).await;
         }
 
@@ -212,7 +214,7 @@ impl WorkerHarness {
         WorkerRunRepo::set_status(pool, &run_id, final_status).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         WorkerEventRepo::append(pool, &run_id, "LifecycleEnd", &serde_json::to_string(&serde_json::json!({"status":final_status})).unwrap()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         sqlx::query("UPDATE worker_sessions SET status=?,updated_at_ms=? WHERE session_id=?").bind(final_status).bind(now()).bind(&session_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
-        WorkerQueueService::release(pool, &session_id, &worker_id).await?;
+        WorkerQueueService::release(pool, &session_id, &run_id).await?;
 
         Self::build_result(pool, work_order_id, &run_id, steps, mem_ids, ref_id, proposal_id, final_status, format!("WorkerHarness {} execution.", final_status)).await
     }

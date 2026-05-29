@@ -65,7 +65,32 @@ export interface ReflectionRecord {
   memory_to_add_json: unknown; skill_to_update_json: unknown;
   user_preference_observed_json: unknown; needs_human_review: boolean; created_at_ms: number;
 }
-export interface ModelCapability { type: string }
+export type ModelCapability =
+  | "FastText" | "DeepReasoning" | "CodeGeneration" | "CodeReview"
+  | "LongContext" | "VisionUnderstanding" | "ImageGeneration"
+  | "SlideGeneration" | "ThreeDGeneration" | "Embedding"
+  | "StructuredJSON" | "ToolPlanning" | "RiskCritique"
+  | "Summarization" | "SkillGeneration" | "SkillVerification";
+
+export interface AgentModelPreference {
+  agent_id: string; default_model_id?: string; fast_model_id?: string;
+  reasoning_model_id?: string; code_model_id?: string; review_model_id?: string;
+  vision_model_id?: string; image_model_id?: string; embedding_model_id?: string;
+  fallback_model_ids: string[]; max_cost_per_task_usd?: number;
+}
+export interface ModelRoutingRequest {
+  work_order_id: string; agent_id: string; worker_step_type: string;
+  intent: string; required_capabilities: ModelCapability[]; track: string;
+  risk_score: number; max_latency_ms?: number; max_cost_usd?: number;
+  privacy_boundary: string; preferred_model_id?: string;
+}
+export interface ModelRoutingDecision {
+  selected_provider_id: string; selected_model_id: string;
+  selected_capabilities: ModelCapability[]; reason: string;
+  fallback_model_ids: string[]; estimated_cost_usd?: number;
+  estimated_latency_ms?: number; governance_notes: string[];
+  decision_id: string; created_at_ms: number;
+}
 export interface ModelProfile {
   provider_id: string; model_id: string; display_name: string;
   capabilities: string[]; max_context_tokens: number; cost_per_1k_input_usd: number;
