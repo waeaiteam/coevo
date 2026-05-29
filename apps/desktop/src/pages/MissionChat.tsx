@@ -184,9 +184,34 @@ export default function MissionChat() {
         setPhase("review"); return;
       }
 
-      appendMsg("system","execution_result",`${track.toUpperCase()} Track completed`,
-        `work_order_id: ${woId} | status: ${execStatus} | executors: ${executorIds.length} | memory_ids: ${memIds.length}`,
+      // Structured WorkerHarness result display
+      const workerRuns = (execRes.worker_runs as Record<string,unknown>[]) || [];
+      const workerSteps = (execRes.worker_steps as Record<string,unknown>[]) || [];
+      const workerEvents = (execRes.worker_events as Record<string,unknown>[]) || [];
+      const toolCalls = (execRes.tool_calls as Record<string,unknown>[]) || [];
+      const refId = execRes.reflection_id as string || "";
+      const propId = execRes.proposal_id as string || "";
+      const stepsSummary = workerSteps.map((s:Record<string,unknown>) => `${s.step_type}`).join(" → ");
+      const modelStep = workerSteps.find((s:Record<string,unknown>) => s.step_type === "ModelCall");
+      const modelOutput = modelStep ? (typeof modelStep.output_json === "string" ? JSON.parse(modelStep.output_json as string) : modelStep.output_json) as Record<string,unknown> : null;
+
+      appendMsg("system","execution_result",`${track.toUpperCase()} Track completed via WorkerHarness`,
+        `wo: ${woId} | status: ${execStatus} | steps: ${workerSteps.length} [${stepsSummary}] | tool_calls: ${toolCalls.length} | memory_ids: ${memIds.length} | reflection: ${refId||"none"} | proposal: ${propId||"none"}`,
         track);
+
+      if (modelOutput) {
+        appendMsg("system","text","Model Routing",
+          `Model: ${modelOutput.selected_model_id} (${modelOutput.selected_provider_id})\nReason: ${modelOutput.reason || "N/A"}\nModel provides cognition, not authorization. Execution governed by WorkOrder, RiskGate, and ToolPolicy.`);
+      }
+      if (workerRuns.length > 0) {
+        const run = workerRuns[0] as Record<string,unknown>;
+        appendMsg("system","text","WorkerRun",
+          `run_id: ${run.run_id} | status: ${run.status} | worker: ${run.worker_id||"N/A"} | session: ${run.session_id||"N/A"}`);
+      }
+      if (propId) {
+        appendMsg("system","text","Skill Evolution Proposal Created",
+          `proposal_id: ${propId} — Review and verify in Skills page.`);
+      }
 
       if (memIds.length === 0) appendMsg("system","warning","Execution completed but no task memory was written.","Check executor results.","yellow");
 

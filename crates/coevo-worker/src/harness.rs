@@ -168,10 +168,38 @@ impl WorkerHarness {
         step_create(pool, &mut steps, &run_id, "WriteMemory", &serde_json::json!({"memory_id":mem_id}), None).await?;
         WorkerEventRepo::append(pool, &run_id, "MemoryWrite", &serde_json::to_string(&serde_json::json!({"memory_id":mem_id})).unwrap()).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
 
+        // Reflect ModelRouter decision
+        let reflect_route = ModelRouter::route(&ModelRoutingRequest{
+            work_order_id: work_order_id.into(), agent_id: agent_id.clone(),
+            worker_step_type: "Reflect".into(), intent: wo.mission_intent.clone(),
+            required_capabilities: required_capabilities_for_step("Reflect", &wo.mission_intent),
+            track: wo.track.clone(), risk_score: if wo.track=="red"{0.9}else if wo.track=="yellow"{0.6}else{0.3},
+            max_latency_ms: None, max_cost_usd: None, privacy_boundary: PrivacyLevel::PublicApi, preferred_model_id: None,
+        }, &default_model_profiles(), None);
+        if let Ok(ref d) = reflect_route {
+            step_create(pool, &mut steps, &run_id, "ModelCall",
+                &serde_json::json!({"purpose":"Reflect"}),
+                Some(&serde_json::to_value(d).unwrap())).await?;
+        }
+
         // Reflection with real fields
         step_create(pool, &mut steps, &run_id, "Reflect", &serde_json::json!({"type":"post-execution"}), None).await?;
         let reflection = ReflectionEngine::reflect(pool, &run_id, work_order_id, &agent_id, &worker_id, &steps, &[], &[]).await?;
         let ref_id = Some(reflection.reflection_id.clone());
+
+        // ProposeSkillUpdate ModelRouter decision
+        let skill_route = ModelRouter::route(&ModelRoutingRequest{
+            work_order_id: work_order_id.into(), agent_id: agent_id.clone(),
+            worker_step_type: "ProposeSkillUpdate".into(), intent: wo.mission_intent.clone(),
+            required_capabilities: vec![coevo_models::router::ModelCapability::SkillGeneration, coevo_models::router::ModelCapability::StructuredJSON],
+            track: wo.track.clone(), risk_score: if wo.track=="red"{0.9}else if wo.track=="yellow"{0.6}else{0.3},
+            max_latency_ms: None, max_cost_usd: None, privacy_boundary: PrivacyLevel::PublicApi, preferred_model_id: None,
+        }, &default_model_profiles(), None);
+        if let Ok(ref d) = skill_route {
+            step_create(pool, &mut steps, &run_id, "ModelCall",
+                &serde_json::json!({"purpose":"ProposeSkillUpdate"}),
+                Some(&serde_json::to_value(d).unwrap())).await?;
+        }
 
         // SelfUpgrade — generate proposal if tool failed or skill update needed
         let mut proposal_id = None;

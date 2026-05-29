@@ -6,6 +6,8 @@ use coevo_worker::tool_policy::ToolPolicyEngine;
 use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
 use coevo_store::repos::agent_worker_repo::AgentWorkerRepo;
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
+use coevo_worker::queue::WorkerQueueService;
+use coevo_store::repos::worker_run_repo::WorkerRunRepo;
 use crate::state::AppState;
 
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
@@ -54,7 +56,6 @@ pub async fn tool_execute(State(s): State<AppState>, Path(id): Path<String>, Jso
         Err(e) => err!(StatusCode::BAD_REQUEST, e.to_string()),
     }
 }
-
 // Worker operations — real implementations
 pub async fn assign_worker(State(s): State<AppState>, Json(body): Json<AssignReq>) -> (StatusCode, Json<serde_json::Value>) {
     let now = chrono::Utc::now().timestamp_millis();
@@ -74,6 +75,36 @@ pub async fn run_worker(State(s): State<AppState>, Path(id): Path<String>, Json(
     }
 }
 pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    let mut cancelled_run = None;
+    let mut cancelled_session = None;
+    let mut queue_released = false;
+    // Get worker to find active session
+    if let Ok(Some(row)) = AgentWorkerRepo::get(&s.pool, &id).await {
+        let sid: Option<String> = row.get("current_session_id");
+        if let Some(ref session_id) = sid {
+            // Cancel active run
+            if let Ok(runs) = WorkerRunRepo::list_by_work_order(&s.pool, session_id).await {
+                for run in &runs {
+                    let run_id: String = run.get("run_id");
+                    let status: String = run.get("status");
+                    if status != "Completed" && status != "Cancelled" && status != "Failed" {
+                        WorkerRunRepo::set_status(&s.pool, &run_id, "Cancelled").await.ok();
+                        cancelled_run = Some(run_id);
+                    }
+                }
+            }
+            // Release queue
+            let rid: Option<String> = row.get("current_work_order_id");
+            if let Some(ref rid) = rid {
+                WorkerQueueService::release(&s.pool, session_id, rid).await.ok();
+                queue_released = true;
+            }
+            // Update session
+            sqlx::query("UPDATE worker_sessions SET status='Cancelled',updated_at_ms=? WHERE session_id=?")
+                .bind(chrono::Utc::now().timestamp_millis()).bind(session_id).execute(&s.pool).await.ok();
+            cancelled_session = Some(session_id.clone());
+        }
+    }
     AgentWorkerRepo::set_status(&s.pool, &id, "Cancelled").await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();
-    ok!(serde_json::json!({"worker_id":id,"status":"Cancelled"}))
+    ok!(serde_json::json!({"worker_id":id,"status":"Cancelled","cancelled_run_id":cancelled_run,"session_id":cancelled_session,"queue_released":queue_released}))
 }
