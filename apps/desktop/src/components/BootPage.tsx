@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { setApiBase } from "../api/client";
+import { getTauriInvoke } from "../api/tauri";
 
 interface BootStatus { label: string; done: boolean; error?: string }
 
@@ -16,22 +17,11 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
 
   useEffect(() => { boot(); }, []);
 
-  async function getInvoke() {
-    try {
-      const w = window as any;
-      if (w.__TAURI_INTERNALS__) {
-        const mod = await (Function('return import("@tauri-apps/api/core")')());
-        return mod.invoke;
-      }
-    } catch { /* web */ }
-    return null;
-  }
-
   async function boot() {
     try {
       setStage(0);
       // Try Tauri launch_server — returns dynamic apiBase
-      const invoke = await getInvoke();
+      const invoke = getTauriInvoke();
       let apiBase = "";
       if (invoke) {
         try { apiBase = await invoke("launch_server"); } catch (e: unknown) {
@@ -60,7 +50,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   }
 
   async function openLogs() {
-    const invoke = await getInvoke();
+    const invoke = getTauriInvoke();
     if (invoke) { try { await invoke("open_logs_dir"); return; } catch {} }
     alert("Logs: ~/.coevo/logs");
   }

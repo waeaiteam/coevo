@@ -1,6 +1,9 @@
 //! coevo-server: axum HTTP API entrypoint for the coevo control plane.
 
 use std::env;
+use std::path::PathBuf;
+use std::process;
+use std::time::{Duration, SystemTime};
 
 use coevo_server::config::ServerConfig;
 use coevo_server::router::build_router;
@@ -18,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let config = ServerConfig::from_env();
+    start_parent_watchdog();
 
     // Handle --migrate flag
     if env::args().any(|a| a == "--migrate") {
@@ -55,4 +59,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn start_parent_watchdog() {
+    let Ok(path) = env::var("COEVO_PARENT_HEARTBEAT") else {
+        tracing::debug!("COEVO_PARENT_HEARTBEAT not set; parent watchdog disabled");
+        return;
+    };
+    let heartbeat = PathBuf::from(path);
+    tracing::info!("parent heartbeat watchdog enabled: {}", heartbeat.display());
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            match std::fs::metadata(&heartbeat)
+                .and_then(|m| m.modified())
+                .and_then(|modified| {
+                    SystemTime::now()
+                        .duration_since(modified)
+                        .map_err(std::io::Error::other)
+                }) {
+                Ok(age) if age <= Duration::from_secs(5) => {}
+                Ok(age) => {
+                    tracing::info!(
+                        "parent heartbeat stale at {} for {:?}; shutting down coevo sidecar",
+                        heartbeat.display(),
+                        age
+                    );
+                    process::exit(0);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "parent heartbeat unreadable at {}: {}; shutting down coevo sidecar",
+                        heartbeat.display(),
+                        e
+                    );
+                    process::exit(0);
+                }
+            }
+        }
+    });
 }

@@ -10,7 +10,8 @@ import PasswordField from "../components/PasswordField";
 import { useSettings } from "../hooks/useSettings";
 import { t, setLanguage, getLanguage } from "../settings/i18n";
 import { useState, useEffect } from "react";
-import { updateModelConfig, testModelConnection } from "../api/client";
+import { getApiBase, updateModelConfig, testModelConnection } from "../api/client";
+import { getTauriInvoke } from "../api/tauri";
 
 const CATEGORIES = ["general","appearance","model_provider","agent_runtime","governance","risk_gate","cognitive_customs","policy_engine","privacy","developer","data_management"];
 
@@ -410,10 +411,9 @@ function DataManagementPanel() {
   useEffect(() => {
     (async () => {
       try {
-        const w = window as any;
-        if (w.__TAURI_INTERNALS__) {
-          const mod = await (Function('return import("@tauri-apps/api/core")')());
-          setCoevoHome(await mod.invoke("get_coevo_home"));
+        const invoke = getTauriInvoke();
+        if (invoke) {
+          setCoevoHome(await invoke<string>("get_coevo_home"));
         } else {
           setCoevoHome("~/.coevo (web mode)");
         }
@@ -422,8 +422,17 @@ function DataManagementPanel() {
   }, []);
 
   async function tauriCmd(name: string) {
-    try { const w = window as any; if (w.__TAURI_INTERNALS__) { const m = await (Function('return import("@tauri-apps/api/core")')()); await m.invoke(name); } }
-    catch { alert(`${name} is available in Tauri desktop mode.`); }
+    try {
+      const invoke = getTauriInvoke();
+      if (invoke) {
+        await invoke(name);
+        return;
+      }
+    } catch (e) {
+      alert(`Command ${name} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    alert(`${name} is available in Tauri desktop mode.`);
   }
 
   return (
@@ -432,7 +441,7 @@ function DataManagementPanel() {
       <SettingRow label="Database"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\data\\coevo.db</div></SettingRow>
       <SettingRow label="Logs"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\logs\\</div></SettingRow>
       <SettingRow label="Runtime"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}\\runtime\\server.port, server.pid</div></SettingRow>
-      <SettingRow label="API Base"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{(function() { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } })()}</div></SettingRow>
+      <SettingRow label="API Base"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{getApiBase()}</div></SettingRow>
       <SettingRow label="Actions">
         <div className="flex gap-2">
           <button onClick={() => tauriCmd("open_logs_dir")} className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>Open Logs</button>
