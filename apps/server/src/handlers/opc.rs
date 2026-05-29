@@ -199,16 +199,8 @@ pub async fn execute_work_order(State(s): State<AppState>, Path(id): Path<String
             ("lease_id", req.lease_id.as_ref().map(|s| !s.is_empty()).unwrap_or(false)),
         ].iter().filter(|(_, ok)| !ok).map(|(name, _)| *name).collect();
         if !missing.is_empty() { return err!(StatusCode::FORBIDDEN, format!("Red Track missing: {:?}", missing)); }
-        // Reject mock/placeholder credentials in Alpha
-        let mock_patterns = ["mock", "demo", "placeholder", "test"];
-        for (name, val) in [("caller_identity_proof",&req.caller_identity_proof),("monitoring_signature",&req.monitoring_signature),("diagnostic_signature",&req.diagnostic_signature),("lease_id",&req.lease_id)] {
-            if let Some(v) = val {
-                let lower = v.to_lowercase();
-                if mock_patterns.iter().any(|p| lower.contains(p)) {
-                    return err!(StatusCode::FORBIDDEN, format!("Red Track blocked: {} appears to be a mock value. Production MFA/lease verifier required.", name));
-                }
-            }
-        }
+        // Alpha: Red Track always blocked. Production MFA/lease verifier not yet implemented.
+        return err!(StatusCode::FORBIDDEN, "RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER: Alpha does not support Red Track execution. Requires production MFA, dual-sign, and emergency lease verifier.");
     }
     // 6. Green/Yellow with approval: use WorkerHarness
     let harness_result = match WorkerHarness::run_work_order(&s.pool, &id, WorkerHarnessOptions{approval_receipt:req.caller_identity_proof.clone().or(req.lease_id.clone()),max_runtime_ms:Some(60000),deterministic_mode:true,preferred_tool_ids:vec![]}).await {

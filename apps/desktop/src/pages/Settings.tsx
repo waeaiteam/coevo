@@ -12,7 +12,7 @@ import { t, setLanguage, getLanguage } from "../settings/i18n";
 import { useState } from "react";
 import { updateModelConfig, testModelConnection } from "../api/client";
 
-const CATEGORIES = ["general","appearance","model_provider","agent_runtime","governance","risk_gate","cognitive_customs","policy_engine","privacy","developer"];
+const CATEGORIES = ["general","appearance","model_provider","agent_runtime","governance","risk_gate","cognitive_customs","policy_engine","privacy","developer","data_management"];
 
 export default function Settings() {
   return (
@@ -36,6 +36,7 @@ const panels: Record<string, React.FC> = {
   policy_engine: PolicyEnginePanel,
   privacy: PrivacyPanel,
   developer: DeveloperPanel,
+  data_management: DataManagementPanel,
 };
 
 function SettingsCategory({ cat }: { cat: string }) {
@@ -402,12 +403,52 @@ function PrivacyPanel() {
   );
 }
 
+/* ============ DATA MANAGEMENT ============ */
+function DataManagementPanel() {
+  const [coevoHome, setCevoHome] = useState<string>("Loading...");
+  const [apiBase] = useState(() => { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } });
+
+  useState(() => {
+    try {
+      const w = window as any;
+      if (w.__TAURI_INTERNALS__) {
+        (async () => {
+          try { const mod = await (Function('return import("@tauri-apps/api/core")')()); setCevoHome(await mod.invoke("get_coevo_home")); } catch { setCevoHome("~/.coevo (web mode)"); }
+        })();
+      } else { setCevoHome("~/.coevo (web mode)"); }
+    } catch { setCevoHome("~/.coevo"); }
+  });
+
+  async function tauriCmd(name: string) {
+    try { const w = window as any; if (w.__TAURI_INTERNALS__) { const m = await (Function('return import("@tauri-apps/api/core")')()); await m.invoke(name); } }
+    catch { alert(`${name} is available in Tauri desktop mode.`); }
+  }
+
+  return (
+    <SettingsSection title="Data Management">
+      <SettingRow label="COEVO_HOME"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}</div></SettingRow>
+      <SettingRow label="Database"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}/data/coevo.db</div></SettingRow>
+      <SettingRow label="Logs"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{coevoHome}/logs/</div></SettingRow>
+      <SettingRow label="API Base"><div className="text-xs font-mono" style={{color:"var(--text-secondary)"}}>{apiBase}</div></SettingRow>
+      <SettingRow label="Actions">
+        <div className="flex gap-2">
+          <button onClick={() => tauriCmd("open_logs_dir")} className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>Open Logs</button>
+          <button onClick={() => tauriCmd("open_coevo_dir")} className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>Open coevo Folder</button>
+        </div>
+      </SettingRow>
+      <SettingRow label="Note">
+        <span className="text-xs" style={{color:"var(--text-muted)"}}>Runtime files (server.port, server.pid) are in {coevoHome}/runtime/</span>
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
 /* ============ DEVELOPER ============ */
 function DeveloperPanel() {
   const { settings, update } = useSettings();
   const d = settings.developer;
   return (
-    <SettingsSection title={t("settings.developer")}>
+    <SettingsSection title="Developer Mode">
       <SettingRow label="API Base URL">
         <TextField monospace value={d.api_base_url} onChange={(v)=>update("developer",{api_base_url:v})} />
       </SettingRow>

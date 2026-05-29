@@ -9,16 +9,26 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
   const [err, setErr] = useState("");
 
   async function quickStart() {
+    setErr("");
     setStep(1); setMsg("Initializing Mock Provider...");
-    try { await updateModelConfig({ provider_id: "mock-default", kind: "Mock" }); } catch {}
+    try { await updateModelConfig({ provider_id: "mock-default", kind: "Mock" }); }
+    catch (e: unknown) { setErr(`Failed to initialize Mock Provider: ${e instanceof Error ? e.message : String(e)}`); return; }
     setStep(2); setMsg("Seeding AI Employees...");
-    try { await seedEmployees(); } catch { setErr("Failed to seed employees"); return; }
+    try { await seedEmployees(); }
+    catch (e: unknown) { setErr(`Failed to seed AI Employees: ${e instanceof Error ? e.message : String(e)}`); return; }
     setStep(3); setMsg("Seeding Skills...");
-    try { await seedSkills(); } catch {}
+    try { await seedSkills(); }
+    catch (e: unknown) { setErr(`Failed to seed Skills: ${e instanceof Error ? e.message : String(e)}`); return; }
     setStep(4); setMsg("Registering Mock Executor...");
-    try { await registerExecutor({ executor_id:"mock-openclaw","display_name":"Mock OpenClaw","source_type":"open_claw","runtime_endpoint":"","capabilities":[],"required_credentials":[],"permission_boundary":{"max_risk_score":0.5,"can_write_fact":false,"can_write_decision":false,"can_access_network":false,"can_access_filesystem":false,"can_call_external_executor":false,"can_propose_skill":false},"file_scope":[],"network_scope":[],"memory_scope":"executor","risk_ceiling":0.5,"supported_actions":["read"],"sandbox_level":"none","health_check_url":"","audit_callback_url":"","status":"registered","created_at_ms":Date.now(),"updated_at_ms":Date.now() }); } catch {}
+    try { await registerExecutor({ executor_id:"mock-openclaw","display_name":"Mock OpenClaw","source_type":"open_claw","runtime_endpoint":"","capabilities":[],"required_credentials":[],"permission_boundary":{"max_risk_score":0.5,"can_write_fact":false,"can_write_decision":false,"can_access_network":false,"can_access_filesystem":false,"can_call_external_executor":false,"can_propose_skill":false},"file_scope":[],"network_scope":[],"memory_scope":"executor","risk_ceiling":0.5,"supported_actions":["read"],"sandbox_level":"none","health_check_url":"","audit_callback_url":"","status":"registered","created_at_ms":Date.now(),"updated_at_ms":Date.now() }); }
+    catch (e: unknown) { setErr(`Failed to register Mock OpenClaw Executor: ${e instanceof Error ? e.message : String(e)}`); return; }
     setStep(5); setMsg("Done!");
     setTimeout(onDone, 800);
+  }
+
+  function goToModels() {
+    onDone();
+    setTimeout(() => navigate("/settings/model_provider"), 100);
   }
 
   return (
@@ -28,7 +38,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
       <p className="text-sm mb-6" style={{color:"var(--text-secondary)"}}>Your one-person company AI operating system</p>
       <div className="space-y-3 w-80">
         <button onClick={quickStart} className="w-full py-3 text-sm rounded-md text-white font-semibold" style={{background:"var(--accent)"}}>Quick Start with Mock</button>
-        <button onClick={() => navigate("/settings/model_provider")} className="w-full py-3 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Configure Real Model</button>
+        <button onClick={goToModels} className="w-full py-3 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Configure Real Model</button>
       </div>
       {step > 0 && (
         <div className="mt-6 text-sm text-center" style={{color:"var(--text-secondary)"}}>
