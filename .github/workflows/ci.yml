@@ -1,0 +1,43 @@
+name: coevo-opc CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: {toolchain: stable}
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace
+      - run: cargo test --workspace -- --nocapture
+      - run: cargo test --test acceptance -- --nocapture
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - run: cd apps/desktop && npm ci && npm run build && npm test
+
+  synthetic:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: {toolchain: stable}
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: cargo build -p coevo-server
+      - run: cargo run -p coevo-server &
+      - run: sleep 5 && curl -s http://127.0.0.1:8717/health
+      - run: cd apps/desktop && npm run test:synthetic-opc
