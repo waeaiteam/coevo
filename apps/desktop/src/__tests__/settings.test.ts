@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { defaults } from "../settings/defaults";
 import { loadSettingsSnapshot, saveSettingsSnapshot } from "../hooks/useSettings";
+import { setLanguage, t } from "../settings/i18n";
 
 describe("Settings", () => {
   beforeEach(() => {
@@ -104,5 +105,13 @@ describe("Settings", () => {
     expect(phases).toContain("cancelled");
     expect(phases).toContain("executing");
     expect(phases.length).toBe(7);
+  });
+
+  it("localizes the FirstRun bootstrap failure gate", () => {
+    setLanguage("en");
+    expect(t("first_run.bootstrap_failed")).toBe("Company foundation is not ready. Fix the bootstrap error before continuing.");
+
+    setLanguage("zh");
+    expect(t("first_run.bootstrap_failed")).toBe("公司基础上下文尚未就绪。请先修复初始化错误后再继续。");
   });
 });
