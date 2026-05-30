@@ -34,6 +34,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
   const [posture, setPosture] = useState<AlphaPosture>("balanced");
   const [teamCount, setTeamCount] = useState<number | null>(null);
   const [skillCount, setSkillCount] = useState<number | null>(null);
+  const [foundationReady, setFoundationReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -44,13 +45,18 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
     setStep("foundation");
     setBusy(true);
     setError("");
+    setFoundationReady(false);
     try {
       await seedEmployees();
       await seedSkills();
       const [employees, skills] = await Promise.all([listEmployees(), listSkills()]);
       setTeamCount(employees.length);
       setSkillCount(skills.length);
+      setFoundationReady(true);
     } catch (e: unknown) {
+      setTeamCount(0);
+      setSkillCount(0);
+      setFoundationReady(false);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -58,6 +64,10 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
   }
 
   async function createFoundation() {
+    if (!foundationReady) {
+      setError(t("first_run.bootstrap_failed"));
+      return;
+    }
     const current = identity || createLocalOpc({ opcName, userName: ownerName, language });
     const now = Date.now();
     const principles = operatingPrinciples
@@ -254,7 +264,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
                 {t("first_run.rules_context_note")}
               </div>
               {error && <div className="text-xs" style={{ color: "var(--red)" }}>{error}</div>}
-              <button disabled={busy} onClick={createFoundation} className="w-full rounded-md py-3 text-sm font-semibold text-white disabled:opacity-50" style={{ background: "var(--accent)" }}>
+              <button disabled={busy || !foundationReady} onClick={createFoundation} className="w-full rounded-md py-3 text-sm font-semibold text-white disabled:opacity-50" style={{ background: "var(--accent)" }}>
                 {busy ? t("mission.creating") : t("first_run.create_and_continue")}
               </button>
             </div>

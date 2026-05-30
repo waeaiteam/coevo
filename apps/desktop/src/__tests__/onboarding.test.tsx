@@ -190,6 +190,10 @@ describe("Desktop onboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue to Company Foundation/i }));
     expect(await screen.findByText(/seed employees failed/i)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Model Provider handoff/i })).not.toBeInTheDocument();
+    const createButton = screen.getByRole("button", { name: /Create OPC and continue/i });
+    expect(createButton).toBeDisabled();
+    fireEvent.click(createButton);
+    await waitFor(() => expect(screen.getByText(/seed employees failed/i)).toBeInTheDocument());
 
     expect(api.updateUserProfile).not.toHaveBeenCalled();
     expect(api.updateCompanyProfile).not.toHaveBeenCalled();
