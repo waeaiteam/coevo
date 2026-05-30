@@ -305,6 +305,9 @@ impl WorkerHarness {
             return Err(WorkerError::YellowApprovalRequired);
         }
 
+        let model_profiles =
+            model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
+
         let worker_id = format!("worker-{}", agent_id);
         match AgentWorkerRepo::get(pool, &worker_id)
             .await
@@ -481,9 +484,6 @@ impl WorkerHarness {
                 .map_err(|e| WorkerError::Internal(e.to_string()))?;
             }
         }
-
-        let model_profiles =
-            model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
 
         // ModelRouter: record routing decision for Think step (cognition only, not authorization)
         let route_req = ModelRoutingRequest {
