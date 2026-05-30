@@ -4,11 +4,13 @@ import { ensureWorkspaceDefaults } from "../api/bootstrap";
 import { compileContract, createWorkOrder, modelChat, routePlan } from "../api/client";
 import { useGovernance } from "../hooks/useGovernance";
 import { getLocalIdentity } from "../settings/identity";
+import { t, useLanguage } from "../settings/i18n";
 import { inferTrackFromIntent } from "../utils/trackInference";
 
 type Msg = { role: "user" | "system"; text: string };
 
 export default function MissionChat() {
+  useLanguage();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [creating, setCreating] = useState(false);
@@ -23,7 +25,7 @@ export default function MissionChat() {
     setMessages((prev) => [
       ...prev,
       { role: "user", text },
-      { role: "system", text: "Compiling mission contract and preparing a governed WorkOrder..." },
+      { role: "system", text: t("mission.compiling") },
     ]);
 
     try {
@@ -87,18 +89,18 @@ export default function MissionChat() {
       });
       setMessages((prev) => [
         ...prev,
-        ...(cognitionText ? [{ role: "system" as const, text: `Model cognition: ${cognitionText}` }] : []),
-        ...(!cognitionText && cognitionError ? [{ role: "system" as const, text: `Cognition summary unavailable: ${cognitionError}` }] : []),
+        ...(cognitionText ? [{ role: "system" as const, text: `${t("mission.model_cognition")}: ${cognitionText}` }] : []),
+        ...(!cognitionText && cognitionError ? [{ role: "system" as const, text: `${t("mission.cognition_unavailable")}: ${cognitionError}` }] : []),
         {
           role: "system",
-          text: `WorkOrder ${workOrderId} created as ${serverTrack.toUpperCase()} Track. Review it in Work Orders before execution.`,
+          text: `${t("mission.created_prefix")} ${workOrderId} (${serverTrack.toUpperCase()} Track) ${t("mission.created_suffix")}`,
         },
       ]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setMessages((prev) => [
         ...prev,
-        { role: "system", text: `Unable to create WorkOrder: ${msg}` },
+        { role: "system", text: `${t("mission.error_prefix")}: ${msg}` },
       ]);
     } finally {
       setCreating(false);
@@ -108,21 +110,21 @@ export default function MissionChat() {
   return (
     <div className="flex flex-col h-full">
       <div className="px-5 py-3 border-b" style={{ background: "#fff", borderColor: "var(--border-subtle)" }}>
-        <div className="text-sm font-semibold">Mission Composer</div>
-        <div className="text-xs" style={{ color: "var(--text-muted)" }}>Natural language in, governed WorkOrder out</div>
+        <div className="text-sm font-semibold">{t("mission.title")}</div>
+        <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("mission.subtitle")}</div>
       </div>
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
         {messages.length === 0 && (
           <div className="text-center pt-16">
             <div className="text-3xl mb-3" style={{ color: "var(--accent)" }}>coevo</div>
-            <h1 className="text-xl font-bold mb-1">What mission should coevo govern?</h1>
-            <p className="text-sm" style={{ color: "var(--text-muted)" }}>Enter a mission to create an auditable WorkOrder.</p>
+            <h1 className="text-xl font-bold mb-1">{t("mission.empty_title")}</h1>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>{t("mission.empty_desc")}</p>
           </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
             <div className="chat-msg inline-block" style={{ background: m.role === "user" ? "#f0f0ff" : "#fff", border: "1px solid var(--border-subtle)" }}>
-              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>{m.role === "user" ? "You" : "coevo"}</div>
+              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>{m.role === "user" ? t("mission.user") : t("mission.system")}</div>
               <div>{m.text}</div>
             </div>
           </div>
@@ -134,7 +136,7 @@ export default function MissionChat() {
               className="inline-flex px-3 py-2 rounded-md text-xs font-semibold border"
               style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
             >
-              Open Work Orders
+              {t("mission.open_workorders")}
             </Link>
           </div>
         )}
@@ -143,7 +145,7 @@ export default function MissionChat() {
         <div className="flex gap-2 max-w-3xl mx-auto">
           <textarea className="flex-1 p-3 rounded-xl border text-sm resize-none" rows={2} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
           <button disabled={creating} className="px-5 py-3 rounded-xl text-sm font-semibold disabled:opacity-50" style={{ background: "var(--accent)", color: "#fff" }} onClick={send}>
-            {creating ? "Creating..." : "Create WorkOrder"}
+            {creating ? t("mission.creating") : t("mission.create")}
           </button>
         </div>
       </div>

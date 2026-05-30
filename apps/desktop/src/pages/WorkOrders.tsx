@@ -7,8 +7,10 @@ import {
   listWorkOrders,
   submitWorkOrderFeedback,
 } from "../api/client";
+import { t, useLanguage } from "../settings/i18n";
 
 export default function WorkOrders() {
+  useLanguage();
   const [orders, setOrders] = useState<Record<string,unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState("");
@@ -34,7 +36,7 @@ export default function WorkOrders() {
       setResult(`${label}: ${JSON.stringify(r)}`);
       load();
     } catch(e:unknown) {
-      setResult(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setResult(`${t("workorders.result_error")}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -43,26 +45,26 @@ export default function WorkOrders() {
     setTimelineTrack(track);
     setTimeline([]);
     try { setTimeline(await getWorkOrderTimeline(id)); }
-    catch(e:unknown) { setResult(`Timeline error: ${e instanceof Error ? e.message : String(e)}`); }
+    catch(e:unknown) { setResult(`${t("workorders.result_timeline_error")}: ${e instanceof Error ? e.message : String(e)}`); }
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
         <span className="text-lg">WO</span>
-        <h2 className="text-lg font-bold">Work Orders</h2>
+        <h2 className="text-lg font-bold">{t("workorders.title")}</h2>
       </div>
 
       {result && <div className="card"><pre className="text-xs whitespace-pre-wrap" style={{color:"var(--text-secondary)"}}>{result}</pre></div>}
 
       {timelineWoId && (
         <div className="card">
-          <div className="text-xs font-semibold mb-2" style={{color:"var(--text-primary)"}}>Timeline: {timelineWoId}</div>
+          <div className="text-xs font-semibold mb-2" style={{color:"var(--text-primary)"}}>{t("workorders.timeline")}: {timelineWoId}</div>
           {timeline.length === 0 && (
             <div className="text-xs" style={{color:"var(--text-muted)"}}>
               {timelineTrack === "red"
-                ? "Red Track is blocked in Alpha. No execution timeline will be produced; the WorkOrder itself is the audit record."
-                : "No timeline events yet. Execute the WorkOrder to create worker audit events."}
+                ? t("workorders.red_no_timeline")
+                : t("workorders.empty_timeline")}
             </div>
           )}
           <div className="space-y-2">
@@ -76,7 +78,7 @@ export default function WorkOrders() {
         </div>
       )}
 
-      {loading && <div className="text-xs" style={{color:"var(--text-muted)"}}>Loading...</div>}
+      {loading && <div className="text-xs" style={{color:"var(--text-muted)"}}>{t("workorders.loading")}</div>}
 
       <div className="space-y-2">
         {orders.map((o:Record<string,unknown>, i:number) => {
@@ -101,34 +103,34 @@ export default function WorkOrders() {
                 </div>
               </div>
               <div className="text-xs space-y-0.5 mt-2" style={{color:"var(--text-muted)"}}>
-                <div>Contract: <span className="font-mono" style={{color:"var(--accent)"}}>{String(o.contract_hash || "").slice(0,14)}...</span></div>
-                <div>Agents: {String(o.selected_agents)} | Executors: {String(o.selected_executors)} | Skills: {String(o.required_skills)}</div>
+                <div>{t("workorders.contract")}: <span className="font-mono" style={{color:"var(--accent)"}}>{String(o.contract_hash || "").slice(0,14)}...</span></div>
+                <div>{t("workorders.agents")}: {String(o.selected_agents)} | {t("workorders.executors")}: {String(o.selected_executors)} | {t("workorders.skills")}: {String(o.required_skills)}</div>
                 {track === "red" && (
-                  <div style={{color:"var(--red)"}}>Red Track is blocked in Alpha until production MFA, dual-sign, and lease verifier exist.</div>
+                  <div style={{color:"var(--red)"}}>{t("workorders.red_block")}</div>
                 )}
                 {track === "yellow" && (
-                  <div style={{color:"var(--yellow)"}}>Yellow Track is not executed immediately. Submit it for approval, then execute after a valid approval receipt exists.</div>
+                  <div style={{color:"var(--yellow)"}}>{t("workorders.yellow_notice")}</div>
                 )}
                 <div className="flex gap-2 mt-2 flex-wrap items-center">
                   <button
-                    onClick={() => act(() => executeWorkOrder(id, {}), track === "yellow" ? "Submit for Approval" : "Execute")}
+                    onClick={() => act(() => executeWorkOrder(id, {}), track === "yellow" ? t("workorders.submit_approval") : t("workorders.execute"))}
                     disabled={track === "red"}
                     className="px-2 py-1 text-xs rounded border"
                     style={{borderColor:track === "red" ? "var(--red)" : "var(--accent)", color:track === "red" ? "var(--red)" : "var(--accent)", opacity:track === "red" ? 0.5 : 1}}
                   >
-                    {track === "yellow" ? "Submit for Approval" : "Execute"}{track === "red" ? " (Blocked)" : ""}
+                    {track === "yellow" ? t("workorders.submit_approval") : track === "red" ? t("workorders.execute_blocked") : t("workorders.execute")}
                   </button>
-                  <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>View Timeline</button>
-                  <button onClick={() => act(() => getWorkOrderAuditExport(id), "Audit Export")} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>Export Audit</button>
-                  <button onClick={() => act(() => cancelWorkOrder(id), "Cancel")} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>Cancel</button>
+                  <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.view_timeline")}</button>
+                  <button onClick={() => act(() => getWorkOrderAuditExport(id), t("workorders.export_audit"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.export_audit")}</button>
+                  <button onClick={() => act(() => cancelWorkOrder(id), t("workorders.cancel"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>{t("workorders.cancel")}</button>
                   <input
-                    placeholder="Feedback..."
+                    placeholder={t("workorders.feedback_placeholder")}
                     value={fbWoId === id ? fbText : ""}
                     onChange={(e) => { setFbWoId(id); setFbText(e.target.value); }}
                     className="text-xs px-2 py-1 rounded border w-32"
                     style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}
                   />
-                  <button onClick={() => act(() => submitWorkOrderFeedback(id, fbText), "Feedback")} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>Feedback</button>
+                  <button onClick={() => act(() => submitWorkOrderFeedback(id, fbText), t("workorders.feedback"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>{t("workorders.feedback")}</button>
                 </div>
               </div>
             </div>

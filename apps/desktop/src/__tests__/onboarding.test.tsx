@@ -145,7 +145,7 @@ describe("Desktop onboarding", () => {
     expect(screen.queryByRole("option", { name: /Mock/i })).not.toBeInTheDocument();
   });
 
-  it("Save & Test Connection marks the model provider as configured after success", async () => {
+  it("Test / Discover Models marks the model provider as configured after success and populates model select", async () => {
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
@@ -176,10 +176,12 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
     await waitFor(() => expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true"));
     expect(api.discoverModels).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("option", { name: "gpt-4o-mini" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Default Model/i)).toHaveValue("gpt-4o");
     expect(api.updateModelConfig).toHaveBeenCalledWith(expect.objectContaining({
       default_model: "gpt-4o",
       fast_model: "gpt-4o-mini",
@@ -189,6 +191,48 @@ describe("Desktop onboarding", () => {
     expect(api.seedEmployees).toHaveBeenCalledTimes(1);
     expect(api.seedSkills).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument();
+  });
+
+  it("provider selection autofills the default base URL in Advanced", () => {
+    render(
+      <MemoryRouter initialEntries={["/settings/model_provider"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/^Provider$/i), { target: { value: "anthropic" } });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/i }));
+
+    expect(screen.getByLabelText(/Base URL/i)).toHaveValue("https://api.anthropic.com/v1");
+  });
+
+  it("does not write API keys to localStorage while testing and discovering models", async () => {
+    api.updateModelConfig.mockResolvedValue({});
+    api.testModelConnection.mockResolvedValue({
+      model: "gpt-4o",
+      latency_ms: 12,
+      provider_kind: "OpenAI",
+    });
+    api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
+    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
+    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
+
+    render(
+      <MemoryRouter initialEntries={["/settings/model_provider"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/API Key/i), { target: { value: "sk-live-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
+
+    await waitFor(() => expect(api.updateModelConfig).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(localStorage)).not.toContain("sk-live-secret");
+    expect(localStorage.getItem("coevo-settings") || "").not.toContain("sk-live-secret");
   });
 
   it("does not mark the model provider configured when workspace bootstrap fails", async () => {
@@ -208,7 +252,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
     await waitFor(() => expect(screen.getByText(/Workspace bootstrap failed/i)).toBeInTheDocument());
     expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
@@ -230,7 +274,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
     await waitFor(() => expect(screen.getByText(/config rejected/i)).toBeInTheDocument());
     expect(api.testModelConnection).toHaveBeenCalledTimes(1);
@@ -248,7 +292,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
     await waitFor(() => expect(screen.getByText(/connection failed/i)).toBeInTheDocument());
     expect(api.updateModelConfig).not.toHaveBeenCalled();
