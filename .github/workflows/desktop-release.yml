@@ -1,0 +1,102 @@
+name: coevo desktop release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach artifacts to, for example desktop-v1.0.0-alpha.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build Windows installer
+        working-directory: apps/desktop
+        run: npm run build:tauri
+
+      - name: Collect installer artifacts
+        id: collect
+        shell: pwsh
+        run: |
+          $bundleRoot = "apps/desktop/src-tauri/target/release/bundle"
+          if (!(Test-Path $bundleRoot)) {
+            Write-Error "Tauri bundle directory not found: $bundleRoot"
+          }
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $files = Get-ChildItem $bundleRoot -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe", ".msix", ".zip" }
+
+          if (!$files -or $files.Count -eq 0) {
+            Write-Error "No installer artifacts found under $bundleRoot"
+          }
+
+          foreach ($file in $files) {
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path "artifacts" $file.Name)
+            Write-Host "Collected $($file.FullName)"
+          }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coevo-desktop-windows
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "tag=${{ inputs.tag }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          gh release view "$env:RELEASE_TAG" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:RELEASE_TAG" artifacts/* `
+              --repo "${{ github.repository }}" `
+              --title "coevo desktop $env:RELEASE_TAG" `
+              --notes "Windows desktop installer built from ${{ github.sha }}." `
+              --prerelease
+          } else {
+            gh release upload "$env:RELEASE_TAG" artifacts/* `
+              --repo "${{ github.repository }}" `
+              --clobber
+          }
