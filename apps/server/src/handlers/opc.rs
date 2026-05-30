@@ -585,12 +585,19 @@ pub async fn execute_work_order(
             max_runtime_ms: Some(60000),
             deterministic_mode: true,
             preferred_tool_ids: vec![],
+            allow_mock_model_routing: false,
         },
     )
     .await
     {
         Ok(hr) => hr,
-        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("MODEL_PROVIDER_NOT_CONFIGURED") {
+                return err!(StatusCode::CONFLICT, msg);
+            }
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, msg);
+        }
     };
     // Load worker session IDs from DB
     let session_rows = sqlx::query(
@@ -964,6 +971,30 @@ mod tests {
         assert_eq!(created["track"], "yellow");
     }
 
+    async fn configure_active_openai_compatible(pool: &sqlx::SqlitePool) {
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            .bind("desktop-test")
+            .bind("OpenAICompatible")
+            .bind("https://api.openai.com/v1")
+            .bind("sk-test")
+            .bind("sk-t****test")
+            .bind("gpt-4o")
+            .bind("gpt-4o-mini")
+            .bind("o3-mini")
+            .bind("gpt-4o")
+            .bind(16384)
+            .bind(0.2)
+            .bind(30000)
+            .bind(5.0)
+            .bind(1)
+            .bind(now)
+            .bind(now)
+            .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[test]
     fn classify_mission_track_is_server_authoritative_and_red_takes_priority() {
         let cases = [
@@ -1071,6 +1102,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
         agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
@@ -1126,10 +1158,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn green_execute_requires_active_model_provider_config() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-green-provider-required";
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze README.md".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK, "{created:?}");
+
+        let (status, Json(body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("MODEL_PROVIDER_NOT_CONFIGURED"));
+        assert_eq!(count_rows(&pool, "worker_runs", work_order_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn green_execute_routes_model_calls_to_active_provider_config_not_mock() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-green-active-model-routing";
+        let root = std::env::temp_dir().join(format!("coevo-active-model-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("mission-notes.md"), "active model routing evidence").unwrap();
+        std::env::set_var("COEVO_WORKSPACE_DIR", &root);
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze mission-notes.md for model routing".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK, "{created:?}");
+
+        let (status, Json(body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        let step_rows = sqlx::query(
+            "SELECT output_json FROM worker_steps WHERE step_type='ModelCall' AND run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?)",
+        )
+        .bind(work_order_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(!step_rows.is_empty());
+        for row in step_rows {
+            let output: String = row.get("output_json");
+            let decision: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(decision["selected_provider_id"], "desktop-test");
+            assert_ne!(decision["selected_model_id"], "mock-fast");
+            assert_ne!(decision["selected_model_id"], "mock-reasoning");
+        }
+    }
+
+    #[tokio::test]
     async fn audit_export_includes_work_order_execution_and_memory_evidence() {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
         agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
@@ -1236,6 +1374,7 @@ mod tests {
     async fn yellow_execute_creates_approval_request_and_rejects_unapproved_receipts() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
         agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());

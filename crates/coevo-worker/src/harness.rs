@@ -10,23 +10,25 @@ use crate::types::WorkerRun;
 use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::opc::*;
 use coevo_models::router::{
-    default_model_profiles, required_capabilities_for_step, ModelRouter, ModelRoutingRequest,
-    PrivacyLevel,
+    default_model_profiles, required_capabilities_for_step, ModelCapability, ModelProfile,
+    ModelRouter, ModelRoutingRequest, PrivacyLevel,
 };
-use coevo_store::repos::agent_worker_repo::AgentWorkerRepo;
+use coevo_models::types::{ModelProviderConfig, ModelProviderKind};
 use coevo_store::repos::worker_run_repo::{
     WorkerEventRepo, WorkerRunRepo, WorkerSkillUsageRepo, WorkerStepRepo, WorkerToolCallRepo,
 };
+use coevo_store::repos::{agent_worker_repo::AgentWorkerRepo, model_config_repo::ModelConfigRepo};
 use coevo_store::repos_opc::{memory_repo, work_order_repo};
-use std::path::PathBuf;
 use sqlx::SqlitePool;
 use sqlx::{Column, Row};
+use std::path::PathBuf;
 
 pub struct WorkerHarnessOptions {
     pub approval_receipt: Option<String>,
     pub max_runtime_ms: Option<i64>,
     pub deterministic_mode: bool,
     pub preferred_tool_ids: Vec<String>,
+    pub allow_mock_model_routing: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -95,7 +97,11 @@ fn looks_like_file_reference(token: &str) -> bool {
 }
 
 fn find_readonly_file_target(intent: &str, roots: &[PathBuf]) -> Option<PathBuf> {
-    for token in intent.split_whitespace().map(clean_path_token).filter(|t| looks_like_file_reference(t)) {
+    for token in intent
+        .split_whitespace()
+        .map(clean_path_token)
+        .filter(|t| looks_like_file_reference(t))
+    {
         let candidate = PathBuf::from(token);
         if candidate.is_absolute() && candidate.is_file() {
             return Some(candidate);
@@ -108,7 +114,12 @@ fn find_readonly_file_target(intent: &str, roots: &[PathBuf]) -> Option<PathBuf>
         }
     }
 
-    for fallback in ["README.md", "README.zh-CN.md", "mission-notes.md", "welcome.md"] {
+    for fallback in [
+        "README.md",
+        "README.zh-CN.md",
+        "mission-notes.md",
+        "welcome.md",
+    ] {
         for root in roots {
             let joined = root.join(fallback);
             if joined.is_file() {
@@ -117,6 +128,122 @@ fn find_readonly_file_target(intent: &str, roots: &[PathBuf]) -> Option<PathBuf>
         }
     }
     None
+}
+
+async fn model_profiles_for_execution(
+    pool: &SqlitePool,
+    allow_mock_model_routing: bool,
+) -> Result<Vec<ModelProfile>, WorkerError> {
+    let active = ModelConfigRepo::get_active_config(pool)
+        .await
+        .map_err(|e| WorkerError::Internal(e.to_string()))?;
+    match active {
+        Some(config) if config.kind != ModelProviderKind::Mock => Ok(model_profiles_from_config(&config)),
+        Some(_) if allow_mock_model_routing => Ok(default_model_profiles()),
+        Some(_) => Err(WorkerError::Internal(
+            "MODEL_PROVIDER_NOT_CONFIGURED: active provider is Mock; configure a real model provider before WorkOrder execution".into(),
+        )),
+        None if allow_mock_model_routing => Ok(default_model_profiles()),
+        None => Err(WorkerError::Internal(
+            "MODEL_PROVIDER_NOT_CONFIGURED: configure a real model provider before WorkOrder execution".into(),
+        )),
+    }
+}
+
+fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile> {
+    let provider_id = config.provider_id.clone();
+    let privacy_level = match config.kind {
+        ModelProviderKind::Local | ModelProviderKind::Ollama => PrivacyLevel::LocalOnly,
+        _ => PrivacyLevel::PublicApi,
+    };
+    let provider_name = format!("{:?}", config.kind);
+    let max_context_tokens = config.max_tokens.max(4096);
+    let base_caps = vec![
+        ModelCapability::FastText,
+        ModelCapability::Summarization,
+        ModelCapability::StructuredJSON,
+    ];
+    let profiles = [
+        (
+            config.fast_model.as_str(),
+            format!("{} Fast", provider_name),
+            base_caps.clone(),
+            true,
+            false,
+            300,
+        ),
+        (
+            config.default_model.as_str(),
+            format!("{} Default", provider_name),
+            vec![
+                ModelCapability::FastText,
+                ModelCapability::Summarization,
+                ModelCapability::StructuredJSON,
+                ModelCapability::DeepReasoning,
+                ModelCapability::ToolPlanning,
+                ModelCapability::CodeReview,
+                ModelCapability::LongContext,
+                ModelCapability::VisionUnderstanding,
+                ModelCapability::ImageGeneration,
+                ModelCapability::SlideGeneration,
+                ModelCapability::ThreeDGeneration,
+            ],
+            true,
+            true,
+            800,
+        ),
+        (
+            config.reasoning_model.as_str(),
+            format!("{} Reasoning", provider_name),
+            vec![
+                ModelCapability::DeepReasoning,
+                ModelCapability::ToolPlanning,
+                ModelCapability::RiskCritique,
+                ModelCapability::StructuredJSON,
+                ModelCapability::CodeGeneration,
+                ModelCapability::CodeReview,
+                ModelCapability::LongContext,
+                ModelCapability::SkillGeneration,
+            ],
+            true,
+            true,
+            1000,
+        ),
+        (
+            config.structured_output_model.as_str(),
+            format!("{} Structured", provider_name),
+            vec![
+                ModelCapability::StructuredJSON,
+                ModelCapability::FastText,
+                ModelCapability::Summarization,
+                ModelCapability::SkillGeneration,
+            ],
+            true,
+            false,
+            600,
+        ),
+    ];
+    let mut out = vec![];
+    for (model_id, display_name, capabilities, supports_json, supports_tools, latency) in profiles {
+        if model_id.trim().is_empty() || out.iter().any(|p: &ModelProfile| p.model_id == model_id) {
+            continue;
+        }
+        out.push(ModelProfile {
+            provider_id: provider_id.clone(),
+            model_id: model_id.to_string(),
+            display_name,
+            capabilities,
+            max_context_tokens,
+            cost_per_1k_input_usd: 0.0,
+            cost_per_1k_output_usd: 0.0,
+            avg_latency_ms: latency,
+            supports_json,
+            supports_tools,
+            privacy_level,
+            enabled: true,
+        });
+    }
+    out
 }
 
 async fn step_create(
@@ -158,6 +285,8 @@ impl WorkerHarness {
         let now = || chrono::Utc::now().timestamp_millis();
         let mut steps: Vec<serde_json::Value> = vec![];
         let mut mem_ids: Vec<String> = vec![];
+        let model_profiles =
+            model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
 
         let wo = work_order_repo::WorkOrderRepo::get(pool, work_order_id)
             .await
@@ -412,18 +541,22 @@ impl WorkerHarness {
             privacy_boundary: PrivacyLevel::PublicApi,
             preferred_model_id: None,
         };
-        let route_decision = ModelRouter::route(&route_req, &default_model_profiles(), None)
-            .unwrap_or_else(|_| coevo_models::router::ModelRoutingDecision {
-                selected_provider_id: "mock".into(),
-                selected_model_id: "mock-fast".into(),
-                selected_capabilities: vec![],
-                reason: "NoModelAvailable — using mock".into(),
-                fallback_model_ids: vec![],
-                estimated_cost_usd: None,
-                estimated_latency_ms: None,
-                governance_notes: vec!["ModelRouter failed, using mock fallback".into()],
-                decision_id: format!("mrd-{}", uuid::Uuid::new_v4()),
-                created_at_ms: now(),
+        let route_decision =
+            ModelRouter::route(&route_req, &model_profiles, None).unwrap_or_else(|_| {
+                coevo_models::router::ModelRoutingDecision {
+                    selected_provider_id: "unavailable".into(),
+                    selected_model_id: "unavailable".into(),
+                    selected_capabilities: vec![],
+                    reason: "NoModelAvailable for configured provider profiles".into(),
+                    fallback_model_ids: vec![],
+                    estimated_cost_usd: None,
+                    estimated_latency_ms: None,
+                    governance_notes: vec![
+                        "ModelRouter failed for configured provider profiles".into()
+                    ],
+                    decision_id: format!("mrd-{}", uuid::Uuid::new_v4()),
+                    created_at_ms: now(),
+                }
             });
         step_create(
             pool,
@@ -552,7 +685,10 @@ impl WorkerHarness {
             content: if last_tool_summary.is_empty() {
                 format!("Harness: {}", wo.mission_intent)
             } else {
-                format!("Harness: {}\nTool evidence: {}", wo.mission_intent, last_tool_summary)
+                format!(
+                    "Harness: {}\nTool evidence: {}",
+                    wo.mission_intent, last_tool_summary
+                )
             },
             tags: vec![],
             source: "worker-harness".into(),
@@ -614,7 +750,7 @@ impl WorkerHarness {
                 privacy_boundary: PrivacyLevel::PublicApi,
                 preferred_model_id: None,
             },
-            &default_model_profiles(),
+            &model_profiles,
             None,
         );
         if let Ok(ref d) = reflect_route {
@@ -676,7 +812,7 @@ impl WorkerHarness {
                 privacy_boundary: PrivacyLevel::PublicApi,
                 preferred_model_id: None,
             },
-            &default_model_profiles(),
+            &model_profiles,
             None,
         );
         if let Ok(ref d) = skill_route {

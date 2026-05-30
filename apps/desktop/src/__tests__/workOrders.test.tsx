@@ -61,6 +61,48 @@ describe("WorkOrders", () => {
     expect(button).toBeDisabled();
   });
 
+  it("does not show ordinary Execute for completed rows", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-done", mission_intent: "Analyze README", status: "Completed" }),
+    ]);
+
+    render(<WorkOrders />);
+
+    expect(await screen.findByRole("button", { name: "View Result" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run again" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
+  });
+
+  it("renders Green execution result inline and auto-loads the row timeline", async () => {
+    api.listWorkOrders
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Planned" }),
+      ])
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Completed" }),
+      ]);
+    api.executeWorkOrder.mockResolvedValue({
+      ok: true,
+      status: "Completed",
+      summary: "WorkerHarness Completed execution.",
+      memory_ids: ["tm-1"],
+      worker_runs: [{ run_id: "run-1", status: "Completed" }],
+      worker_steps: [{ step_id: "s-1" }, { step_id: "s-2" }],
+      tool_calls: [{ tool_id: "file-readonly", success: true }],
+    });
+    api.getWorkOrderTimeline.mockResolvedValue([{ type: "LifecycleEnd", title: "Completed" }]);
+
+    render(<WorkOrders />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-green", {}));
+    expect(await screen.findByText("WorkerHarness Completed execution.")).toBeInTheDocument();
+    expect(screen.getByText(/Memory/)).toHaveTextContent("tm-1");
+    await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-green"));
+    expect(screen.getByText("LifecycleEnd")).toBeInTheDocument();
+  });
+
   it("submits Yellow work for approval instead of implying direct execution", async () => {
     api.listWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft announcement", track: "yellow" }),
@@ -72,7 +114,7 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Submit for Approval" }));
 
     await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-yellow", {}));
-    expect(screen.getByText(/Submit for Approval:.*WaitingApproval/)).toBeInTheDocument();
+    expect(screen.getByText(/WaitingApproval/)).toBeInTheDocument();
   });
 
   it("explains that Red work has no execution timeline in Alpha", async () => {

@@ -9,16 +9,22 @@ import {
 } from "../api/client";
 import { t, useLanguage } from "../settings/i18n";
 
+type RowResult = {
+  label: string;
+  payload: Record<string, unknown>;
+};
+
 export default function WorkOrders() {
   useLanguage();
   const [orders, setOrders] = useState<Record<string,unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState("");
+  const [rowResults, setRowResults] = useState<Record<string, RowResult>>({});
+  const [runningIds, setRunningIds] = useState<Record<string, boolean>>({});
   const [fbText, setFbText] = useState("");
   const [fbWoId, setFbWoId] = useState("");
-  const [timelineWoId, setTimelineWoId] = useState("");
-  const [timelineTrack, setTimelineTrack] = useState("");
-  const [timeline, setTimeline] = useState<Record<string,unknown>[]>([]);
+  const [timelineWoIds, setTimelineWoIds] = useState<Record<string, string>>({});
+  const [timelines, setTimelines] = useState<Record<string, Record<string,unknown>[]>>({});
 
   async function load() {
     setLoading(true);
@@ -41,11 +47,39 @@ export default function WorkOrders() {
   }
 
   async function showTimeline(id: string, track: string) {
-    setTimelineWoId(id);
-    setTimelineTrack(track);
-    setTimeline([]);
-    try { setTimeline(await getWorkOrderTimeline(id)); }
+    setTimelineWoIds((prev) => ({ ...prev, [id]: track }));
+    setTimelines((prev) => ({ ...prev, [id]: [] }));
+    try {
+      const items = await getWorkOrderTimeline(id);
+      setTimelines((prev) => ({ ...prev, [id]: items }));
+    }
     catch(e:unknown) { setResult(`${t("workorders.result_timeline_error")}: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+
+  async function executeRow(id: string, track: string, rerun = false) {
+    setRunningIds((prev) => ({ ...prev, [id]: true }));
+    setRowResults((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      const label = track === "yellow" ? t("workorders.submit_approval") : rerun ? t("workorders.run_again") : t("workorders.execute");
+      const payload = await executeWorkOrder(id, rerun ? { rerun: true } : {}) as Record<string, unknown>;
+      setRowResults((prev) => ({ ...prev, [id]: { label, payload } }));
+      await load();
+      await showTimeline(id, track);
+    } catch(e:unknown) {
+      setRowResults((prev) => ({
+        ...prev,
+        [id]: {
+          label: t("workorders.result_error"),
+          payload: { error: e instanceof Error ? e.message : String(e) },
+        },
+      }));
+    } finally {
+      setRunningIds((prev) => ({ ...prev, [id]: false }));
+    }
   }
 
   return (
@@ -57,27 +91,6 @@ export default function WorkOrders() {
 
       {result && <div className="card"><pre className="text-xs whitespace-pre-wrap" style={{color:"var(--text-secondary)"}}>{result}</pre></div>}
 
-      {timelineWoId && (
-        <div className="card">
-          <div className="text-xs font-semibold mb-2" style={{color:"var(--text-primary)"}}>{t("workorders.timeline")}: {timelineWoId}</div>
-          {timeline.length === 0 && (
-            <div className="text-xs" style={{color:"var(--text-muted)"}}>
-              {timelineTrack === "red"
-                ? t("workorders.red_no_timeline")
-                : t("workorders.empty_timeline")}
-            </div>
-          )}
-          <div className="space-y-2">
-            {timeline.slice(0, 20).map((item, i) => (
-              <div key={i} className="text-xs flex gap-2">
-                <span className="font-mono" style={{color:"var(--accent)"}}>{String(item.type || item.title || "event")}</span>
-                <span style={{color:"var(--text-secondary)"}}>{String(item.title || "")}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {loading && <div className="text-xs" style={{color:"var(--text-muted)"}}>{t("workorders.loading")}</div>}
 
       <div className="space-y-2">
@@ -85,6 +98,11 @@ export default function WorkOrders() {
           const id = String(o.work_order_id || "");
           const track = String(o.track || "");
           const status = String(o.status || "");
+          const running = Boolean(runningIds[id]) || status === "Running";
+          const completed = status === "Completed";
+          const rowResult = rowResults[id];
+          const timelineTrack = timelineWoIds[id];
+          const timeline = timelines[id] || [];
           return (
             <div key={id || i} className="card">
               <div className="flex items-center justify-between mb-1">
@@ -112,14 +130,22 @@ export default function WorkOrders() {
                   <div style={{color:"var(--yellow)"}}>{t("workorders.yellow_notice")}</div>
                 )}
                 <div className="flex gap-2 mt-2 flex-wrap items-center">
-                  <button
-                    onClick={() => act(() => executeWorkOrder(id, {}), track === "yellow" ? t("workorders.submit_approval") : t("workorders.execute"))}
-                    disabled={track === "red"}
-                    className="px-2 py-1 text-xs rounded border"
-                    style={{borderColor:track === "red" ? "var(--red)" : "var(--accent)", color:track === "red" ? "var(--red)" : "var(--accent)", opacity:track === "red" ? 0.5 : 1}}
-                  >
-                    {track === "yellow" ? t("workorders.submit_approval") : track === "red" ? t("workorders.execute_blocked") : t("workorders.execute")}
-                  </button>
+                  {!completed && (
+                    <button
+                      onClick={() => executeRow(id, track)}
+                      disabled={track === "red" || running}
+                      className="px-2 py-1 text-xs rounded border"
+                      style={{borderColor:track === "red" ? "var(--red)" : "var(--accent)", color:track === "red" ? "var(--red)" : "var(--accent)", opacity:track === "red" || running ? 0.5 : 1}}
+                    >
+                      {running ? t("workorders.running") : track === "yellow" ? t("workorders.submit_approval") : track === "red" ? t("workorders.execute_blocked") : t("workorders.execute")}
+                    </button>
+                  )}
+                  {completed && (
+                    <>
+                      <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.view_result")}</button>
+                      <button onClick={() => executeRow(id, track, true)} disabled={running} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)", opacity:running ? 0.5 : 1}}>{running ? t("workorders.running") : t("workorders.run_again")}</button>
+                    </>
+                  )}
                   <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.view_timeline")}</button>
                   <button onClick={() => act(() => getWorkOrderAuditExport(id), t("workorders.export_audit"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.export_audit")}</button>
                   <button onClick={() => act(() => cancelWorkOrder(id), t("workorders.cancel"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>{t("workorders.cancel")}</button>
@@ -132,10 +158,56 @@ export default function WorkOrders() {
                   />
                   <button onClick={() => act(() => submitWorkOrderFeedback(id, fbText), t("workorders.feedback"))} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--yellow)",color:"var(--yellow)"}}>{t("workorders.feedback")}</button>
                 </div>
+                {rowResult && (
+                  <ExecutionSummary result={rowResult} />
+                )}
+                {timelineTrack && (
+                  <div className="mt-3 rounded border p-3" style={{ borderColor: "var(--border-subtle)", background: "#fff" }}>
+                    <div className="text-xs font-semibold mb-2" style={{color:"var(--text-primary)"}}>{t("workorders.timeline")}: {id}</div>
+                    {timeline.length === 0 && (
+                      <div className="text-xs" style={{color:"var(--text-muted)"}}>
+                        {timelineTrack === "red" ? t("workorders.red_no_timeline") : t("workorders.empty_timeline")}
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      {timeline.slice(0, 20).map((item, timelineIndex) => (
+                        <div key={timelineIndex} className="text-xs flex gap-2">
+                          <span className="font-mono" style={{color:"var(--accent)"}}>{String(item.type || item.title || "event")}</span>
+                          <span style={{color:"var(--text-secondary)"}}>{String(item.title || "")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function ExecutionSummary({ result }: { result: RowResult }) {
+  const payload = result.payload;
+  const status = String(payload.status || "");
+  const summary = String(payload.summary || payload.message || payload.error || "");
+  const approvalId = String(payload.approval_id || "");
+  const memoryIds = Array.isArray(payload.memory_ids) ? payload.memory_ids.map(String) : [];
+  const runs = Array.isArray(payload.worker_runs) ? payload.worker_runs : [];
+  const steps = Array.isArray(payload.worker_steps) ? payload.worker_steps : [];
+  const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
+
+  return (
+    <div className="mt-3 rounded border p-3 text-xs" style={{ borderColor: "var(--border-subtle)", background: "#fff", color: "var(--text-secondary)" }}>
+      <div className="font-semibold" style={{ color: "var(--text-primary)" }}>{result.label}: {status || "ok"}</div>
+      {summary && <div className="mt-1">{summary}</div>}
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+        {approvalId && <span>{t("workorders.summary_approval")}: <span className="font-mono">{approvalId}</span></span>}
+        {runs.length > 0 && <span>{t("workorders.summary_runs")}: {runs.length}</span>}
+        {steps.length > 0 && <span>{t("workorders.summary_steps")}: {steps.length}</span>}
+        {toolCalls.length > 0 && <span>{t("workorders.summary_tools")}: {toolCalls.map((tc) => String((tc as Record<string, unknown>).tool_id || "tool")).join(", ")}</span>}
+        {memoryIds.length > 0 && <span>{t("workorders.summary_memory")}: <span className="font-mono">{memoryIds.join(", ")}</span></span>}
       </div>
     </div>
   );
