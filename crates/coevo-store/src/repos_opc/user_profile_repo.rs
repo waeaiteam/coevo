@@ -1,5 +1,8 @@
-use sqlx::{SqlitePool, Row};
+use crate::enum_db::{
+    mission_mode_from_db, mission_mode_to_db, risk_preference_from_db, risk_preference_to_db,
+};
 use coevo_core::opc::*;
+use sqlx::{Row, SqlitePool};
 
 pub struct UserProfileRepo;
 impl UserProfileRepo {
@@ -11,8 +14,8 @@ impl UserProfileRepo {
     pub async fn upsert(pool: &SqlitePool, p: &UserProfile) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT OR REPLACE INTO user_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
             .bind(&p.user_id).bind(&p.display_name).bind(&p.preferred_language).bind(&p.timezone)
-            .bind(serde_json::to_string(&p.risk_preference).unwrap().trim_matches('"'))
-            .bind(serde_json::to_string(&p.default_mission_mode).unwrap().trim_matches('"'))
+            .bind(risk_preference_to_db(p.risk_preference))
+            .bind(mission_mode_to_db(p.default_mission_mode))
             .bind(serde_json::to_string(&p.long_term_goals).unwrap())
             .bind(serde_json::to_string(&p.business_domains).unwrap())
             .bind(&p.communication_style)
@@ -31,8 +34,8 @@ impl UserProfileRepo {
         UserProfile{
             user_id: row.get("user_id"), display_name: row.get("display_name"),
             preferred_language: row.get("preferred_language"), timezone: row.get("timezone"),
-            risk_preference: serde_json::from_str(&format!("\"{}\"",risk_s)).unwrap_or(RiskPreference::Balanced),
-            default_mission_mode: serde_json::from_str(&format!("\"{}\"",mode_s)).unwrap_or(MissionMode::Auto),
+            risk_preference: risk_preference_from_db(&risk_s),
+            default_mission_mode: mission_mode_from_db(&mode_s),
             long_term_goals: serde_json::from_str(row.get("long_term_goals_json")).unwrap_or_default(),
             business_domains: serde_json::from_str(row.get("business_domains_json")).unwrap_or_default(),
             communication_style: row.get("communication_style"),
@@ -44,5 +47,68 @@ impl UserProfileRepo {
             created_at_ms: row.get::<i64,_>("created_at_ms") as u64,
             updated_at_ms: row.get::<i64,_>("updated_at_ms") as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserProfileRepo;
+    use coevo_core::opc::{
+        ApprovalPreferences, BudgetLimits, MissionMode, RiskPreference, UserProfile,
+    };
+    use crate::{migrate::run_migrations, pool::create_test_pool};
+    use sqlx::Row;
+
+    #[tokio::test]
+    async fn upsert_user_profile_uses_db_enum_values_and_round_trips() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let profile = UserProfile {
+            user_id: "default-founder".to_string(),
+            display_name: "Founder".to_string(),
+            preferred_language: "en".to_string(),
+            timezone: "UTC".to_string(),
+            risk_preference: RiskPreference::Conservative,
+            default_mission_mode: MissionMode::ReadOnly,
+            long_term_goals: vec!["Build governed agents".to_string()],
+            business_domains: vec!["Product".to_string()],
+            communication_style: "concise".to_string(),
+            approval_preferences: ApprovalPreferences {
+                auto_approve_below_risk: 0.15,
+                require_explicit_for_yellow: true,
+                require_mfa_for_red: true,
+                negative_consent_timeout_secs: 300,
+            },
+            data_boundaries: vec!["local".to_string()],
+            budget_limits: BudgetLimits {
+                max_cost_per_task_usd: 5.0,
+                max_cost_per_day_usd: 25.0,
+                max_agents_per_task: 3,
+            },
+            favorite_tools: vec![],
+            active_projects: vec![],
+            created_at_ms: 1,
+            updated_at_ms: 2,
+        };
+
+        UserProfileRepo::upsert(&pool, &profile).await.unwrap();
+
+        let row = sqlx::query(
+            "SELECT risk_preference, default_mission_mode FROM user_profiles WHERE user_id=?",
+        )
+        .bind("default-founder")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("risk_preference"), "Conservative");
+        assert_eq!(row.get::<String, _>("default_mission_mode"), "ReadOnly");
+
+        let round_trip = UserProfileRepo::get(&pool, "default-founder")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(round_trip.risk_preference, RiskPreference::Conservative);
+        assert_eq!(round_trip.default_mission_mode, MissionMode::ReadOnly);
     }
 }

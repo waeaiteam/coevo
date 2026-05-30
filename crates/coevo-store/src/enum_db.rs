@@ -1,6 +1,6 @@
 use coevo_core::opc::{
     Department, ExecutorSourceType, ExecutorStatus, LifecycleStatus, MemoryScope, MemoryStatus,
-    SandboxLevel,
+    MissionMode, RiskPreference, SandboxLevel,
 };
 use coevo_core::skills::SkillStatus;
 
@@ -162,6 +162,40 @@ pub(crate) fn executor_status_from_db(value: &str) -> ExecutorStatus {
         "Registered" | "registered" => ExecutorStatus::Registered,
         "Disabled" | "disabled" => ExecutorStatus::Disabled,
         _ => ExecutorStatus::Draft,
+    }
+}
+
+pub(crate) fn risk_preference_to_db(value: RiskPreference) -> &'static str {
+    match value {
+        RiskPreference::Conservative => "Conservative",
+        RiskPreference::Balanced => "Balanced",
+        RiskPreference::Aggressive => "Aggressive",
+    }
+}
+
+pub(crate) fn risk_preference_from_db(value: &str) -> RiskPreference {
+    match value {
+        "Conservative" | "conservative" => RiskPreference::Conservative,
+        "Aggressive" | "aggressive" => RiskPreference::Aggressive,
+        _ => RiskPreference::Balanced,
+    }
+}
+
+pub(crate) fn mission_mode_to_db(value: MissionMode) -> &'static str {
+    match value {
+        MissionMode::Auto => "Auto",
+        MissionMode::ReadOnly => "ReadOnly",
+        MissionMode::Collaborative => "Collaborative",
+        MissionMode::HighRiskRequest => "HighRiskRequest",
+    }
+}
+
+pub(crate) fn mission_mode_from_db(value: &str) -> MissionMode {
+    match value {
+        "ReadOnly" | "read_only" | "readonly" => MissionMode::ReadOnly,
+        "Collaborative" | "collaborative" => MissionMode::Collaborative,
+        "HighRiskRequest" | "high_risk_request" | "high-risk" => MissionMode::HighRiskRequest,
+        _ => MissionMode::Auto,
     }
 }
 
