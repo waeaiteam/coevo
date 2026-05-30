@@ -1,19 +1,41 @@
 //! Mock Model Gateway — returns structured, testable content. No API key needed.
 
-use async_trait::async_trait;
-use crate::types::*;
 use crate::gateway::ModelGateway;
+use crate::types::*;
+use async_trait::async_trait;
 
 pub struct MockModelGateway;
 
 #[async_trait]
 impl ModelGateway for MockModelGateway {
-    async fn test_connection(&self, _config: &ModelProviderConfig) -> Result<ModelResponse, ModelError> {
+    async fn test_connection(
+        &self,
+        _config: &ModelProviderConfig,
+    ) -> Result<ModelResponse, ModelError> {
         Ok(ModelResponse {
-            content: "OK".into(), json: None,
-            usage: ModelUsage::default(), latency_ms: 1,
-            model: "mock-model".into(), finish_reason: "stop".into(),
+            content: "OK".into(),
+            json: None,
+            usage: ModelUsage::default(),
+            latency_ms: 1,
+            model: "mock-model".into(),
+            finish_reason: "stop".into(),
             provider_kind: ModelProviderKind::Mock,
+        })
+    }
+
+    async fn discover_models(
+        &self,
+        _config: &ModelProviderConfig,
+    ) -> Result<ModelDiscoveryResponse, ModelError> {
+        Ok(ModelDiscoveryResponse {
+            models: vec![DiscoveredModel {
+                id: "mock-model".into(),
+                display_name: "Mock Model".into(),
+                max_context_tokens: Some(4096),
+                max_output_tokens: Some(4096),
+                supports_json: true,
+                supports_reasoning: false,
+            }],
         })
     }
 
@@ -22,10 +44,22 @@ impl ModelGateway for MockModelGateway {
             ModelRole::Synthesizer => "This task was executed by coevo-opc on Green Track. Founder Assistant and Synthesizer participated. Mock OpenClaw Executor completed dry-run/execute. Results were written to Task Memory. No approval was required. The governance mesh preserved full audit trace.".into(),
             _ => "Mock chat response for role.".into(),
         };
-        Ok(ModelResponse { content, json: None, usage: ModelUsage::default(), latency_ms: 1, model: "mock-model".into(), finish_reason: "stop".into(), provider_kind: ModelProviderKind::Mock })
+        Ok(ModelResponse {
+            content,
+            json: None,
+            usage: ModelUsage::default(),
+            latency_ms: 1,
+            model: "mock-model".into(),
+            finish_reason: "stop".into(),
+            provider_kind: ModelProviderKind::Mock,
+        })
     }
 
-    async fn structured(&self, request: &ModelRequest, _schema: &serde_json::Value) -> Result<ModelResponse, ModelError> {
+    async fn structured(
+        &self,
+        request: &ModelRequest,
+        _schema: &serde_json::Value,
+    ) -> Result<ModelResponse, ModelError> {
         let json = match request.role {
             ModelRole::MissionDraft => serde_json::json!({
                 "goal_summary": "Summarize coevo-opc progress and propose next roadmap",
@@ -47,6 +81,14 @@ impl ModelGateway for MockModelGateway {
             }),
             _ => serde_json::json!({"mock": true, "role": format!("{:?}", request.role)}),
         };
-        Ok(ModelResponse { content: serde_json::to_string(&json).unwrap(), json: Some(json), usage: ModelUsage::default(), latency_ms: 1, model: "mock-model".into(), finish_reason: "stop".into(), provider_kind: ModelProviderKind::Mock })
+        Ok(ModelResponse {
+            content: serde_json::to_string(&json).unwrap(),
+            json: Some(json),
+            usage: ModelUsage::default(),
+            latency_ms: 1,
+            model: "mock-model".into(),
+            finish_reason: "stop".into(),
+            provider_kind: ModelProviderKind::Mock,
+        })
     }
 }

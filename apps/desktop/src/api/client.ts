@@ -1,4 +1,5 @@
 import type { HealthResponse, ContractResponse } from "../types";
+import { getTenantId } from "../settings/identity";
 
 export type { HealthResponse, ContractResponse } from "../types";
 
@@ -8,7 +9,7 @@ export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-
 export function headers(): Record<string, string> {
   return {
     "Content-Type": "application/json",
-    "x-coevo-tenant-id": "desktop-tenant",
+    "x-coevo-tenant-id": getTenantId(),
     "x-coevo-actor-role": "Admin",
     "x-coevo-contract-hash": "0".repeat(64),
     "x-coevo-policy-version": "0".repeat(64),
@@ -126,6 +127,7 @@ export async function getWorkOrderAuditExport(id: string): Promise<Record<string
 export async function getModelConfig() { return get("/opc/models/config"); }
 export async function updateModelConfig(config: Record<string,unknown>) { return put("/opc/models/config", config); }
 export async function testModelConnection(config?: Record<string,unknown>) { return post("/opc/models/test", config ? { config } : {}); }
+export async function discoverModels(config: Record<string,unknown>) { return post("/opc/models/discover", { config }); }
 export async function modelChat(payload: Record<string,unknown>) { return post("/opc/models/chat", payload); }
 export async function modelStructured(payload: Record<string,unknown>) { return post("/opc/models/structured", payload); }
 export async function listModelProfiles(): Promise<Record<string,unknown>[]> { return get("/opc/models/profiles"); }

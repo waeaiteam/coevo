@@ -22,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
         // Model routes
         .route("/opc/models/config", get(handlers::models::get_config_handler).put(handlers::models::put_config_handler))
         .route("/opc/models/test", post(handlers::models::test_connection))
+        .route("/opc/models/discover", post(handlers::models::discover_models))
         .route("/opc/models/chat", post(handlers::models::chat))
         .route("/opc/models/structured", post(handlers::models::structured))
         .route("/opc/models/profiles", get(handlers::models::list_model_profiles))

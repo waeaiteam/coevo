@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import FirstRun from "../components/FirstRun";
 import Settings from "../pages/Settings";
+import { t } from "../settings/i18n";
 import { MODEL_PROVIDER_CONFIGURED_KEY } from "../settings/onboarding";
 
 const api = vi.hoisted(() => ({
   updateModelConfig: vi.fn(),
   testModelConnection: vi.fn(),
+  discoverModels: vi.fn(),
   listEmployees: vi.fn(),
   seedEmployees: vi.fn(),
   listSkills: vi.fn(),
@@ -19,6 +21,7 @@ vi.mock("../api/client", () => ({
   getApiBase: () => "http://127.0.0.1:8717",
   updateModelConfig: api.updateModelConfig,
   testModelConnection: api.testModelConnection,
+  discoverModels: api.discoverModels,
   listEmployees: api.listEmployees,
   seedEmployees: api.seedEmployees,
   listSkills: api.listSkills,
@@ -30,6 +33,7 @@ describe("Desktop onboarding", () => {
     localStorage.clear();
     api.updateModelConfig.mockReset();
     api.testModelConnection.mockReset();
+    api.discoverModels.mockReset();
     api.listEmployees.mockReset();
     api.seedEmployees.mockReset();
     api.listSkills.mockReset();
@@ -40,7 +44,7 @@ describe("Desktop onboarding", () => {
     cleanup();
   });
 
-  it("FirstRun does not show the mock quick start path", () => {
+  it("FirstRun starts with Create OPC instead of raw model setup", () => {
     const oldQuickStart = ["Quick Start", "with Mock"].join(" ");
     const oldMockCopy = new RegExp(["Mock mode", "uses"].join(" "), "i");
 
@@ -52,10 +56,12 @@ describe("Desktop onboarding", () => {
 
     expect(screen.queryByText(oldQuickStart)).not.toBeInTheDocument();
     expect(screen.queryByText(oldMockCopy)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Configure Model Provider|Enter API Key/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Create your OPC/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create OPC/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Configure Model Provider|Enter API Key/i })).not.toBeInTheDocument();
   });
 
-  it("FirstRun opens model provider settings", async () => {
+  it("FirstRun creates local OPC identity before opening model setup", async () => {
     const onDone = vi.fn();
     render(
       <MemoryRouter initialEntries={["/"]}>
@@ -66,8 +72,17 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Configure Model Provider|Enter API Key/i }));
+    fireEvent.change(screen.getByLabelText(/OPC name/i), {
+      target: { value: "WAE AI Team" },
+    });
+    fireEvent.change(screen.getByLabelText(/Owner name/i), {
+      target: { value: "Wae" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create OPC/i }));
 
+    expect(localStorage.getItem("coevo-opc-name")).toBe("WAE AI Team");
+    expect(localStorage.getItem("coevo-user-name")).toBe("Wae");
+    expect(localStorage.getItem("coevo-tenant-id")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(onDone).toHaveBeenCalled();
     expect(await screen.findByText("Model Provider Settings")).toBeInTheDocument();
   });
@@ -126,7 +141,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole("combobox")).toHaveValue("openai-compatible");
+    expect(screen.getAllByRole("combobox")[0]).toHaveValue("openai");
     expect(screen.queryByRole("option", { name: /Mock/i })).not.toBeInTheDocument();
   });
 
@@ -136,6 +151,13 @@ describe("Desktop onboarding", () => {
       model: "gpt-4o",
       latency_ms: 12,
       provider_kind: "OpenAICompatible",
+    });
+    api.discoverModels.mockResolvedValue({
+      models: [
+        { id: "gpt-4o", display_name: "gpt-4o", max_output_tokens: 16384 },
+        { id: "gpt-4o-mini", display_name: "gpt-4o-mini", max_output_tokens: 16384 },
+        { id: "o3-mini", display_name: "o3-mini", max_output_tokens: 100000 },
+      ],
     });
     api.listEmployees
       .mockResolvedValueOnce([])
@@ -154,9 +176,16 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save & Test Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true"));
+    expect(api.discoverModels).toHaveBeenCalledTimes(1);
+    expect(api.updateModelConfig).toHaveBeenCalledWith(expect.objectContaining({
+      default_model: "gpt-4o",
+      fast_model: "gpt-4o-mini",
+      reasoning_model: "o3-mini",
+      structured_output_model: "gpt-4o",
+    }));
     expect(api.seedEmployees).toHaveBeenCalledTimes(1);
     expect(api.seedSkills).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument();
@@ -179,7 +208,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save & Test Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => expect(screen.getByText(/Workspace bootstrap failed/i)).toBeInTheDocument());
     expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
@@ -201,7 +230,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save & Test Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => expect(screen.getByText(/config rejected/i)).toBeInTheDocument());
     expect(api.testModelConnection).toHaveBeenCalledTimes(1);
@@ -219,10 +248,29 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save & Test Connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => expect(screen.getByText(/connection failed/i)).toBeInTheDocument());
     expect(api.updateModelConfig).not.toHaveBeenCalled();
     expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
+  });
+
+  it("Model Provider hides advanced transport and token fields by default", () => {
+    render(
+      <MemoryRouter initialEntries={["/settings/model_provider"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText(t("settings.base_url"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("settings.max_tokens"))).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/i }));
+
+    expect(screen.getByText(t("settings.base_url"))).toBeInTheDocument();
+    expect(screen.getByText(t("settings.max_tokens"))).toBeInTheDocument();
   });
 });

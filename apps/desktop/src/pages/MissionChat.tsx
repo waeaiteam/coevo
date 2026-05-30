@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ensureWorkspaceDefaults } from "../api/bootstrap";
 import { compileContract, createWorkOrder, modelChat, routePlan } from "../api/client";
 import { useGovernance } from "../hooks/useGovernance";
+import { getLocalIdentity } from "../settings/identity";
 import { inferTrackFromIntent } from "../utils/trackInference";
 
 type Msg = { role: "user" | "system"; text: string };
@@ -50,11 +51,12 @@ export default function MissionChat() {
         return null;
       }) as Record<string, unknown> | null;
       const cognitionText = String(cognition?.content || "").trim();
+      const identity = getLocalIdentity();
       const created = await createWorkOrder({
         contract_hash: contractHash,
         plan_hash: planHash,
-        user_id: "default-founder",
-        opc_id: "default-opc",
+        user_id: identity.userId,
+        opc_id: identity.opcId,
         mission_intent: text,
         selected_agents: bootstrap.selectedAgentIds,
         selected_executors: [],

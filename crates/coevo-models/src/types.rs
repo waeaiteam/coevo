@@ -65,6 +65,21 @@ pub struct ModelResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelUsage { pub prompt_tokens: u64, pub completion_tokens: u64, pub total_tokens: u64 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredModel {
+    pub id: String,
+    pub display_name: String,
+    pub max_context_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub supports_json: bool,
+    pub supports_reasoning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDiscoveryResponse {
+    pub models: Vec<DiscoveredModel>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelError {
     #[error("API key is required but missing")]

@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   executorHealth: vi.fn(),
   executorDryRun: vi.fn(),
   listWorkOrders: vi.fn(),
+  discoverModels: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
@@ -25,6 +26,7 @@ vi.mock("../api/client", () => ({
   executorHealth: api.executorHealth,
   executorDryRun: api.executorDryRun,
   listWorkOrders: api.listWorkOrders,
+  discoverModels: api.discoverModels,
 }));
 
 vi.mock("../components/BootPage", () => ({
@@ -47,10 +49,16 @@ describe("ordinary user product surface", () => {
   });
 
   it("Dashboard does not expose demo action controls", () => {
+    localStorage.setItem("coevo-opc-name", "WAE AI Team");
+    localStorage.setItem("coevo-user-name", "Wae");
+    localStorage.setItem("coevo-opc-id", "opc-123");
+
     render(<Dashboard />);
 
     expect(screen.queryByText("Demo Actions")).not.toBeInTheDocument();
-    expect(screen.getByText("Governed WorkOrders")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "WAE AI Team" })).toBeInTheDocument();
+    expect(screen.getByText("Owner")).toBeInTheDocument();
+    expect(screen.getByText("Wae")).toBeInTheDocument();
   });
 
   it("does not expose a Demos route in the ordinary desktop app", async () => {
@@ -66,6 +74,31 @@ describe("ordinary user product surface", () => {
 
     await waitFor(() => expect(screen.queryByText("Welcome to coevo")).not.toBeInTheDocument());
     expect(screen.queryByText("Demo Scenarios")).not.toBeInTheDocument();
+  });
+
+  it("primary sidebar exposes only the core OPC workflow", async () => {
+    localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
+
+    await waitFor(() => expect(screen.getByRole("link", { name: /New Chat/i })).toBeInTheDocument());
+    expect(screen.getByRole("link", { name: /^OPC$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /WorkOrders/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Audit/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Settings/i })).toBeInTheDocument();
+
+    expect(screen.queryByRole("link", { name: /AI Employees/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Skills$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Executors/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Contracts$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^Plans$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Risk Gate/i })).not.toBeInTheDocument();
   });
 
   it("Developer Mode does not expose demo reset controls", () => {

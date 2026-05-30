@@ -1,11 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
-import { getHealth, headers, ApiError, get, post, createWorkOrder, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, testModelConnection } from "../api/client";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, testModelConnection } from "../api/client";
 
 describe("API Client", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it("constructs coevo metadata headers", () => {
     const h = headers();
     expect(h["Content-Type"]).toBe("application/json");
-    expect(h["x-coevo-tenant-id"]).toBe("desktop-tenant");
+    expect(h["x-coevo-tenant-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(localStorage.getItem("coevo-tenant-id")).toBe(h["x-coevo-tenant-id"]);
+    expect(headers()["x-coevo-tenant-id"]).toBe(h["x-coevo-tenant-id"]);
     expect(h["x-coevo-actor-role"]).toBe("Admin");
     expect(h["x-coevo-contract-hash"]).toHaveLength(64);
     expect(h["x-coevo-policy-version"]).toHaveLength(64);
@@ -128,6 +134,24 @@ describe("API Client", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({}),
+      })
+    );
+  });
+
+  it("discoverModels tests a candidate config without relying on persisted config", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ models: [{ id: "gpt-4o" }] }),
+    });
+
+    await discoverModels({ provider_id: "desktop", kind: "OpenAI", api_key: "sk-test" });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:8717/opc/models/discover",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ config: { provider_id: "desktop", kind: "OpenAI", api_key: "sk-test" } }),
       })
     );
   });

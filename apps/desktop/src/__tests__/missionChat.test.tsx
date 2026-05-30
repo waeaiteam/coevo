@@ -39,6 +39,7 @@ function renderMissionChat() {
 
 describe("MissionChat WorkOrder creation", () => {
   beforeEach(() => {
+    localStorage.clear();
     api.compileContract.mockResolvedValue({
       contract: { mission: "Analyze the README" },
       contract_hash: "a".repeat(64),
@@ -76,6 +77,9 @@ describe("MissionChat WorkOrder creation", () => {
   });
 
   it("turns a low-risk mission into a planned Green WorkOrder", async () => {
+    localStorage.setItem("coevo-user-id", "user-local-123");
+    localStorage.setItem("coevo-opc-id", "opc-local-456");
+
     renderMissionChat();
 
     fireEvent.change(screen.getByRole("textbox"), {
@@ -103,8 +107,8 @@ describe("MissionChat WorkOrder creation", () => {
     expect(api.createWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
       contract_hash: "a".repeat(64),
       plan_hash: "b".repeat(64),
-      user_id: "default-founder",
-      opc_id: "default-opc",
+      user_id: "user-local-123",
+      opc_id: "opc-local-456",
       mission_intent: "Analyze the README and summarize the project direction",
       selected_agents: ["agent-founder-01"],
       selected_executors: [],

@@ -1,21 +1,26 @@
 import MetricCard from "../components/MetricCard";
 import RiskApprovalPanel from "../components/RiskApprovalPanel";
 import TrackStatusCard from "../components/TrackStatusCard";
+import { getLocalIdentity } from "../settings/identity";
 
 export default function Dashboard() {
+  const identity = getLocalIdentity();
+
   return (
     <div className="space-y-5">
-      <h2 className="text-lg font-bold">Dashboard</h2>
-      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-        Governance descriptors for the local Alpha workspace. Live counters will be wired to audit telemetry in the next release slice.
+      <div>
+        <h2 className="text-lg font-bold">{identity.opcName}</h2>
+        <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+          Local OPC identity and governance posture.
+        </div>
       </div>
 
       <div className="grid grid-cols-6 gap-3">
+        <MetricCard label="Owner" value={identity.userName} sub={identity.userId} accent="blue" />
+        <MetricCard label="OPC ID" value="Local" sub={identity.opcId} accent="purple" />
         <MetricCard label="Governed WorkOrders" value="Ready" sub="MissionChat creates tasks" accent="green" />
-        <MetricCard label="AI Employees" value="Bootstrap" sub="created after model setup" accent="blue" />
         <MetricCard label="Timeline Audit" value="Required" sub="sessions, steps, events" accent="purple" />
         <MetricCard label="Red Track" value="Blocked" accent="red" sub="Alpha hard stop" />
-        <MetricCard label="COEVO_HOME" value="Local" sub="data and logs" accent="blue" />
         <MetricCard label="Model Gateway" value="Required" sub="configured provider" accent="green" />
       </div>
 

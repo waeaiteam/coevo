@@ -30,13 +30,25 @@ export function loadSettingsSnapshot(): CoevoSettings {
 }
 
 function save(s: CoevoSettings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-  // Also sync api_base_url for client.ts
-  localStorage.setItem("coevo-api-base", s.developer.api_base_url);
+  const snapshot: CoevoSettings = {
+    ...s,
+    model_provider: { ...s.model_provider, api_key: "" },
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+  // Preserve the runtime API base that BootPage receives from the Tauri sidecar.
+  // Only explicit Developer changes should override it.
+  if (s.developer.api_base_url !== defaults.developer.api_base_url) {
+    localStorage.setItem("coevo-api-base", s.developer.api_base_url);
+  }
   // Sync theme
   localStorage.setItem("coevo-theme", s.appearance.theme);
   localStorage.setItem("coevo-font-size", s.appearance.font_size);
   localStorage.setItem("coevo-density", s.appearance.density);
+}
+
+export function saveSettingsSnapshot(s: CoevoSettings) {
+  save(s);
+  applyTheme(s);
 }
 
 export function useSettings() {
@@ -63,10 +75,9 @@ export function useSettings() {
   }, []);
 
   const saveNow = useCallback(() => {
-    save(settings);
+    saveSettingsSnapshot(settings);
     setDirty(false);
     setSaved(true);
-    applyTheme(settings);
     setTimeout(() => setSaved(false), 2000);
   }, [settings]);
 

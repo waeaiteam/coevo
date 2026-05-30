@@ -9,10 +9,11 @@ import SettingsSection from "../components/SettingsSection";
 import TextField from "../components/TextField";
 import ToggleField from "../components/ToggleField";
 import { ensureWorkspaceDefaults } from "../api/bootstrap";
-import { getApiBase, testModelConnection, updateModelConfig } from "../api/client";
+import { discoverModels, getApiBase, testModelConnection, updateModelConfig } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
-import { useSettings } from "../hooks/useSettings";
+import { saveSettingsSnapshot, useSettings } from "../hooks/useSettings";
 import { t, setLanguage } from "../settings/i18n";
+import { chooseModelRoles, isKnownProvider, providerOptions, presetFor, type DiscoveredModel } from "../settings/modelPresets";
 import { markModelProviderConfigured } from "../settings/onboarding";
 import type { PolicyEngineType, ProviderType } from "../settings/types";
 
@@ -122,61 +123,100 @@ function AppearancePanel() {
 }
 
 function ModelProviderPanel() {
-  const { settings, update, saveNow } = useSettings();
+  const { settings, update } = useSettings();
   const navigate = useNavigate();
   const m = settings.model_provider;
   const [testResult, setTestResult] = useState<"idle"|"ok"|"fail">("idle");
   const [testMsg, setTestMsg] = useState("");
-  const providerKinds: Record<ProviderType,string> = {
-    "openai-compatible": "OpenAICompatible",
-    openai: "OpenAI",
-    anthropic: "Anthropic",
-    gemini: "Gemini",
-    deepseek: "DeepSeek",
-    ollama: "Ollama",
-    local: "Local",
+  const [advanced, setAdvanced] = useState(false);
+  const [models, setModels] = useState<DiscoveredModel[]>([]);
+  const selectedProvider = isKnownProvider(m.provider) ? m.provider : "openai";
+  const preset = presetFor(selectedProvider);
+  const effectiveModels = isKnownProvider(m.provider) ? m : {
+    ...m,
+    default_model: preset.defaultModel,
+    fast_model: preset.fastModel,
+    reasoning_model: preset.reasoningModel,
+    structured_output_model: preset.structuredModel,
+    max_tokens: preset.maxTokens,
   };
-  const providerOptions: { value: ProviderType; label: string }[] = [
-    {value:"openai-compatible",label:"OpenAI Compatible"},
-    {value:"openai",label:"OpenAI"},
-    {value:"anthropic",label:"Anthropic"},
-    {value:"gemini",label:"Gemini"},
-    {value:"deepseek",label:"DeepSeek"},
-    {value:"ollama",label:"Ollama"},
-    {value:"local",label:"Local"},
-  ];
-  const selectedProvider = providerKinds[m.provider] ? m.provider : "openai-compatible";
+  const modelOptions = (models.length ? models : [
+    { id: effectiveModels.default_model || preset.defaultModel, display_name: effectiveModels.default_model || preset.defaultModel },
+    { id: effectiveModels.fast_model || preset.fastModel, display_name: effectiveModels.fast_model || preset.fastModel },
+    { id: effectiveModels.reasoning_model || preset.reasoningModel, display_name: effectiveModels.reasoning_model || preset.reasoningModel },
+    { id: effectiveModels.structured_output_model || preset.structuredModel, display_name: effectiveModels.structured_output_model || preset.structuredModel },
+  ]).filter((item, index, arr) => item.id && arr.findIndex((x) => x.id === item.id) === index)
+    .map((item) => ({ value: item.id, label: item.display_name || item.id }));
+
+  function configFromCurrent(patch: Partial<typeof m> = {}) {
+    const next = { ...m, ...patch };
+    const p = presetFor(next.provider);
+    return {
+      provider_id: "desktop",
+      kind: p.kind,
+      base_url: next.base_url || p.baseUrl,
+      api_key: next.api_key,
+      default_model: next.default_model || p.defaultModel,
+      fast_model: next.fast_model || p.fastModel,
+      reasoning_model: next.reasoning_model || p.reasoningModel,
+      structured_output_model: next.structured_output_model || p.structuredModel,
+      max_tokens: next.max_tokens || p.maxTokens,
+      temperature: next.temperature,
+      timeout_ms: next.request_timeout_ms,
+      max_cost_per_task_usd: next.max_cost_per_task_usd,
+    };
+  }
+
+  function changeProvider(value: string) {
+    const nextProvider = value as ProviderType;
+    const nextPreset = presetFor(nextProvider);
+    update("model_provider", {
+      provider: nextProvider,
+      base_url: nextPreset.baseUrl,
+      default_model: nextPreset.defaultModel,
+      fast_model: nextPreset.fastModel,
+      reasoning_model: nextPreset.reasoningModel,
+      structured_output_model: nextPreset.structuredModel,
+      max_tokens: nextPreset.maxTokens,
+    });
+    setModels([]);
+  }
 
   async function handleSaveAndTestConnection() {
     setTestResult("idle");
     setTestMsg("");
-    const provider = providerKinds[m.provider] ? m.provider : "openai-compatible";
-    const config = {
-      provider_id: "desktop",
-      kind: providerKinds[provider],
-      base_url: m.base_url,
-      api_key: m.api_key,
-      default_model: m.default_model,
-      fast_model: m.fast_model,
-      reasoning_model: m.reasoning_model,
-      structured_output_model: m.structured_output_model,
-      max_tokens: m.max_tokens,
-      temperature: m.temperature,
-      timeout_ms: m.request_timeout_ms,
-      max_cost_per_task_usd: m.max_cost_per_task_usd,
-    };
+    const baseConfig = configFromCurrent();
     try {
-      const r = await testModelConnection(config) as Record<string,unknown>;
-      await updateModelConfig(config);
+      const r = await testModelConnection(baseConfig) as Record<string,unknown>;
+      let discovered: DiscoveredModel[] = [];
+      let discoveryNote = "";
+      try {
+        const discovery = await discoverModels(baseConfig) as { models?: DiscoveredModel[] };
+        discovered = discovery.models || [];
+        setModels(discovered);
+      } catch (e: unknown) {
+        discoveryNote = ` Model discovery unavailable; using recommended defaults. ${e instanceof Error ? e.message : String(e)}`;
+      }
+      const roles = chooseModelRoles(discovered, preset);
+      const finalPatch = {
+        default_model: roles.default_model,
+        fast_model: roles.fast_model,
+        reasoning_model: roles.reasoning_model,
+        structured_output_model: roles.structured_output_model,
+        max_tokens: roles.max_tokens,
+      };
+      update("model_provider", finalPatch);
+      const finalConfig = configFromCurrent(finalPatch);
+      await updateModelConfig(finalConfig);
       try {
         await ensureWorkspaceDefaults();
       } catch (e: unknown) {
         throw new Error(`Workspace bootstrap failed after model connection succeeded: ${e instanceof Error ? e.message : String(e)}`);
       }
-      saveNow();
+      saveSettingsSnapshot({ ...settings, model_provider: { ...settings.model_provider, ...finalPatch } });
       markModelProviderConfigured();
       setTestResult("ok");
-      setTestMsg(`${r.model || "ok"} | ${r.latency_ms}ms | ${r.provider_kind || ""}`);
+      setTestMsg(`${r.model || "ok"} | ${r.latency_ms}ms | ${r.provider_kind || ""}.${discoveryNote}`);
     } catch(e: unknown) {
       setTestResult("fail");
       setTestMsg(e instanceof Error ? e.message : String(e));
@@ -186,46 +226,31 @@ function ModelProviderPanel() {
   return (
     <SettingsSection title={t("settings.model_provider")}>
       <SettingRow label={t("settings.provider")}>
-        <SelectField value={selectedProvider} options={providerOptions} onChange={(v)=>update("model_provider",{provider:v as ProviderType})} />
-      </SettingRow>
-      <SettingRow label={t("settings.base_url")}>
-        <TextField monospace value={m.base_url} onChange={(v)=>update("model_provider",{base_url:v})} />
+        <SelectField value={selectedProvider} options={providerOptions()} onChange={changeProvider} />
       </SettingRow>
       <SettingRow label={t("settings.api_key")} desc={t("settings.api_key_warning")}>
         <PasswordField value={m.api_key} onChange={(v)=>update("model_provider",{api_key:v})} />
       </SettingRow>
       <SettingRow label={t("settings.default_model")}>
-        <TextField monospace value={m.default_model} onChange={(v)=>update("model_provider",{default_model:v})} />
+        <SelectField value={effectiveModels.default_model || preset.defaultModel} options={modelOptions} onChange={(v)=>update("model_provider",{default_model:v})} />
       </SettingRow>
       <SettingRow label={t("settings.fast_model")}>
-        <TextField monospace value={m.fast_model} onChange={(v)=>update("model_provider",{fast_model:v})} />
+        <SelectField value={effectiveModels.fast_model || preset.fastModel} options={modelOptions} onChange={(v)=>update("model_provider",{fast_model:v})} />
       </SettingRow>
       <SettingRow label={t("settings.reasoning_model")}>
-        <TextField monospace value={m.reasoning_model} onChange={(v)=>update("model_provider",{reasoning_model:v})} />
+        <SelectField value={effectiveModels.reasoning_model || preset.reasoningModel} options={modelOptions} onChange={(v)=>update("model_provider",{reasoning_model:v})} />
       </SettingRow>
       <SettingRow label="Structured Output Model">
-        <TextField monospace value={m.structured_output_model} onChange={(v)=>update("model_provider",{structured_output_model:v})} />
+        <SelectField value={effectiveModels.structured_output_model || preset.structuredModel} options={modelOptions} onChange={(v)=>update("model_provider",{structured_output_model:v})} />
       </SettingRow>
-      <SettingRow label={t("settings.max_tokens")}>
-        <NumberField value={m.max_tokens} onChange={(v)=>update("model_provider",{max_tokens:v})} min={1} max={128000} />
-      </SettingRow>
-      <SettingRow label={t("settings.temperature")}>
-        <NumberField value={m.temperature} onChange={(v)=>update("model_provider",{temperature:v})} min={0} max={2} step={0.1} />
-      </SettingRow>
-      <SettingRow label={t("settings.request_timeout_ms")}>
-        <NumberField value={m.request_timeout_ms} onChange={(v)=>update("model_provider",{request_timeout_ms:v})} min={1000} max={120000} />
-      </SettingRow>
-      <SettingRow label="Max Cost/Task (USD)">
-        <NumberField value={m.max_cost_per_task_usd} onChange={(v)=>update("model_provider",{max_cost_per_task_usd:v})} min={0} max={100} step={0.1} />
-      </SettingRow>
-      <SettingRow label="Save & Test Connection">
+      <SettingRow label="Connection">
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleSaveAndTestConnection}
             className="px-3 py-1.5 text-xs rounded-md border transition-colors"
             style={{borderColor:"var(--accent)",color:"var(--accent)"}}
           >
-            Save & Test Connection
+            Connect
           </button>
           {testResult==="ok" && <span className="text-xs" style={{color:"var(--green)"}}>Saved and connected: {testMsg}</span>}
           {testResult==="fail" && <span className="text-xs" style={{color:"var(--red)"}}>Connection failed: {testMsg}</span>}
@@ -240,6 +265,35 @@ function ModelProviderPanel() {
           )}
         </div>
       </SettingRow>
+      <SettingRow label="Advanced">
+        <button
+          type="button"
+          onClick={() => setAdvanced((v) => !v)}
+          className="px-3 py-1.5 text-xs rounded-md border"
+          style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}
+        >
+          {advanced ? "Hide Advanced" : "Show Advanced"}
+        </button>
+      </SettingRow>
+      {advanced && (
+        <>
+          <SettingRow label={t("settings.base_url")}>
+            <TextField monospace value={m.base_url || preset.baseUrl} onChange={(v)=>update("model_provider",{base_url:v})} />
+          </SettingRow>
+          <SettingRow label={t("settings.max_tokens")}>
+            <NumberField value={m.max_tokens} onChange={(v)=>update("model_provider",{max_tokens:v})} min={1} max={128000} />
+          </SettingRow>
+          <SettingRow label={t("settings.temperature")}>
+            <NumberField value={m.temperature} onChange={(v)=>update("model_provider",{temperature:v})} min={0} max={2} step={0.1} />
+          </SettingRow>
+          <SettingRow label={t("settings.request_timeout_ms")}>
+            <NumberField value={m.request_timeout_ms} onChange={(v)=>update("model_provider",{request_timeout_ms:v})} min={1000} max={120000} />
+          </SettingRow>
+          <SettingRow label="Max Cost/Task (USD)">
+            <NumberField value={m.max_cost_per_task_usd} onChange={(v)=>update("model_provider",{max_cost_per_task_usd:v})} min={0} max={100} step={0.1} />
+          </SettingRow>
+        </>
+      )}
     </SettingsSection>
   );
 }

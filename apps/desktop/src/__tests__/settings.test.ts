@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { defaults } from "../settings/defaults";
-import { loadSettingsSnapshot } from "../hooks/useSettings";
+import { loadSettingsSnapshot, saveSettingsSnapshot } from "../hooks/useSettings";
 
 describe("Settings", () => {
   beforeEach(() => {
@@ -42,6 +42,25 @@ describe("Settings", () => {
 
   it("api_base_url defaults to localhost", () => {
     expect(defaults.developer.api_base_url).toBe("http://127.0.0.1:8717");
+  });
+
+  it("saving settings does not overwrite the runtime API base from desktop boot", () => {
+    localStorage.setItem("coevo-api-base", "http://127.0.0.1:8718");
+
+    saveSettingsSnapshot(defaults);
+
+    expect(localStorage.getItem("coevo-api-base")).toBe("http://127.0.0.1:8718");
+  });
+
+  it("does not persist API keys into the UI settings snapshot", () => {
+    saveSettingsSnapshot({
+      ...defaults,
+      model_provider: { ...defaults.model_provider, api_key: "sk-live-secret" },
+    });
+
+    const saved = JSON.parse(localStorage.getItem("coevo-settings")!);
+    expect(saved.model_provider.api_key).toBe("");
+    expect(localStorage.getItem("coevo-settings")).not.toContain("sk-live-secret");
   });
 
   it("PasswordField show/hide is testable", () => {
