@@ -4,12 +4,29 @@ import { defaults } from "../settings/defaults";
 
 const STORAGE_KEY = "coevo-settings";
 
-function load(): CoevoSettings {
+function mergeSettings(partial: Partial<CoevoSettings>): CoevoSettings {
+  return {
+    ...defaults,
+    ...partial,
+    general: { ...defaults.general, ...partial.general },
+    appearance: { ...defaults.appearance, ...partial.appearance },
+    model_provider: { ...defaults.model_provider, ...partial.model_provider },
+    agent_runtime: { ...defaults.agent_runtime, ...partial.agent_runtime },
+    governance: { ...defaults.governance, ...partial.governance },
+    risk_gate: { ...defaults.risk_gate, ...partial.risk_gate },
+    cognitive_customs: { ...defaults.cognitive_customs, ...partial.cognitive_customs },
+    policy_engine: { ...defaults.policy_engine, ...partial.policy_engine },
+    privacy: { ...defaults.privacy, ...partial.privacy },
+    developer: { ...defaults.developer, ...partial.developer },
+  };
+}
+
+export function loadSettingsSnapshot(): CoevoSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...defaults, ...JSON.parse(raw) };
+    if (raw) return mergeSettings(JSON.parse(raw));
   } catch { /* ignore */ }
-  return { ...defaults };
+  return mergeSettings({});
 }
 
 function save(s: CoevoSettings) {
@@ -23,12 +40,12 @@ function save(s: CoevoSettings) {
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useState<CoevoSettings>(load);
+  const [settings, setSettings] = useState<CoevoSettings>(loadSettingsSnapshot);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    const s = load();
+    const s = loadSettingsSnapshot();
     setSettings(s);
     applyTheme(s);
   }, []);

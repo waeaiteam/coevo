@@ -1,6 +1,6 @@
-import type { HealthResponse, ContractResponse, DemoResponse } from "../types";
+import type { HealthResponse, ContractResponse } from "../types";
 
-export type { HealthResponse, ContractResponse, DemoResponse } from "../types";
+export type { HealthResponse, ContractResponse } from "../types";
 
 export function getApiBase(): string { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } }
 export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-base", url); } catch {} }
@@ -65,8 +65,8 @@ export async function compileContract(userIntent: string, mode = "DRAFT"): Promi
   return post("/mcl/compile", { user_intent: userIntent, requested_mode: mode, parent_contract_hash: null });
 }
 
-export async function routePlan(contract: unknown, agentIds: string[]) {
-  return post("/router/route", { contract, agent_ids: agentIds });
+export async function routePlan(contract: unknown, agentIds: string[], contractHash: string) {
+  return post("/router/route", { contract_hash: contractHash, contract, agent_ids: agentIds });
 }
 
 export async function proposeFact(request: unknown): Promise<Record<string, unknown>> {
@@ -79,10 +79,6 @@ export async function evaluateRisk(request: unknown) {
 
 export async function resolveConflict(request: unknown) {
   return post("/resolution/process", request);
-}
-
-export async function runDemo(track: "green" | "yellow" | "red"): Promise<DemoResponse> {
-  return post(`/demo/${track}`, { tenant_id: "desktop-demo", agent_ids: ["agent-synthesizer-01"] });
 }
 
 // === OPC API ===
@@ -123,11 +119,13 @@ export async function createWorkOrder(wo: Record<string,unknown>) { return post(
 export async function executeWorkOrder(id: string, req: Record<string,unknown> = {}) { return post(`/opc/work-orders/${id}/execute`, req); }
 export async function cancelWorkOrder(id: string) { return post(`/opc/work-orders/${id}/cancel`, {}); }
 export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
+export async function getWorkOrderTimeline(id: string): Promise<Record<string,unknown>[]> { return get(`/opc/work-orders/${id}/timeline`); }
+export async function getWorkOrderAuditExport(id: string): Promise<Record<string,unknown>> { return get(`/opc/work-orders/${id}/audit-export`); }
 
 // === Model Gateway ===
 export async function getModelConfig() { return get("/opc/models/config"); }
 export async function updateModelConfig(config: Record<string,unknown>) { return put("/opc/models/config", config); }
-export async function testModelConnection() { return post("/opc/models/test", {}); }
+export async function testModelConnection(config?: Record<string,unknown>) { return post("/opc/models/test", config ? { config } : {}); }
 export async function modelChat(payload: Record<string,unknown>) { return post("/opc/models/chat", payload); }
 export async function modelStructured(payload: Record<string,unknown>) { return post("/opc/models/structured", payload); }
 export async function listModelProfiles(): Promise<Record<string,unknown>[]> { return get("/opc/models/profiles"); }

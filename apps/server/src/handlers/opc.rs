@@ -4,7 +4,6 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::opc::*;
 use coevo_core::skills::*;
 use coevo_evolution::{
@@ -13,6 +12,7 @@ use coevo_evolution::{
 use coevo_executors::adapters::*;
 use coevo_executors::traits::*;
 use coevo_store::repos_opc::*;
+use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
 use serde::Deserialize;
 use sqlx::Row;
@@ -55,10 +55,6 @@ pub struct CreateWORequest {
     pub selected_agents: Vec<String>,
     pub selected_executors: Vec<String>,
     pub required_skills: Vec<String>,
-    pub track: String,
-    pub allowed_actions: Vec<String>,
-    pub restricted_actions: Vec<String>,
-    pub risk_summary: String,
 }
 
 macro_rules! ok {
@@ -75,6 +71,100 @@ fn track_risk(track: &str) -> f64 {
         _ => 0.9,
     }
 }
+
+struct TrackDecision {
+    track: &'static str,
+    risk_summary: String,
+    allowed_actions: Vec<String>,
+    restricted_actions: Vec<String>,
+}
+
+const RED_TRIGGERS: [&str; 11] = [
+    "production",
+    "prod",
+    "critical",
+    "database mutation",
+    "rollback",
+    "payment",
+    "delete",
+    "p1",
+    "emergency",
+    "financial",
+    "customer data",
+];
+const YELLOW_TRIGGERS: [&str; 10] = [
+    "deploy",
+    "notification",
+    "staging",
+    "send",
+    "create ticket",
+    "write",
+    "update",
+    "changelog",
+    "internal",
+    "modify",
+];
+
+fn classify_mission_track(intent: &str) -> TrackDecision {
+    let lower = intent.to_lowercase();
+    for trigger in RED_TRIGGERS {
+        if lower.contains(trigger) {
+            return TrackDecision {
+                track: "red",
+                risk_summary: format!(
+                    "Server RiskGate: intent matches high-risk trigger \"{}\". Production/critical operations require Red Track.",
+                    trigger
+                ),
+                allowed_actions: vec!["read".to_string(), "draft".to_string()],
+                restricted_actions: vec![
+                    "write".to_string(),
+                    "delete".to_string(),
+                    "deploy".to_string(),
+                    "payment".to_string(),
+                    "production".to_string(),
+                ],
+            };
+        }
+    }
+    for trigger in YELLOW_TRIGGERS {
+        if lower.contains(trigger) {
+            return TrackDecision {
+                track: "yellow",
+                risk_summary: format!(
+                    "Server RiskGate: intent matches moderate-risk trigger \"{}\". Internal writes require Yellow Track approval.",
+                    trigger
+                ),
+                allowed_actions: vec!["read".to_string(), "draft".to_string()],
+                restricted_actions: vec![
+                    "delete".to_string(),
+                    "payment".to_string(),
+                    "production".to_string(),
+                ],
+            };
+        }
+    }
+    TrackDecision {
+        track: "green",
+        risk_summary: "Server RiskGate: low-risk read/analyze intent. Green Track auto-execution is allowed.".to_string(),
+        allowed_actions: vec!["read".to_string(), "analyze".to_string()],
+        restricted_actions: vec![
+            "delete".to_string(),
+            "payment".to_string(),
+            "production".to_string(),
+        ],
+    }
+}
+
+fn yellow_approval_receipt(req: &ExecuteRequest) -> Option<&str> {
+    // Alpha compatibility: Yellow approval receipts may arrive through the legacy
+    // caller_identity_proof field or lease_id. Red Track leases need a separate
+    // verifier before Red execution is enabled.
+    req.caller_identity_proof
+        .as_deref()
+        .or(req.lease_id.as_deref())
+        .filter(|s| !s.trim().is_empty())
+}
+
 fn make_executor(source_type: &ExecutorSourceType) -> Option<Box<dyn ExternalExecutorAdapter>> {
     match source_type {
         ExecutorSourceType::Hermes => Some(Box::new(MockHermesAdapter::new())),
@@ -301,6 +391,7 @@ pub async fn create_work_order(
         );
     }
     let now = chrono::Utc::now().timestamp_millis() as u64;
+    let track_decision = classify_mission_track(&req.mission_intent);
     let wo = WorkOrder {
         work_order_id: req
             .work_order_id
@@ -313,17 +404,17 @@ pub async fn create_work_order(
         selected_agents: req.selected_agents,
         selected_executors: req.selected_executors,
         required_skills: req.required_skills,
-        track: req.track,
+        track: track_decision.track.to_string(),
         status: WorkOrderStatus::Planned,
-        allowed_actions: req.allowed_actions,
-        restricted_actions: req.restricted_actions,
-        risk_summary: req.risk_summary,
+        allowed_actions: track_decision.allowed_actions,
+        restricted_actions: track_decision.restricted_actions,
+        risk_summary: track_decision.risk_summary,
         created_at_ms: now,
         updated_at_ms: now,
     };
     match work_order_repo::WorkOrderRepo::create(&s.pool, &wo).await {
         Ok(()) => ok!(
-            serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","created_at_ms":now})
+            serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","track":wo.track,"risk_summary":wo.risk_summary,"allowed_actions":wo.allowed_actions,"restricted_actions":wo.restricted_actions,"created_at_ms":now})
         ),
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -425,14 +516,65 @@ pub async fn execute_work_order(
             );
         }
     }
-    // 5. Yellow Track: require explicit approval or return WaitingApproval
-    if wo.track == "yellow" && req.caller_identity_proof.is_none() {
-        work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "WaitingApproval")
+    // 5. Yellow Track: require a real approval receipt anchored to a structurally valid WorkOrder.
+    if wo.track == "yellow" {
+        let contract = match ContractRepo::find_by_hash(&s.pool, &wo.contract_hash).await {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                return err!(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "CONTRACT_ANCHOR_REQUIRED_FOR_APPROVAL: compile and persist the contract before Yellow Track execution"
+                )
+            }
+            Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+        let receipt = yellow_approval_receipt(&req);
+        if receipt.is_none() {
+            let approval_id = match ApprovalRepo::create(
+                &s.pool,
+                &wo.contract_hash,
+                &format!("urn:coevo:work-order:{}:execute", id),
+                "NEGATIVE_CONSENT",
+                &wo.user_id,
+                300_000,
+            )
             .await
-            .ok();
-        return ok!(
-            serde_json::json!({"ok":true,"status":"WaitingApproval","approval_mode":"negative_consent","message":"Yellow Track requires approval. Use negative_consent timeout or explicit approval."})
-        );
+            {
+                Ok(id) => id,
+                Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            };
+            work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "WaitingApproval")
+                .await
+                .ok();
+            return ok!(serde_json::json!({
+                "ok":true,
+                "status":"WaitingApproval",
+                "approval_id":approval_id,
+                "approval_mode":"NEGATIVE_CONSENT",
+                "contract_hash":contract.contract_hash,
+                "action_urn":format!("urn:coevo:work-order:{}:execute", id),
+                "message":"Yellow Track requires an approved approval receipt before execution."
+            }));
+        }
+        let receipt_id = receipt.unwrap();
+        let approval = match ApprovalRepo::find_by_id(&s.pool, receipt_id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_NOT_FOUND"),
+            Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+        if approval.contract_hash != wo.contract_hash {
+            return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_CONTRACT_MISMATCH");
+        }
+        let action_urn = format!("urn:coevo:work-order:{}:execute", id);
+        if approval.action_urn != action_urn {
+            return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_ACTION_MISMATCH");
+        }
+        if approval.expires_at_ms < chrono::Utc::now().timestamp_millis() {
+            return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_EXPIRED");
+        }
+        if approval.status != "approved" {
+            return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_NOT_APPROVED");
+        }
     }
     // 6. Green/Yellow with approval: use WorkerHarness
     let harness_result = match WorkerHarness::run_work_order(
@@ -462,9 +604,8 @@ pub async fn execute_work_order(
         .iter()
         .map(|r| r.get::<String, _>("session_id"))
         .collect();
-    // Synthesizer summary via Mock model
     let synthesized =
-        "WorkerHarness completed execution. Results written to Task Memory.".to_string();
+        "WorkerHarness completed execution. Results were persisted to Task Memory.".to_string();
     if let Err(e) =
         work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, &harness_result.status).await
     {
@@ -779,4 +920,548 @@ pub async fn reject_proposal(
         .await
         .ok();
     ok!(serde_json::json!({"ok":true}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handlers::timeline::work_order_audit_export;
+    use crate::state::AppState;
+    use coevo_core::contract::*;
+    use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
+    use coevo_store::{migrate::run_migrations, pool::create_test_pool};
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    async fn count_rows(pool: &sqlx::SqlitePool, table: &str, work_order_id: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) AS n FROM {} WHERE work_order_id=?", table);
+        sqlx::query_scalar::<_, i64>(&sql)
+            .bind(work_order_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn create_yellow_work_order(
+        state: AppState,
+        work_order_id: &str,
+        contract_hash: &str,
+    ) {
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: contract_hash.to_string(),
+            plan_hash: "d".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Draft an internal update".to_string(),
+            selected_agents: vec!["agent-risk-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, Json(created)) = create_work_order(State(state), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK, "{created:?}");
+        assert_eq!(created["track"], "yellow");
+    }
+
+    #[test]
+    fn classify_mission_track_is_server_authoritative_and_red_takes_priority() {
+        let cases = [
+            ("production database rollback", "red", "high-risk trigger"),
+            ("critical P1 emergency", "red", "high-risk trigger"),
+            ("customer data delete request", "red", "high-risk trigger"),
+            ("draft a changelog and send it internally", "yellow", "moderate-risk trigger"),
+            ("update staging release notes", "yellow", "moderate-risk trigger"),
+            ("read metrics and analyze logs", "green", "Green Track"),
+        ];
+
+        for (intent, expected_track, summary_fragment) in cases {
+            let decision = classify_mission_track(intent);
+            assert_eq!(decision.track, expected_track, "{intent}");
+            assert!(decision.risk_summary.contains(summary_fragment), "{intent}");
+        }
+
+        let priority = classify_mission_track("send a production notification");
+        assert_eq!(priority.track, "red");
+        assert!(priority.restricted_actions.contains(&"production".to_string()));
+    }
+
+    #[tokio::test]
+    async fn red_execute_returns_alpha_block_without_worker_audit_rows() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-red-alpha-block";
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Delete production customer data".to_string(),
+            selected_agents: vec!["agent-risk-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK);
+
+        let (status, Json(body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some("real-looking-proof".to_string()),
+                monitoring_signature: Some("real-looking-monitoring".to_string()),
+                diagnostic_signature: Some("real-looking-diagnostic".to_string()),
+                lease_id: Some("lease-real-looking".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
+        assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
+        assert_eq!(count_rows(&pool, "worker_runs", work_order_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_work_order_overrides_client_track_with_server_classification() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-server-classifies-red";
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Delete production customer data".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+
+        let (status, Json(body)) = create_work_order(State(state), Json(create)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["track"], "red");
+        assert!(body["risk_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("high-risk trigger"));
+        let stored = work_order_repo::WorkOrderRepo::get(&pool, work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.track, "red");
+        assert!(stored.restricted_actions.contains(&"delete".to_string()));
+        assert!(stored.restricted_actions.contains(&"production".to_string()));
+    }
+
+    #[tokio::test]
+    async fn green_execute_uses_scoped_file_readonly_tool() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-green-file-readonly";
+        let root = std::env::temp_dir().join(format!("coevo-readonly-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("mission-notes.md"), "launch readiness evidence").unwrap();
+        std::env::set_var("COEVO_WORKSPACE_DIR", &root);
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze mission-notes.md for launch readiness".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK);
+
+        let (status, Json(body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["status"], "Completed");
+        let tool_row = sqlx::query(
+            "SELECT tool_id, success, output_summary FROM worker_tool_calls WHERE run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?)",
+        )
+        .bind(work_order_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tool_row.get::<String, _>("tool_id"), "file-readonly");
+        assert_eq!(tool_row.get::<i64, _>("success"), 1);
+        assert!(tool_row
+            .get::<String, _>("output_summary")
+            .contains("launch readiness evidence"));
+    }
+
+    #[tokio::test]
+    async fn audit_export_includes_work_order_execution_and_memory_evidence() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-audit-export";
+        let root = std::env::temp_dir().join(format!("coevo-audit-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("mission-notes.md"), "audit export evidence").unwrap();
+        std::env::set_var("COEVO_WORKSPACE_DIR", &root);
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze mission-notes.md for audit export".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK);
+        let (execute_status, _) = execute_work_order(
+            State(state.clone()),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(execute_status, StatusCode::OK);
+
+        let (export_status, Json(export)) =
+            work_order_audit_export(State(state), Path(work_order_id.to_string())).await;
+
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(export_status, StatusCode::OK, "{export:?}");
+        assert_eq!(export["schema_version"], "coevo.audit_export.v1");
+        assert_eq!(export["work_order"]["work_order_id"], work_order_id);
+        assert_eq!(export["governance"]["track"], "green");
+        assert!(export["worker_runs"].as_array().unwrap().len() >= 1);
+        assert!(export["worker_steps"].as_array().unwrap().len() >= 1);
+        assert!(export["worker_events"].as_array().unwrap().len() >= 1);
+        assert!(export["tool_calls"].as_array().unwrap().iter().any(|tc| tc["tool_id"] == "file-readonly"));
+        assert!(export["memory_records"].as_array().unwrap().iter().any(|m| {
+            m["provenance"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("worker-run-")
+        }));
+    }
+
+    async fn insert_contract(pool: &sqlx::SqlitePool, hash: &str) {
+        let contract = MCLSpec {
+            mcl_version: "1.0".to_string(),
+            mcl_state: ContractState::DraftContract,
+            parent_contract_hash: "0".repeat(64),
+            goal_tree: GoalTree {
+                root: GoalNode {
+                    id: "root".to_string(),
+                    description: "test yellow approval".to_string(),
+                    status: GoalStatus::Pending,
+                    children: vec![],
+                    depends_on: vec![],
+                },
+            },
+            institution_policy_hash: "0".repeat(64),
+            data_boundary: vec![],
+            allowed_action_modes: vec![ActionMode::DraftOnly],
+            human_approval_policy: HumanApprovalPolicy {
+                approval_mode: ApprovalMode::NegativeConsent,
+                authorized_roles: vec!["Admin".to_string()],
+                negative_consent_timeout_secs: 300,
+                mfa_auth_url: None,
+            },
+            evidence_requirement: EvidenceRequirement {
+                minimum_level: "none".to_string(),
+                require_json_report: false,
+            },
+            risk_tolerance_profile: RiskToleranceProfile {
+                max_risk_score: 0.6,
+                allow_emergency_lease: false,
+            },
+            termination_policy: TerminationPolicy {
+                max_token_budget: 10000,
+                max_hops: 3,
+                max_latency_ms: 60000,
+                max_stance_rounds: 3,
+            },
+            responsibility_anchor_policy: ResponsibilityAnchorPolicy {
+                required_human_roles: vec!["Admin".to_string()],
+                agent_forbidden_actions: vec![],
+            },
+        };
+        ContractRepo::insert(pool, &contract, hash).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn yellow_execute_creates_approval_request_and_rejects_unapproved_receipts() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-yellow-approval";
+        let contract_hash = "c".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash: contract_hash.clone(),
+            plan_hash: "d".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Draft a changelog update for internal release".to_string(),
+            selected_agents: vec!["agent-risk-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK);
+        assert_eq!(created["track"], "yellow");
+
+        let (wait_status, Json(wait_body)) = execute_work_order(
+            State(state.clone()),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(wait_status, StatusCode::OK);
+        assert_eq!(wait_body["status"], "WaitingApproval");
+        let approval_id = wait_body["approval_id"].as_str().unwrap();
+        let approval = ApprovalRepo::find_by_id(&pool, approval_id).await.unwrap().unwrap();
+        assert_eq!(approval.status, "pending");
+        assert_eq!(approval.contract_hash, contract_hash);
+
+        let (blocked_status, Json(blocked_body)) = execute_work_order(
+            State(state.clone()),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(approval_id.to_string()),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(blocked_status, StatusCode::FORBIDDEN);
+        assert!(blocked_body["error"].as_str().unwrap_or_default().contains("APPROVAL_RECEIPT_NOT_APPROVED"));
+        assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
+
+        ApprovalRepo::approve(&pool, approval_id, "default-founder").await.unwrap();
+        let (execute_status, Json(execute_body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(approval_id.to_string()),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(execute_status, StatusCode::OK, "{execute_body:?}");
+        assert_eq!(execute_body["status"], "Completed");
+        assert!(count_rows(&pool, "worker_sessions", work_order_id).await >= 1);
+    }
+
+    #[tokio::test]
+    async fn yellow_execute_rejects_arbitrary_identity_string_as_approval_receipt() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-yellow-no-freeform-proof";
+        let contract_hash = "f".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            contract_hash,
+            plan_hash: "d".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Draft an internal update".to_string(),
+            selected_agents: vec!["agent-risk-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+        };
+        let (create_status, Json(created)) =
+            create_work_order(State(state.clone()), Json(create)).await;
+        assert_eq!(create_status, StatusCode::OK);
+        assert_eq!(created["track"], "yellow");
+
+        let (status, Json(body)) = execute_work_order(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some("yes".to_string()),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_NOT_FOUND"));
+        assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn yellow_execute_rejects_expired_denied_or_wrong_action_receipts() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let contract_hash = "e".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        let expired_wo = "wo-yellow-expired-receipt";
+        create_yellow_work_order(state.clone(), expired_wo, &contract_hash).await;
+        let expired_id = ApprovalRepo::create(
+            &pool,
+            &contract_hash,
+            &format!("urn:coevo:work-order:{}:execute", expired_wo),
+            "NEGATIVE_CONSENT",
+            "default-founder",
+            -1,
+        )
+        .await
+        .unwrap();
+        ApprovalRepo::approve(&pool, &expired_id, "default-founder")
+            .await
+            .unwrap();
+        let (expired_status, Json(expired_body)) = execute_work_order(
+            State(state.clone()),
+            Path(expired_wo.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(expired_id),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(expired_status, StatusCode::FORBIDDEN);
+        assert!(expired_body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_EXPIRED"));
+        assert_eq!(count_rows(&pool, "worker_sessions", expired_wo).await, 0);
+
+        let denied_wo = "wo-yellow-denied-receipt";
+        create_yellow_work_order(state.clone(), denied_wo, &contract_hash).await;
+        let denied_id = ApprovalRepo::create(
+            &pool,
+            &contract_hash,
+            &format!("urn:coevo:work-order:{}:execute", denied_wo),
+            "NEGATIVE_CONSENT",
+            "default-founder",
+            300_000,
+        )
+        .await
+        .unwrap();
+        ApprovalRepo::deny(&pool, &denied_id, "default-founder")
+            .await
+            .unwrap();
+        let (denied_status, Json(denied_body)) = execute_work_order(
+            State(state.clone()),
+            Path(denied_wo.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(denied_id),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(denied_status, StatusCode::FORBIDDEN);
+        assert!(denied_body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_NOT_APPROVED"));
+        assert_eq!(count_rows(&pool, "worker_sessions", denied_wo).await, 0);
+
+        let action_mismatch_wo = "wo-yellow-wrong-action-receipt";
+        create_yellow_work_order(state.clone(), action_mismatch_wo, &contract_hash).await;
+        let wrong_action_id = ApprovalRepo::create(
+            &pool,
+            &contract_hash,
+            "urn:coevo:work-order:other-work-order:execute",
+            "NEGATIVE_CONSENT",
+            "default-founder",
+            300_000,
+        )
+        .await
+        .unwrap();
+        ApprovalRepo::approve(&pool, &wrong_action_id, "default-founder")
+            .await
+            .unwrap();
+        let (mismatch_status, Json(mismatch_body)) = execute_work_order(
+            State(state),
+            Path(action_mismatch_wo.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(wrong_action_id),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(mismatch_status, StatusCode::FORBIDDEN);
+        assert!(mismatch_body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_ACTION_MISMATCH"));
+        assert_eq!(count_rows(&pool, "worker_sessions", action_mismatch_wo).await, 0);
+    }
 }

@@ -157,6 +157,10 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
         .env("COEVO_DB_PATH", db_path.to_string_lossy().to_string())
         .env("COEVO_LOG_DIR", log_dir.to_string_lossy().to_string())
         .env(
+            "COEVO_WORKSPACE_DIR",
+            home.join("workspace").to_string_lossy().to_string(),
+        )
+        .env(
             "COEVO_PARENT_HEARTBEAT",
             heartbeat_path.to_string_lossy().to_string(),
         )

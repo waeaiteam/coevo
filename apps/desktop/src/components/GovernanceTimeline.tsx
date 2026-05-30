@@ -1,7 +1,7 @@
 export interface TimelineEvent {
   id: string;
   time: string;
-  type: "compile" | "route" | "propose" | "risk" | "adr" | "demo";
+  type: "compile" | "route" | "propose" | "risk" | "adr" | "work_order";
   message: string;
   detail?: string;
   track?: "green" | "yellow" | "red";
@@ -14,7 +14,7 @@ export default function GovernanceTimeline({ events }: { events: TimelineEvent[]
     propose: "#8b5cf6",
     risk: "var(--yellow)",
     adr: "#ec4899",
-    demo: "var(--green)",
+    work_order: "var(--green)",
   };
 
   return (
@@ -25,7 +25,7 @@ export default function GovernanceTimeline({ events }: { events: TimelineEvent[]
       <div className="space-y-3 max-h-80 overflow-y-auto">
         {events.length === 0 && (
           <div className="text-xs py-6 text-center" style={{ color: "var(--text-muted)" }}>
-            No events yet — trigger a demo to populate
+            No governance events yet. Create a WorkOrder to populate this timeline.
           </div>
         )}
         {events.map((e, i) => (

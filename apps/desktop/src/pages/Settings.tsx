@@ -8,6 +8,7 @@ import SettingsLayout from "../components/SettingsLayout";
 import SettingsSection from "../components/SettingsSection";
 import TextField from "../components/TextField";
 import ToggleField from "../components/ToggleField";
+import { ensureWorkspaceDefaults } from "../api/bootstrap";
 import { getApiBase, testModelConnection, updateModelConfig } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
 import { useSettings } from "../hooks/useSettings";
@@ -150,22 +151,28 @@ function ModelProviderPanel() {
     setTestResult("idle");
     setTestMsg("");
     const provider = providerKinds[m.provider] ? m.provider : "openai-compatible";
+    const config = {
+      provider_id: "desktop",
+      kind: providerKinds[provider],
+      base_url: m.base_url,
+      api_key: m.api_key,
+      default_model: m.default_model,
+      fast_model: m.fast_model,
+      reasoning_model: m.reasoning_model,
+      structured_output_model: m.structured_output_model,
+      max_tokens: m.max_tokens,
+      temperature: m.temperature,
+      timeout_ms: m.request_timeout_ms,
+      max_cost_per_task_usd: m.max_cost_per_task_usd,
+    };
     try {
-      await updateModelConfig({
-        provider_id: "desktop",
-        kind: providerKinds[provider],
-        base_url: m.base_url,
-        api_key: m.api_key,
-        default_model: m.default_model,
-        fast_model: m.fast_model,
-        reasoning_model: m.reasoning_model,
-        structured_output_model: m.structured_output_model,
-        max_tokens: m.max_tokens,
-        temperature: m.temperature,
-        timeout_ms: m.request_timeout_ms,
-        max_cost_per_task_usd: m.max_cost_per_task_usd,
-      });
-      const r = await testModelConnection() as Record<string,unknown>;
+      const r = await testModelConnection(config) as Record<string,unknown>;
+      await updateModelConfig(config);
+      try {
+        await ensureWorkspaceDefaults();
+      } catch (e: unknown) {
+        throw new Error(`Workspace bootstrap failed after model connection succeeded: ${e instanceof Error ? e.message : String(e)}`);
+      }
       saveNow();
       markModelProviderConfigured();
       setTestResult("ok");
@@ -461,9 +468,9 @@ function DeveloperPanel() {
       <SettingRow label="Feature Flags">
         <TextField value={d.feature_flags} onChange={(v)=>update("developer",{feature_flags:v})} />
       </SettingRow>
-      <SettingRow label="Reset Demo Data">
+      <SettingRow label="Reset Local UI State">
         <button className="px-3 py-1.5 text-xs rounded-md border" style={{borderColor:"rgba(239,68,68,0.4)",color:"var(--red)"}}
-          onClick={()=>{if(confirm("Reset demo data?")){alert("Demo data reset.");}}}>
+          onClick={()=>{if(confirm("Reset local UI state?")){localStorage.clear();alert("Local UI state reset.");}}}>
           Reset
         </button>
       </SettingRow>

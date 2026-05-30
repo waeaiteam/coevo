@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use coevo_store::repos_opc::{memory_repo, work_order_repo};
 use coevo_store::repos::worker_session_repo::WorkerSessionRepo;
 use sqlx::{Column, Row};
 
@@ -120,6 +121,94 @@ pub async fn timeline(
     }
     items.sort_by_key(|i| i["time_ms"].as_i64().unwrap_or(0));
     ok!(serde_json::json!(items))
+}
+
+async fn query_json(
+    pool: &sqlx::SqlitePool,
+    sql: &str,
+    id: &str,
+) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    let rows = sqlx::query(sql).bind(id).fetch_all(pool).await?;
+    Ok(to_json(&rows))
+}
+
+pub async fn work_order_audit_export(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let work_order = match work_order_repo::WorkOrderRepo::get(&s.pool, &id).await {
+        Ok(Some(wo)) => wo,
+        Ok(None) => return err!(StatusCode::NOT_FOUND, "WorkOrder not found"),
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+
+    let worker_sessions = query_json(
+        &s.pool,
+        "SELECT * FROM worker_sessions WHERE work_order_id=? ORDER BY created_at_ms",
+        &id,
+    )
+    .await
+    .unwrap_or_default();
+    let worker_runs = query_json(
+        &s.pool,
+        "SELECT * FROM worker_runs WHERE work_order_id=? ORDER BY started_at_ms",
+        &id,
+    )
+    .await
+    .unwrap_or_default();
+    let worker_steps = query_json(
+        &s.pool,
+        "SELECT ws.* FROM worker_steps ws JOIN worker_runs wr ON ws.run_id=wr.run_id WHERE wr.work_order_id=? ORDER BY wr.started_at_ms, ws.step_index",
+        &id,
+    )
+    .await
+    .unwrap_or_default();
+    let worker_events = query_json(
+        &s.pool,
+        "SELECT we.* FROM worker_events we JOIN worker_runs wr ON we.run_id=wr.run_id WHERE wr.work_order_id=? ORDER BY wr.started_at_ms, we.event_seq",
+        &id,
+    )
+    .await
+    .unwrap_or_default();
+    let tool_calls = query_json(
+        &s.pool,
+        "SELECT wtc.* FROM worker_tool_calls wtc JOIN worker_runs wr ON wtc.run_id=wr.run_id WHERE wr.work_order_id=? ORDER BY wtc.started_at_ms",
+        &id,
+    )
+    .await
+    .unwrap_or_default();
+    let memory_records = memory_repo::MemoryRepo::list(&s.pool, Some("Task"), Some(&id), false)
+        .await
+        .map(|items| serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([])))
+        .unwrap_or_else(|_| serde_json::json!([]));
+    let (timeline_status, Json(timeline_items)) = timeline(State(s.clone()), Path(id.clone())).await;
+    let timeline_items = if timeline_status == StatusCode::OK {
+        timeline_items
+    } else {
+        serde_json::json!([])
+    };
+
+    ok!(serde_json::json!({
+        "schema_version":"coevo.audit_export.v1",
+        "generated_at_ms":chrono::Utc::now().timestamp_millis(),
+        "work_order":work_order,
+        "governance":{
+            "track":work_order.track,
+            "status":work_order.status,
+            "contract_hash":work_order.contract_hash,
+            "plan_hash":work_order.plan_hash,
+            "allowed_actions":work_order.allowed_actions,
+            "restricted_actions":work_order.restricted_actions,
+            "risk_summary":work_order.risk_summary
+        },
+        "worker_sessions":worker_sessions,
+        "worker_runs":worker_runs,
+        "worker_steps":worker_steps,
+        "worker_events":worker_events,
+        "tool_calls":tool_calls,
+        "memory_records":memory_records,
+        "timeline":timeline_items
+    }))
 }
 
 pub async fn list_worker_sessions(

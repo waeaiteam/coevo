@@ -28,12 +28,6 @@ pub enum Commands {
         #[arg(short, long)]
         contract_file: Option<String>,
     },
-    /// Run a demo scenario
-    Demo {
-        /// Track: green, yellow, or red
-        #[arg(short, long, default_value = "green")]
-        track: String,
-    },
 }
 
 #[tokio::main]
@@ -50,9 +44,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Route { contract_file } => {
             commands::route::run(contract_file).await?;
-        }
-        Commands::Demo { track } => {
-            commands::demo::run(&track).await?;
         }
     }
 

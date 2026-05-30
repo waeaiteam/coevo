@@ -1,6 +1,6 @@
 # coevo-opc
 
-> Governed AI operating system for a one-person company.
+> AI Employee Operating System and Agent Governance Mesh for a one-person company.
 
 **Freedom in Reason. Governance in Action.**
 
@@ -8,30 +8,30 @@
 
 ---
 
-**Status:** Alpha / Internal RC &nbsp;|&nbsp; **License:** Apache-2.0 &nbsp;|&nbsp; **Runtime:** Rust + Tauri + React &nbsp;|&nbsp; **Model:** Mock / OpenAI-compatible
+**Status:** Alpha / Internal RC &nbsp;|&nbsp; **License:** Apache-2.0 &nbsp;|&nbsp; **Runtime:** Rust + Tauri + React &nbsp;|&nbsp; **Model:** OpenAI-compatible
 
 ---
 
 ## What is coevo-opc?
 
-coevo-opc is **not** a simple multi-agent chat system.
-It is an **OPC OS**: an AI operating system for a one-person company.
+coevo-opc is **not** a chatbot, a prompt wrapper, or a multi-agent demo.
+It is an **AI Employee Operating System** for an OPC (One-Person Company): a local-first desktop runtime where AI employees can reason freely, but every external action is governed.
 
-It combines governed execution with a full OPC runtime:
+The product shape is an **Agent Governance Mesh**:
 
-- **User Profile** — founder identity, goals, preferences, budgets
-- **Company Memory** — scoped, provenance-tracked, long-term memory
-- **AI Employees** — governed workers with passports, departments, risk ceilings
-- **External Executors** — Hermes / OpenClaw / MCP / 302AI as governed execution workers
-- **WorkOrders** — mission execution with tracks, approval, and audit
-- **Skills** — versioned, testable, rollback-capable capability packages
-- **Skill Evolution** — observe → diagnose → propose → verify → approve → publish
-- **Model Gateway** — Mock (zero-config) + OpenAI-compatible (real LLM)
-- **Agent Governance Mesh** — MCL, RiskGate, Cognitive Customs, Resolution, ADR-A
+- **MissionChat** - the desktop entry point for real user missions
+- **WorkOrders** - governed execution records with tracks, approvals, events, and audit
+- **AI Employees** - workers with passports, departments, capabilities, and risk ceilings
+- **Company Memory** - scoped long-term memory with provenance and lifecycle controls
+- **Model Gateway** - real OpenAI-compatible model configuration through the desktop
+- **External Executors** - governed execution workers, not free agents
+- **Skills** - versioned, testable, rollback-capable capability packages
+- **Timeline / Audit** - inspectable WorkerSession, WorkerRunStep, WorkerEvent, and WorkOrder history
+- **Governance Mesh** - MCL, RiskGate, Cognitive Customs, Resolution, and ADR-A
 
-**Users are not just prompt senders. They are OPC founders.**
-**Agents are not disposable sub-agents. They are governed AI employees with passports.**
-**Executors are not free agents. Every action is governed by MCL, RiskGate, and ADR-A.**
+**Users are not prompt senders. They are OPC founders.**
+**AI workers are not disposable sub-agents. They are governed AI employees.**
+**Executors are not autonomous agents. Every action is checked by MCL, RiskGate, and ADR-A.**
 **Models provide cognition, not authorization.**
 
 ---
@@ -40,136 +40,155 @@ It combines governed execution with a full OPC runtime:
 
 | Layer | Ordinary Agent App | coevo-opc |
 |---|---|---|
-| User | Prompt sender | OPC Founder with profile & goals |
-| Agent | Prompt role | AI Employee with Passport, department, risk ceiling |
-| Tool | Direct function call | Governed Executor (registered, risk-checked) |
-| Memory | Chat history | Scoped long-term Memory (provenance, TTL, cognitive layer) |
-| Risk | Prompt-based refusal | RiskGate with Green/Yellow/Red tracks |
-| Skill | Prompt template | Versioned, testable SkillPackage with verifier |
-| Evolution | Manual prompt tweak | Observe → Diagnose → Propose → Verify → Approve |
-| Output | Answer text | WorkOrder + Memory + Proposal + Audit |
+| User | Prompt sender | OPC Founder with profile, goals, and budget context |
+| Agent | Prompt role | AI Employee with passport, department, and risk ceiling |
+| Tool | Direct function call | Governed Executor with registration, scope, and risk checks |
+| Memory | Chat history | Scoped long-term Memory with provenance, TTL, and audit |
+| Risk | Prompt-based refusal | RiskGate with Green / Yellow / Red tracks |
+| Skill | Prompt template | Versioned SkillPackage with tests and verifier |
+| Evolution | Manual prompt tweak | Observe -> Diagnose -> Propose -> Verify -> Approve |
+| Output | Answer text | WorkOrder + Timeline + Memory + Proposal + Audit |
+
+---
+
+## Desktop User Path
+
+The ordinary user path is desktop-first:
+
+1. Install or unzip the desktop Alpha build.
+2. Double-click the coevo desktop app.
+3. The app starts the local core service as a sidecar automatically.
+4. coevo prepares `COEVO_HOME`, uses a dynamic local port, and writes runtime logs under the local log directory.
+5. FirstRun asks for a real OpenAI-compatible model provider and API key.
+6. After the connection test passes, MissionChat opens.
+
+Alpha is local-first. The desktop app and local core service are intended for a user's own machine, not public network exposure.
+
+---
+
+## First Mission Path
+
+1. Open **Settings -> Model Providers** during FirstRun.
+2. Select **OpenAI-compatible**.
+3. Enter `base_url`, `api_key`, and model names for your provider.
+4. Click **Save & Test Connection**.
+5. Go to **MissionChat** and describe the mission you want an AI employee to handle.
+6. Review the model cognition summary, generated WorkOrder, and governance track.
+7. Execute allowed Green work, approve Yellow work when appropriate, and expect Red work to be blocked in Alpha.
+8. Open **WorkOrders** to inspect the created order.
+9. Open **Timeline / Audit** to inspect worker sessions, steps, events, and governance decisions.
+
+The expected product loop is:
+
+```
+Desktop Launch
+  -> FirstRun model configuration
+  -> MissionChat
+  -> MCL compile
+  -> PCDT route
+  -> AI Employee selection
+  -> WorkOrder
+  -> RiskGate track decision
+  -> WorkerSession / WorkerRunStep / WorkerEvent
+  -> Timeline / Audit
+```
 
 ---
 
 ## Current Alpha Capabilities
 
-- ✅ MissionChat — natural language mission entry point
-- ✅ Founder Profile — save & load user identity
-- ✅ Company Memory — create, search, stale, revoke with scope filtering
-- ✅ AI Employees — 10 seed employees with passports and departments
-- ✅ External Executors — register, disable, health check, dry-run (mock adapters)
-- ✅ WorkOrders — create, execute, cancel, feedback
-- ✅ Green / Yellow / Red tracks with differentiated behavior
-- ✅ Skill packages — seed, list, activate, rollback
-- ✅ Skill Evolution — failure → proposal → verify → approve → reject → rollback
-- ✅ Model Gateway — Mock provider (always available) + OpenAI-compatible
-- ✅ Desktop console — Tauri + React
-- ✅ Swagger / Redoc API docs
-- ✅ Synthetic OPC user test
+- MissionChat as the natural language mission entry point
+- Desktop launch with local core sidecar, `COEVO_HOME`, dynamic port, and logs
+- Founder Profile and Company Profile
+- Company Memory create, search, stale, revoke, and scope filtering
+- AI Employees with passports, departments, capabilities, and risk ceilings
+- External Executor registry, disable, health check, and dry-run contracts
+- WorkOrders with create, execute, cancel, feedback, timeline, and audit export
+- Green / Yellow / Red tracks with differentiated governance behavior
+- Server-authoritative track classification at WorkOrder creation
+- Red Track Alpha hard block with explicit reason
+- Scoped `FileReadonlyTool` execution for Green read/analyze work under the local workspace
+- Skill packages with seed/list/activate/rollback support
+- Skill Evolution proposal flow for governed improvement
+- OpenAI-compatible model provider configuration
+- Swagger / Redoc API docs for developers
+- Synthetic OPC tests for development and CI
 
 ---
 
-## Architecture Overview
-
-```
-apps/server          — axum HTTP API (:8717) + OpenAPI/Swagger/Redoc
-apps/desktop         — Tauri + React desktop control console
-
-crates/coevo-core       — Protocol types, metadata, OPC data model, skills model
-crates/coevo-store      — SQLite + sqlx migrations + repositories
-crates/coevo-mcl        — Mission Contract Language compiler + state machine
-crates/coevo-router     — PCDT routing + plan revision
-crates/coevo-customs    — Cognitive Customs + Provenance + Dependency Graph
-crates/coevo-risk       — Risk Gate + Emergency Lease Manager
-crates/coevo-resolution — Resolution Engine + ADR-A
-crates/coevo-reputation — Reputation v1 Profile
-crates/coevo-tracks     — Green / Yellow / Red three-track runtime
-crates/coevo-evolution  — Skill evolution loop (analyzer, generator, verifier, scheduler)
-crates/coevo-executors  — External Executor adapters (Hermes, OpenClaw, MCP, etc.)
-crates/coevo-models     — Model Gateway (Mock + OpenAI-compatible)
-crates/coevo-policy     — Pluggable PolicyEngine trait + Mock
-crates/coevo-adapters   — Mock A2A / MCP / Identity adapters
-crates/coevo-audit      — Structured audit logger
-crates/coevo-cli        — CLI tool for local operations
-tests/e2e               — Acceptance test suite
-```
-
----
-
-## Runtime Flow
-
-```
-User Intent
-  → Model-enhanced Mission Draft (fallback to deterministic)
-  → MCL Compile
-  → PCDT Route
-  → AI Employees selected from Registry
-  → External Executors selected
-  → WorkOrder created
-  → Risk track selected (Green / Yellow / Red)
-  → Executor dry-run
-  → Execute (Green auto, Yellow waiting, Red blocked)
-  → Task Memory written
-  → Synthesizer summary (model or fallback)
-  → Feedback → Skill Evolution Proposal
-```
-
----
-
-## Three Governance Tracks
+## Governance Tracks
 
 | | Green | Yellow | Red |
 |---|---|---|---|
 | Risk | Low | Moderate | High |
-| Action | read, analyze, local safe | internal notification, low-impact write | production write, financial, destructive |
-| Execution | Auto | WaitingApproval / negative consent | Blocked by default |
-| Approval | None | YES (NEGATIVE_CONSENT or EXPLICIT) | YES (identity, dual-sign, lease) |
-| Alpha | ✅ Fully supported | ✅ WaitingApproval supported | ✅ Blocked with clear reason |
+| Action | read, analyze, local safe work | low-impact write or internal notification | production write, financial, destructive, irreversible |
+| Execution | Auto when policy allows | Approval request and approved receipt required before execution | Blocked by default in Alpha |
+| Authorization | MCL + RiskGate | MCL / RiskGate boundary + Alpha approval receipt validation | Requires stronger identity, dual control, and lease model |
+| Alpha behavior | Supported for scoped read/analyze work | WaitingApproval creates an approval request; arbitrary strings are rejected | Hard blocked with clear reason |
 
-**Red Track in Alpha:** identity proof, monitoring signature, diagnostic signature, and lease are required but not production-grade MFA yet.
+Red Track in Alpha is intentionally conservative: high-risk external behavior is blocked rather than partially automated.
+
+---
+
+## Security Model
+
+The short version: **internal reasoning is free; external behavior is governed**.
+
+- Model output is never authorization. MCL, RiskGate, policy, and user approval decide what can happen.
+- External Executors are not free agents. They operate through registered contracts and governed WorkOrders.
+- Fact writes require provenance. Hypotheses, suggestions, model output, and executor output cannot become Facts without the Cognitive Customs path.
+- Skills cannot silently increase their own authority or bypass risk ceilings.
+- WorkOrders, WorkerSessions, WorkerRunSteps, WorkerEvents, Timeline entries, and audit records must remain inspectable.
+- On Windows Alpha builds, newly saved model API keys are stored through the native credential vault and the SQLite row stores only a `keyring:` reference. Existing Alpha databases with legacy plaintext keys remain readable for compatibility until a migration is added. Non-Windows credential storage is not available in Alpha.
+
+See [docs/SECURITY_BOUNDARIES.md](docs/SECURITY_BOUNDARIES.md) for the full boundary model.
 
 ---
 
 ## Model Gateway
 
-| Provider | Status | API Key | Use |
-|---|---|---|---|
-| **Mock** | ✅ Built-in | Not required | Development, CI, synthetic tests |
-| **OpenAI-compatible** | ✅ Supported | Required | Real LLM testing |
-| OpenAI | Compatible (mapped) | Required | Through OpenAI-compatible |
-| Anthropic | Planned | — | — |
-| Gemini | Planned | — | — |
-| DeepSeek | Compatible (mapped) | Required | Through OpenAI-compatible |
-| Ollama | Planned | — | — |
+Normal desktop onboarding requires a real OpenAI-compatible provider.
 
-**Mock Provider** returns deterministic MissionDraft, Synthesizer, and SkillGenerator output. No API key needed. Always available.
+| Provider | Status | API Key | User Path |
+|---|---|---|---|
+| **OpenAI-compatible** | Supported | Required | FirstRun and real missions |
+| OpenAI | Compatible through OpenAI-compatible settings | Required | Real missions |
+| DeepSeek and similar compatible APIs | Compatible when API shape matches | Required | Real missions |
+| Anthropic | Planned | - | Not a FirstRun target |
+| Gemini | Planned | - | Not a FirstRun target |
+| Ollama | Planned | - | Not a FirstRun target |
+
+Model configuration is no longer treated as pure process memory. In Windows Alpha builds, new API-key writes go to the native credential vault and SQLite stores a `keyring:` reference plus a masked display value. Existing Alpha databases with legacy plaintext keys are still readable for compatibility; opportunistic re-encryption is pending. Non-Windows credential vault support is not yet available.
 
 ---
 
-## Quick Start
+## Developer Setup
+
+These commands are for contributors and internal testing. They are not the ordinary desktop Quick Start.
 
 ### Prerequisites
+
 - Rust 1.85+
 - Node.js 20+
 - SQLite 3
-- Python 3 (for synthetic test)
+- Python 3 for synthetic tests
 
 ### Server
 
 ```bash
 cargo check --workspace
 cargo run -p coevo-server
-# → http://127.0.0.1:8717
+# http://127.0.0.1:8717
 # API docs: http://127.0.0.1:8717/docs
 ```
 
-### Desktop
+### Desktop Development
 
 ```bash
 cd apps/desktop
 npm install
-npm run dev          # Web at http://localhost:5173
-npm run tauri dev    # Tauri native window
+npm run dev
+npm run tauri dev
 ```
 
 ### Tests
@@ -181,86 +200,94 @@ cargo test --test acceptance -- --nocapture
 cd apps/desktop
 npm run build
 npm test
-npm run test:synthetic-opc    # requires server running
+npm run test:synthetic-opc
 ```
 
 ---
 
-## First OPC Run
+## Developer / CI Synthetic Tests
 
-1. Start the server: `cargo run -p coevo-server`
-2. Start desktop: `cd apps/desktop && npm run dev`
-3. Open **Settings → Model Providers**
-4. Select **Mock Provider** (no API key needed)
-5. Click **Test Connection** → should pass
-6. Open **Founder Profile** → Save your profile
-7. Open **AI Employees** → Click **Seed 10 AI Employees**
-8. Open **External Executors** → Click **Register** (OpenClaw, risk 0.6)
-9. Open **Skills** → Click **Seed Skills**
-10. Go to **MissionChat**
-11. Enter: `Summarize current coevo-opc progress and propose next roadmap.`
-12. Review the Mission Draft → Click **Execute Green**
-13. Check **WorkOrders** → see the completed order
-14. Check **Company Memory** → see Task Memory written
-15. Submit feedback → Check **Skills → Evolution Proposals**
+Mock provider, seed data, and demo-like fixtures are development infrastructure only.
+They exist so CI, deterministic tests, and local contributor workflows can run without paid model credentials.
+
+- Mock Provider returns deterministic MissionDraft, Synthesizer, and SkillGenerator output.
+- Seed AI Employees and seed Skills are test/dev bootstrap tools.
+- Synthetic OPC tests use Mock by design.
+- Mock is not the ordinary user onboarding path and should not be presented as the product Quick Start.
+
+For manual real-model testing, see [MANUAL_MODEL_TEST.md](MANUAL_MODEL_TEST.md).
 
 ---
 
-## Real Model Test
+## Architecture Overview
 
-For LLM testing with an actual API key, see [MANUAL_MODEL_TEST.md](MANUAL_MODEL_TEST.md).
+```
+apps/server          - axum HTTP API + OpenAPI/Swagger/Redoc
+apps/desktop         - Tauri + React desktop console and sidecar launch
 
-- Choose **OpenAI-compatible** in Settings → Model Providers
-- Set base_url, api_key, model
-- Click **Test Connection**
-- ⚠️ **Do not commit API keys.** Keys are Alpha-level runtime config.
+crates/coevo-core       - protocol types, metadata, OPC data model, skills model
+crates/coevo-store      - SQLite + sqlx migrations + repositories
+crates/coevo-mcl        - Mission Contract Language compiler + state machine
+crates/coevo-router     - PCDT routing + plan revision
+crates/coevo-customs    - Cognitive Customs + Provenance + Dependency Graph
+crates/coevo-risk       - RiskGate + Emergency Lease Manager
+crates/coevo-resolution - Resolution Engine + ADR-A
+crates/coevo-reputation - Reputation v1 Profile
+crates/coevo-tracks     - Green / Yellow / Red runtime
+crates/coevo-evolution  - Skill evolution loop
+crates/coevo-executors  - External Executor adapters
+crates/coevo-models     - Model Gateway
+crates/coevo-policy     - PolicyEngine trait
+crates/coevo-adapters   - A2A / MCP / Identity adapters for tests and integration
+crates/coevo-audit      - structured audit logger
+crates/coevo-cli        - local developer operations
+tests/e2e               - acceptance test suite
+```
 
 ---
 
 ## API Overview
 
 ### Core
+
 `GET /health` `GET /docs` `GET /redoc`
 
 ### MCL / Routing
+
 `POST /mcl/compile` `POST /router/route`
 
+`/mcl/compile` persists a contract anchor in SQLite and returns `contract_hash`. `/router/route` requires that `contract_hash` and persists the resulting execution plan anchor.
+
 ### OPC
+
 `GET/PUT /opc/profile/user` `GET/PUT /opc/profile/company`
 `GET/POST /opc/memory` `POST /opc/memory/:id/stale` `POST /opc/memory/:id/revoke`
 `GET /opc/agents/employees` `POST /opc/agents/employees/seed`
 `GET /opc/executors` `POST /opc/executors/register` `POST /opc/executors/:id/disable`
 `GET/POST /opc/work-orders` `POST /opc/work-orders/:id/execute`
+`GET /opc/work-orders/:id/timeline` `GET /opc/work-orders/:id/audit-export`
 `GET /opc/skills` `POST /opc/skills/seed`
 `GET /opc/skills/evolution/proposals` `POST /opc/skills/evolution/run`
 
+WorkOrder governance fields are server-authoritative at create time. Current desktop requests send mission facts and selected resources; legacy clients may still send `track`, `allowed_actions`, `restricted_actions`, or `risk_summary`, but the server ignores them and stores its own classification.
+
 ### Models
+
 `GET/PUT /opc/models/config` `POST /opc/models/test` `POST /opc/models/chat` `POST /opc/models/structured`
 
 ---
 
-## Security Model
+## Current Alpha Limitations
 
-- Model output is **not authorization** — RiskGate and MCL always have the final say
-- Fact writes require **provenance** (Cognitive Customs)
-- Red Track is **blocked by default** — credentials required
-- External Executor output defaults to **Hypothesis / Suggestion**
-- API keys are **Alpha-level config** — not a production vault yet
-- Alpha is **local-first** — not designed for public network exposure
-
----
-
-## Current Limitations
-
-- ⚠️ **Alpha / Internal RC only** — not production ready
-- ⚠️ Real Hermes / OpenClaw / 302AI execution not implemented (mock adapters only)
-- ⚠️ External executors are governed mock stubs with real API contracts
-- ⚠️ Model config is Alpha-level (in-memory, not persisted across server restarts)
-- ⚠️ Credential Vault not implemented
-- ⚠️ Vector memory not implemented
-- ⚠️ Production MFA / lease enforcement not complete
-- ⚠️ CI badges may not exist yet
-- ⚠️ UI is still evolving
+- Alpha / Internal RC only; not production ready.
+- Credential vault is Windows-first in Alpha: new model API-key writes use native keyring references, while legacy plaintext rows remain readable until a migration rewrites them.
+- Real executor MVP is the next stage; current external executor behavior is governed dry-run / mock-adapter focused.
+- Red Track Alpha behavior is hard block, not production-grade lease/MFA execution.
+- Yellow approval has persisted approval requests and receipt validation, but the full user-facing approval management UI is still evolving.
+- Server-side mission track classification is keyword-based and intentionally over-classifies upward in Alpha.
+- Vector memory is not implemented.
+- Production MFA, lease enforcement, sandbox hardening, and public-network deployment are not complete.
+- UI and audit viewer surfaces are still evolving.
 
 ---
 
@@ -268,9 +295,9 @@ For LLM testing with an actual API key, see [MANUAL_MODEL_TEST.md](MANUAL_MODEL_
 
 | Milestone | Target |
 |---|---|
-| v0.2 Alpha | OPC runtime, Model Gateway, MissionChat, Mock executors ✅ |
-| v0.3 Private Beta Candidate | Persistent model config, credential vault, real GitHub executor, real MCP tool runtime, vector memory, desktop onboarding |
-| v0.4 | Real OpenClaw / Hermes adapter, 302AI capability catalog, plugin marketplace, audit viewer, packaging installers |
+| v0.2 Alpha | OPC runtime, desktop MissionChat, Model Gateway, governance tracks |
+| v0.3 Private Beta Candidate | Credential migration / cross-platform vault, real executor MVP, MCP tool runtime, vector memory, stronger audit viewer |
+| v0.4 | OpenClaw / Hermes adapters, 302AI capability catalog, plugin marketplace, packaged installers |
 | v1.0 | Production Policy Engine, real lease/MFA, sandbox hardening, team/multi-user control plane |
 
 ---
@@ -283,11 +310,11 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-- Do not commit API keys or secrets
-- Do not commit `.env` files
-- Add new crates to workspace `Cargo.toml` members
-- Add new adapters implementing `ExternalExecutorAdapter` trait
-- Add translations via `README.zh-CN.md` pattern
+- Do not commit API keys or secrets.
+- Do not commit `.env` files.
+- Keep Mock, seed, and demo fixtures in developer / CI documentation only.
+- Add new crates to workspace `Cargo.toml` members.
+- Add new adapters implementing `ExternalExecutorAdapter` trait.
 
 ---
 

@@ -19,17 +19,6 @@ export interface ProposeResponse {
   };
 }
 
-export interface DemoResponse {
-  track: string;
-  contract_hash: string;
-  plan_hash: string;
-  traceparent: string;
-  ambiguity_score: number | null;
-  warnings: string[];
-  entries_created: string[];
-  elapsed_ms: number;
-}
-
 export interface HealthResponse {
   status: string;
   version: string;

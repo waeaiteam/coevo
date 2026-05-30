@@ -12,7 +12,7 @@ pub fn seed_employees() -> Vec<AgentEmployee> {
         employee("agent-research-01", "Research Agent", Department::Research, "Research", vec!["Hypothesis","Suggestion"], vec!["DRAFT_ONLY"], 0.4, now),
         employee("agent-engineer-01", "Engineer", Department::Engineering, "Engineering", vec!["Hypothesis","Suggestion"], vec!["DRAFT_ONLY"], 0.4, now),
         employee("agent-critic-01", "Critic", Department::Governance, "Governance", vec!["Suggestion"], vec!["DRAFT_ONLY"], 0.5, now),
-        employee("agent-risk-01", "Risk & Compliance", Department::Governance, "Governance", vec!["Suggestion"], vec!["DRAFT_ONLY"], 0.5, now),
+        employee("agent-risk-01", "Risk & Compliance", Department::Governance, "Governance", vec!["Suggestion"], vec!["DRAFT_ONLY"], 0.6, now),
         employee("agent-sre-01", "SRE Diagnostic", Department::SRE, "SRE", vec!["Hypothesis","Suggestion"], vec!["DRAFT_ONLY"], 0.4, now),
         employee("agent-growth-01", "Growth Agent", Department::Growth, "Growth", vec!["Suggestion"], vec!["DRAFT_ONLY"], 0.3, now),
         employee("agent-finance-01", "Finance Agent", Department::Finance, "Finance", vec!["Suggestion"], vec!["DRAFT_ONLY"], 0.4, now),

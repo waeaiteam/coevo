@@ -1,56 +1,63 @@
-# coevo-opc Production-Grade Foundation
+# coevo-opc Alpha Production Foundation
 
-## Status: Production-Grade Foundation Ready
+## Status: Alpha Foundation, Not Production V1
 
-This document lists current production-grade capabilities and remaining items
-before Private Beta.
+This document lists the current Alpha foundation and the remaining items before Private Beta. It should not be read as a Production V1 readiness claim.
 
 ## Current Capabilities
 
-- ✅ MissionChat → Mission Draft → WorkOrder → Execute
-- ✅ Model Gateway with Mock + OpenAI-compatible
-- ✅ Model config persisted to SQLite (survives restart)
-- ✅ API key masked in responses, never in logs
-- ✅ WorkerHarness with queue, session, steps, events
-- ✅ SkillRuntime, ToolPolicy, ToolRegistry
-- ✅ MemoryContext with provenance filtering
-- ✅ Reflection and SelfUpgradeLoop
-- ✅ Red Track blocked by default
-- ✅ Yellow Track WaitingApproval
-- ✅ GitHubReadonlyTool, FileReadonlyTool
-- ✅ Synthetic end-to-end test
-- ✅ CI workflow (backend, frontend, synthetic)
-- ✅ Desktop app with WorkerHarness visualization
+- MissionChat -> MCL compile -> PCDT route -> WorkOrder -> governed execution.
+- Contract anchors are persisted by `/mcl/compile`; plan anchors are persisted by `/router/route`.
+- WorkOrder governance fields are server-authoritative at create time; legacy client-supplied governance fields remain only for backward-compatible request shape and are ignored by the server classifier.
+- Model Gateway supports OpenAI-compatible provider configuration. Mock remains developer and CI infrastructure only.
+- Windows Alpha credential vault: new non-empty API-key writes store the secret in the native credential store and keep only a `keyring:` reference in SQLite.
+- API keys are masked in responses and must not be logged.
+- WorkerHarness records queue, sessions, runs, steps, events, tool calls, memory evidence, and audit export.
+- Scoped `FileReadonlyTool` supports Green read/analyze execution under the local workspace.
+- SkillRuntime, ToolPolicy, ToolRegistry.
+- MemoryContext with provenance filtering.
+- Reflection and SelfUpgradeLoop.
+- Red Track hard-blocked by default.
+- Yellow Track creates persisted approval requests and requires an approved receipt before execution.
+- Synthetic end-to-end tests for development and CI.
+- Desktop app with local sidecar launch and WorkerHarness visualization.
 
 ## Still Mock / Not Production
 
-- External Executors: mock adapters only (Hermes, OpenClaw, MCP, 302AI)
-- Model providers: only Mock + OpenAI-compatible. Others are planned.
-- Credential Vault: API keys stored in SQLite (Alpha). Replace before Private Beta.
-- MFA / Lease: Red Track blocking is runtime logic, not production MFA.
-- Vector memory: not implemented.
-- UI: evolving, not final.
+- External Executor adapters remain mock/dry-run focused for Hermes, OpenClaw, MCP, and 302AI.
+- Model providers beyond OpenAI-compatible are planned.
+- Mock Provider is not ordinary user onboarding; it is for deterministic dev/CI only.
+- Credential vault is Windows-first. Non-Windows vault support is unavailable in Alpha.
+- Existing Alpha databases with legacy plaintext API-key rows remain readable until a migration rewrites them into keyring references.
+- Red Track blocking is runtime policy, not production MFA or lease execution.
+- Yellow approval has receipt validation, but the full user-facing approval management UI is still evolving.
+- Track classification is keyword-based and intentionally over-classifies upward in Alpha.
+- Vector memory is not implemented.
+- UI and audit viewer surfaces are still evolving.
 
 ## Pre-Private Beta Checklist
 
-- [ ] Replace api_key_ciphertext with OS keychain / credential vault
-- [ ] Real GitHub executor
-- [ ] Real Browser executor
-- [ ] Real 302AI / OpenClaw / Hermes adapters
-- [ ] Production MFA / lease for Red Track
-- [ ] Vector memory search
-- [ ] Package installers (MSI, DMG, AppImage)
-- [ ] Crash recovery
-- [ ] Update mechanism
+- [ ] Add legacy plaintext credential migration to keyring refs.
+- [ ] Add non-Windows credential vault support.
+- [ ] Real GitHub executor.
+- [ ] Real Browser executor.
+- [ ] Real 302AI / OpenClaw / Hermes adapters.
+- [ ] Production MFA / lease for Red Track.
+- [ ] Full Yellow approval management UI.
+- [ ] Versioned governance policy for track classification.
+- [ ] Vector memory search.
+- [ ] Package installers (MSI, DMG, AppImage).
+- [ ] Crash recovery.
+- [ ] Update mechanism.
 
 ## Manual Model Test
 
-See [MANUAL_MODEL_TEST.md](MANUAL_MODEL_TEST.md).
+See [MANUAL_MODEL_TEST.md](../MANUAL_MODEL_TEST.md).
 
 ## Security
 
-Model provides cognition, NOT authorization.
-Worker executes under WorkOrder, RiskGate, and ToolPolicy governance.
+Model provides cognition, not authorization.
+Worker executes under WorkOrder, RiskGate, approval state, and ToolPolicy governance.
 External Executors are governed execution workers, not free agents.
 API keys are masked in all outputs.
-Red Track requires identity proof and dual-sign.
+Red Track remains hard-blocked in Alpha until production identity proof, dual-sign, MFA, and lease verification exist.

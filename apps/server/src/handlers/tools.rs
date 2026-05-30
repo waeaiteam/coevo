@@ -68,7 +68,7 @@ pub async fn assign_worker(State(s): State<AppState>, Json(body): Json<AssignReq
         _ => ok!(serde_json::json!({"worker_id":wid}))
     }
 }
-pub async fn run_worker(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<RunReq>) -> (StatusCode, Json<serde_json::Value>) {
+pub async fn run_worker(State(s): State<AppState>, Path(_id): Path<String>, Json(body): Json<RunReq>) -> (StatusCode, Json<serde_json::Value>) {
     match WorkerHarness::run_work_order(&s.pool, &body.work_order_id, WorkerHarnessOptions{approval_receipt:None,max_runtime_ms:None,deterministic_mode:true,preferred_tool_ids:vec![]}).await {
         Ok(r) => ok!(serde_json::to_value(&r).unwrap()),
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

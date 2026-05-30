@@ -4,7 +4,6 @@
 use coevo_core::contract::*;
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_policy::traits::PolicyEngine;
-use sha2::{Digest, Sha256};
 
 /// Result of MCL compilation.
 pub struct CompileResult {
@@ -115,11 +114,8 @@ impl MCLCompiler {
         }
 
         // ---- Phase 4: Hash the contract ----
-        let contract_json = serde_json::to_string(&contract)
-            .map_err(|e| CompileError::SerializationError(e.to_string()))?;
-        let mut hasher = Sha256::new();
-        hasher.update(contract_json.as_bytes());
-        let contract_hash = hex::encode(hasher.finalize());
+        let contract_hash =
+            hash_contract(&contract).map_err(|e| CompileError::SerializationError(e.to_string()))?;
 
         Ok(CompileResult {
             contract,

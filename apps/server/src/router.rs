@@ -82,7 +82,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/workers/sessions/{id}", get(handlers::timeline::get_worker_session))
         .route("/opc/workers/sessions/{id}/steps", get(handlers::timeline::get_session_steps))
         .route("/opc/workers/sessions/{id}/events", get(handlers::timeline::get_session_events))
-        .route("/opc/work-orders/{id}/timeline", get(handlers::timeline::timeline));
+        .route("/opc/work-orders/{id}/timeline", get(handlers::timeline::timeline))
+        .route("/opc/work-orders/{id}/audit-export", get(handlers::timeline::work_order_audit_export));
 
     // Authenticated API routes (with metadata validation)
     let api = Router::new()
@@ -94,10 +95,59 @@ pub fn build_router(state: AppState) -> Router {
             "/resolution/process",
             post(handlers::resolve::resolve_conflict),
         )
-        .route("/demo/green", post(handlers::demo::run_green_demo))
-        .route("/demo/yellow", post(handlers::demo::run_yellow_demo))
-        .route("/demo/red", post(handlers::demo::run_red_demo))
         .layer(middleware::from_fn(validate_metadata));
 
     Router::new().merge(public).merge(api).with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use coevo_core::metadata::CommonMetadataHeader;
+    use coevo_store::{migrate::run_migrations, pool::create_test_pool};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn public_router_does_not_mount_demo_routes() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let app = build_router(AppState::new(pool));
+        let meta = CommonMetadataHeader::new(
+            "0".repeat(64),
+            "0".repeat(64),
+            uuid::Uuid::new_v4().to_string(),
+            "0".repeat(64),
+            "Test".to_string(),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/demo/green")
+                    .header("content-type", "application/json")
+                    .header("x-coevo-tenant-id", meta.tenant_id)
+                    .header("x-coevo-actor-role", meta.actor_role)
+                    .header("x-coevo-contract-hash", meta.contract_hash)
+                    .header("x-coevo-policy-version", meta.policy_version)
+                    .header("x-coevo-execution-plan-hash", meta.execution_plan_hash)
+                    .header("x-coevo-causality-parent-id", meta.causality_parent_id)
+                    .header("x-coevo-idempotency-key", meta.idempotency_key)
+                    .header("x-coevo-request-ttl-ms", meta.request_ttl_ms.to_string())
+                    .header("x-coevo-replay-mode", meta.replay_mode.to_string())
+                    .header("x-coevo-timestamp", meta.timestamp.to_string())
+                    .header("traceparent", meta.traceparent)
+                    .body(Body::from(r#"{"tenant_id":"test","agent_ids":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

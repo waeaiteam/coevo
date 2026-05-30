@@ -19,7 +19,6 @@ import Customs from "./pages/Customs";
 import RiskGate from "./pages/RiskGate";
 import Resolution from "./pages/Resolution";
 import Audit from "./pages/Audit";
-import Demos from "./pages/Demos";
 import Settings from "./pages/Settings";
 
 export default function App() {
@@ -51,7 +50,6 @@ export default function App() {
           <Route path="/risk" element={<RiskGate />} />
           <Route path="/resolution" element={<Resolution />} />
           <Route path="/audit" element={<Audit />} />
-          <Route path="/demos" element={<Demos />} />
           <Route path="/settings/*" element={<Settings />} />
         </Route>
       </Routes>

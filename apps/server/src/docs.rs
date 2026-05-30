@@ -14,9 +14,6 @@ use crate::handlers;
         handlers::propose::propose_fact,
         handlers::evaluate::evaluate_risk,
         handlers::resolve::resolve_conflict,
-        handlers::demo::run_green_demo,
-        handlers::demo::run_yellow_demo,
-        handlers::demo::run_red_demo,
         handlers::health::health_check,
     ),
     components(schemas(
@@ -28,7 +25,6 @@ use crate::handlers;
         (name = "Customs", description = "Cognitive Customs"),
         (name = "Risk", description = "Risk Gate evaluation"),
         (name = "Resolution", description = "Conflict resolution"),
-        (name = "Demo", description = "Built-in demo scenarios"),
     )
 )]
 pub struct ApiDoc;
@@ -84,4 +80,28 @@ pub async fn redoc() -> Html<String> {
 </html>"#
             .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_openapi_excludes_internal_demo_routes() {
+        let doc = ApiDoc::openapi();
+        let paths = doc.paths.paths.keys().cloned().collect::<Vec<_>>();
+        assert!(
+            paths.iter().all(|p| !p.starts_with("/demo/")),
+            "internal demo routes must not appear in public OpenAPI paths: {:?}",
+            paths
+        );
+        assert!(
+            doc.tags
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .all(|tag| tag.name != "Demo"),
+            "internal demo routes must not expose a public OpenAPI Demo tag"
+        );
+    }
 }

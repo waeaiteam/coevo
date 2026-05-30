@@ -37,6 +37,17 @@ impl ContractRepo {
         Ok(id)
     }
 
+    pub async fn insert_or_ignore(
+        pool: &SqlitePool,
+        contract: &MCLSpec,
+        contract_hash: &str,
+    ) -> Result<String, sqlx::Error> {
+        if let Some(existing) = Self::find_by_hash(pool, contract_hash).await? {
+            return Ok(existing.id);
+        }
+        Self::insert(pool, contract, contract_hash).await
+    }
+
     pub async fn find_by_hash(
         pool: &SqlitePool,
         hash: &str,

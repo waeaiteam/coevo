@@ -32,6 +32,17 @@ impl PlanRepo {
         Ok(id)
     }
 
+    pub async fn insert_or_ignore(
+        pool: &SqlitePool,
+        plan: &ExecutionPlanSpec,
+        contract_hash: &str,
+    ) -> Result<String, sqlx::Error> {
+        if let Some(existing) = Self::find_by_hash(pool, &plan.plan_hash).await? {
+            return Ok(existing.id);
+        }
+        Self::insert(pool, plan, contract_hash).await
+    }
+
     pub async fn find_by_hash(
         pool: &SqlitePool,
         plan_hash: &str,

@@ -16,7 +16,7 @@ export default function ExternalExecutors() {
 
   async function reg() {
     if (!regForm.display_name) return;
-    try { await registerExecutor({...regForm,executor_id:regForm.executor_id||"exec-"+crypto.randomUUID(),capabilities:["mock"],required_credentials:[],permission_boundary:{max_risk_score:0.5,can_write_fact:false,can_write_decision:false,can_access_network:false,can_access_filesystem:false,can_call_external_executor:false,can_propose_skill:false},file_scope:[],network_scope:[],memory_scope:"Executor",supported_actions:["read"],health_check_url:"",audit_callback_url:"",status:"Registered",runtime_endpoint:"http://localhost:0",created_at_ms:Date.now(),updated_at_ms:Date.now()}); setShowReg(false); load(); }
+    try { await registerExecutor({...regForm,executor_id:regForm.executor_id||"exec-"+crypto.randomUUID(),capabilities:["read"],required_credentials:[],permission_boundary:{max_risk_score:0.5,can_write_fact:false,can_write_decision:false,can_access_network:false,can_access_filesystem:false,can_call_external_executor:false,can_propose_skill:false},file_scope:[],network_scope:[],memory_scope:"Executor",supported_actions:["read"],health_check_url:"",audit_callback_url:"",status:"Registered",runtime_endpoint:"",created_at_ms:Date.now(),updated_at_ms:Date.now()}); setShowReg(false); load(); }
     catch(e:unknown) { alert(String(e)); }
   }
   async function dryRun(eid:string,woid:string) {
@@ -35,6 +35,7 @@ export default function ExternalExecutors() {
           <input placeholder="Display Name" value={regForm.display_name||""} onChange={e=>setRegForm({...regForm,display_name:e.target.value})} className="input" />
           <select value={regForm.source_type||"OpenClaw"} onChange={e=>setRegForm({...regForm,source_type:e.target.value})} className="input">{SOURCE_TYPES.map(s=><option key={s}>{s}</option>)}</select>
           <input placeholder="Risk Ceiling" value={regForm.risk_ceiling||""} onChange={e=>setRegForm({...regForm,risk_ceiling:e.target.value})} className="input" />
+          <div className="text-xs" style={{color:"var(--text-muted)"}}>Alpha registers executors as governed read-only stubs. Sandbox, network, and file scopes require manual integration in v0.3.</div>
           <div className="flex gap-2"><button onClick={reg} className="px-3 py-1.5 text-xs rounded-md text-white" style={{background:"var(--accent)"}}>Register</button><button onClick={()=>setShowReg(false)} className="px-3 py-1.5 text-xs rounded-md" style={{color:"var(--text-muted)"}}>Cancel</button></div>
         </div>
       )}

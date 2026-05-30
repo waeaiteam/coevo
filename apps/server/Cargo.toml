@@ -35,6 +35,7 @@ chrono.workspace = true
 sqlx.workspace = true
 hex.workspace = true
 rand.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 coevo-customs.workspace = true

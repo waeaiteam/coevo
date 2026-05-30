@@ -18,6 +18,7 @@ use coevo_store::repos::worker_run_repo::{
     WorkerEventRepo, WorkerRunRepo, WorkerSkillUsageRepo, WorkerStepRepo, WorkerToolCallRepo,
 };
 use coevo_store::repos_opc::{memory_repo, work_order_repo};
+use std::path::PathBuf;
 use sqlx::SqlitePool;
 use sqlx::{Column, Row};
 
@@ -53,6 +54,65 @@ fn find_github_url(text: &str) -> Option<String> {
             let path = rest[..end].trim_end_matches('/');
             if path.split('/').count() >= 2 {
                 return Some(format!("https://github.com/{}", path));
+            }
+        }
+    }
+    None
+}
+
+fn workspace_roots() -> Vec<PathBuf> {
+    if let Ok(root) = std::env::var("COEVO_WORKSPACE_DIR") {
+        return vec![PathBuf::from(root)];
+    }
+    if let Ok(home) = std::env::var("COEVO_HOME") {
+        return vec![PathBuf::from(home).join("workspace")];
+    }
+    std::env::current_dir().map(|p| vec![p]).unwrap_or_default()
+}
+
+fn clean_path_token(token: &str) -> &str {
+    token.trim_matches(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | '`' | ',' | ';' | ':' | ')' | '(' | '[' | ']' | '{' | '}' | '<' | '>'
+            )
+    })
+}
+
+fn looks_like_file_reference(token: &str) -> bool {
+    token.contains('/')
+        || token.contains('\\')
+        || token.contains(".md")
+        || token.contains(".txt")
+        || token.contains(".json")
+        || token.contains(".toml")
+        || token.contains(".yaml")
+        || token.contains(".yml")
+        || token.contains(".rs")
+        || token.contains(".ts")
+        || token.contains(".tsx")
+}
+
+fn find_readonly_file_target(intent: &str, roots: &[PathBuf]) -> Option<PathBuf> {
+    for token in intent.split_whitespace().map(clean_path_token).filter(|t| looks_like_file_reference(t)) {
+        let candidate = PathBuf::from(token);
+        if candidate.is_absolute() && candidate.is_file() {
+            return Some(candidate);
+        }
+        for root in roots {
+            let joined = root.join(token);
+            if joined.is_file() {
+                return Some(joined);
+            }
+        }
+    }
+
+    for fallback in ["README.md", "README.zh-CN.md", "mission-notes.md", "welcome.md"] {
+        for root in roots {
+            let joined = root.join(fallback);
+            if joined.is_file() {
+                return Some(joined);
             }
         }
     }
@@ -285,7 +345,8 @@ impl WorkerHarness {
             }
         }
 
-        // Track check
+        // OPC HTTP handlers are the authoritative governance gate for Red and
+        // Yellow execution. These checks defend direct/internal harness callers.
         if wo.track == "red" {
             return Self::finish(
                 pool,
@@ -394,16 +455,19 @@ impl WorkerHarness {
 
         let lower = wo.mission_intent.to_lowercase();
         let gh_url = find_github_url(&lower);
+        let file_roots = workspace_roots();
+        let file_target = find_readonly_file_target(&wo.mission_intent, &file_roots);
         let tool_id = if gh_url.is_some() && allowed.iter().any(|t| t.tool_id == "github-readonly")
         {
             "github-readonly"
-        } else if allowed.iter().any(|t| t.tool_id == "file-readonly") {
+        } else if file_target.is_some() && allowed.iter().any(|t| t.tool_id == "file-readonly") {
             "file-readonly"
         } else {
             ""
         };
 
         let mut tool_failed = false;
+        let mut last_tool_summary = String::new();
         if !tool_id.is_empty() {
             WorkerEventRepo::append(
                 pool,
@@ -430,7 +494,12 @@ impl WorkerHarness {
                     serde_json::json!({"error":"No valid GitHub URL found"})
                 }
             } else {
-                serde_json::json!({"action":"ReadFile","path":"README.md"})
+                serde_json::json!({
+                    "action":"ReadFile",
+                    "path":file_target.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                    "allowed_paths":file_roots.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                    "max_bytes":5000
+                })
             };
 
             let tool_result = registry
@@ -440,12 +509,18 @@ impl WorkerHarness {
             let success = tool_result.get("error").is_none();
             tool_failed = !success;
             let output_str = serde_json::to_string(&tool_result).unwrap_or_default();
+            last_tool_summary = output_str.chars().take(1000).collect::<String>();
+            let tool_type = match tool_id {
+                "github-readonly" => "GitHubReadonly",
+                "file-readonly" => "FileReadonly",
+                _ => tool_id,
+            };
             WorkerToolCallRepo::create(
                 pool,
                 &format!("tc-{}", uuid::Uuid::new_v4()),
                 &run_id,
                 tool_id,
-                tool_id,
+                tool_type,
                 &format!("{} execution", tool_id),
                 &output_str.chars().take(500).collect::<String>(),
                 success,
@@ -474,7 +549,11 @@ impl WorkerHarness {
             scope: MemoryScope::Task,
             owner_id: wo.work_order_id.clone(),
             title: format!("WorkerRun {}", &run_id),
-            content: format!("Harness: {}", wo.mission_intent),
+            content: if last_tool_summary.is_empty() {
+                format!("Harness: {}", wo.mission_intent)
+            } else {
+                format!("Harness: {}\nTool evidence: {}", wo.mission_intent, last_tool_summary)
+            },
             tags: vec![],
             source: "worker-harness".into(),
             provenance: format!("worker-run-{}", run_id),

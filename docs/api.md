@@ -26,6 +26,8 @@ POST /mcl/compile
 ```
 
 Compiles user intent into an MCL contract. Per whitepaper Section 2.1.
+The handler persists the returned contract as a contract anchor. Use the returned
+`contract_hash` when routing the execution plan.
 
 **Request:**
 ```json
@@ -64,10 +66,15 @@ Computes PCDT execution plan. Per whitepaper Section 7.
 **Request:**
 ```json
 {
+  "contract_hash": "abc123...",
   "contract": { /* MCLSpec from /mcl/compile */ },
   "agent_ids": ["agent-synthesizer-01", "agent-critic-01"]
 }
 ```
+
+`contract_hash` is required and must refer to a persisted contract returned by
+`/mcl/compile`. Route plans are persisted as execution plan anchors under this
+contract.
 
 **Response 200:**
 ```json
@@ -79,6 +86,7 @@ Computes PCDT execution plan. Per whitepaper Section 7.
 
 **Error 422** (`ROUTING_NO_PATH`): No compliant routing path found.
 **Error 422** (`BUDGET_EXCEEDED`): Token budget exceeded.
+**Error 422** (`MCL_COMPILATION_ERROR`): Missing or unknown `contract_hash`.
 
 ---
 
@@ -171,15 +179,18 @@ Processes stance matrix, generates ADR-A. Per whitepaper Section 10.
 
 ---
 
-## 7. Demo Endpoints
+## 7. Internal Contributor Test Routes
 
-```
-POST /demo/green    — Green Track (BR=0, IR=0)
-POST /demo/yellow   — Yellow Track (IR=1)
-POST /demo/red      — Red Track (IR=3)
-```
+The legacy `/demo/*` routes are no longer mounted in the product server router
+and are not advertised in the public OpenAPI document. Product validation should
+use MissionChat, WorkOrders, Timeline, and the synthetic / acceptance test
+suites.
 
-Each runs a complete scenario end-to-end and returns the trace.
+---
+
+## WorkOrder Create Boundary
+
+`POST /opc/work-orders` accepts mission facts and selected resources. Track, allowed actions, restricted actions, and risk summary are server-authoritative at creation time. Legacy clients may still send those governance fields, but the server ignores them and persists its own RiskGate classification.
 
 ---
 

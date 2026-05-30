@@ -1,93 +1,73 @@
-import { useState, useCallback } from "react";
 import MetricCard from "../components/MetricCard";
-import TrackStatusCard from "../components/TrackStatusCard";
-import GovernanceTimeline, { type TimelineEvent } from "../components/GovernanceTimeline";
 import RiskApprovalPanel from "../components/RiskApprovalPanel";
-import DemoActionPanel from "../components/DemoActionPanel";
-import type { DemoResponse } from "../types";
-
-let eventId = 0;
-function makeEvent(
-  type: TimelineEvent["type"],
-  message: string,
-  detail?: string,
-  track?: "green" | "yellow" | "red"
-): TimelineEvent {
-  return {
-    id: String(++eventId),
-    time: new Date().toLocaleTimeString(),
-    type,
-    message,
-    detail,
-    track,
-  };
-}
+import TrackStatusCard from "../components/TrackStatusCard";
 
 export default function Dashboard() {
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
-
-  const handleDemoResult = useCallback((r: DemoResponse) => {
-    setEvents((prev) => [
-      makeEvent("demo", `${r.track.toUpperCase()} Track executed`, `contract: ${r.contract_hash.slice(0, 12)}... | plan: ${r.plan_hash.slice(0, 12)}... | entries: ${r.entries_created.length}`, r.track as "green" | "yellow" | "red"),
-      makeEvent(r.track === "green" ? "compile" : r.track === "yellow" ? "propose" : "risk",
-        r.track === "green" ? "MCL compiled" : r.track === "yellow" ? "CognitiveCustoms proposed" : "RiskGate evaluated",
-        r.track === "red" ? `decision: lease granted, ${r.entries_created.length} operations` : `hash: ${r.contract_hash.slice(0, 12)}...`,
-        r.track as "green" | "yellow" | "red"),
-      ...prev,
-    ]);
-  }, []);
-
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-bold">Dashboard</h2>
-      {/* KPI Row */}
-      <div className="grid grid-cols-6 gap-3">
-        <MetricCard label="Active Contracts" value={12} sub="+3 this hour" accent="purple" />
-        <MetricCard label="Running Plans" value={4} sub="2 in Yellow Track" accent="blue" />
-        <MetricCard label="Pending Approvals" value={2} sub="1 explicit" accent="yellow" />
-        <MetricCard label="Red Blocks" value={1} accent="red" sub="leased" />
-        <MetricCard label="ADR-A Records" value={8} sub="today" accent="purple" />
-        <MetricCard label="Audit Events" value={247} sub="24h" accent="green" />
+      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Governance descriptors for the local Alpha workspace. Live counters will be wired to audit telemetry in the next release slice.
       </div>
 
-      {/* Three Tracks + Risk Panel */}
+      <div className="grid grid-cols-6 gap-3">
+        <MetricCard label="Governed WorkOrders" value="Ready" sub="MissionChat creates tasks" accent="green" />
+        <MetricCard label="AI Employees" value="Bootstrap" sub="created after model setup" accent="blue" />
+        <MetricCard label="Timeline Audit" value="Required" sub="sessions, steps, events" accent="purple" />
+        <MetricCard label="Red Track" value="Blocked" accent="red" sub="Alpha hard stop" />
+        <MetricCard label="COEVO_HOME" value="Local" sub="data and logs" accent="blue" />
+        <MetricCard label="Model Gateway" value="Required" sub="configured provider" accent="green" />
+      </div>
+
       <div className="grid grid-cols-4 gap-3">
         <TrackStatusCard
           track="green"
           metrics={[
-            { label: "Auto executions", value: "156" },
-            { label: "Avg latency", value: "43ms" },
-            { label: "Success rate", value: "99.4%" },
-            { label: "Last run", value: "2s ago" },
+            { label: "Default behavior", value: "Auto executable" },
+            { label: "Allowed actions", value: "read/analyze" },
+            { label: "Worker audit", value: "required" },
+            { label: "Memory writes", value: "Hypothesis" },
           ]}
         />
         <TrackStatusCard
           track="yellow"
           metrics={[
-            { label: "Pending approvals", value: "2" },
-            { label: "Negative consent", value: "1" },
-            { label: "Explicit approval", value: "1" },
-            { label: "Timeout window", value: "3m 12s" },
+            { label: "Default behavior", value: "Approval required" },
+            { label: "Approval mode", value: "Negative consent" },
+            { label: "Writes", value: "draft only" },
+            { label: "Timeline", value: "required" },
           ]}
         />
         <TrackStatusCard
           track="red"
           metrics={[
-            { label: "Circuit breaks", value: "3" },
-            { label: "Emergency leases", value: "1" },
-            { label: "Human overrides", value: "0" },
-            { label: "Blocked actions", value: "2" },
+            { label: "Default behavior", value: "Blocked" },
+            { label: "HTTP result", value: "403" },
+            { label: "Requires", value: "MFA + lease" },
+            { label: "Alpha execution", value: "disabled" },
           ]}
         />
         <RiskApprovalPanel />
       </div>
 
-      {/* Timeline + Demo */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="col-span-2">
-          <GovernanceTimeline events={events} />
+      <div className="card">
+        <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--text-muted)" }}>
+          First Mission Path
         </div>
-        <DemoActionPanel onResult={handleDemoResult} />
+        <div className="grid grid-cols-5 gap-3 text-xs">
+          {[
+            "Configure model provider",
+            "Enter MissionChat intent",
+            "Create governed WorkOrder",
+            "Execute Green Track",
+            "Inspect Timeline/Audit",
+          ].map((step, i) => (
+            <div key={step} className="p-3 rounded border" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
+              <div className="font-mono mb-1" style={{ color: "var(--accent)" }}>0{i + 1}</div>
+              {step}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ use axum::{extract::State, Json};
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_core::problem::ProblemDetails;
 use coevo_mcl::compiler::MCLCompiler;
+use coevo_store::repos::contract_repo::ContractRepo;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -71,10 +72,50 @@ pub async fn compile_contract(
             _ => ProblemDetails::mcl_compilation_error("/mcl/compile", &e.to_string()),
         })?;
 
+    ContractRepo::insert_or_ignore(&state.pool, &result.contract, &result.contract_hash)
+        .await
+        .map_err(|e| {
+            ProblemDetails::internal_error(
+                "/mcl/compile",
+                &format!("failed to persist contract anchor: {}", e),
+            )
+        })?;
+
     Ok(Json(CompileResponse {
         contract: serde_json::to_value(&result.contract).unwrap(),
         contract_hash: result.contract_hash,
         ambiguity_score: result.ambiguity_score,
         compile_warnings: result.compile_warnings,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use axum::extract::State;
+    use coevo_store::{migrate::run_migrations, pool::create_test_pool, repos::contract_repo::ContractRepo};
+
+    #[tokio::test]
+    async fn compile_contract_persists_contract_anchor() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+
+        let Json(response) = compile_contract(
+            State(state),
+            Json(CompileRequest {
+                user_intent: "Analyze workspace launch readiness".to_string(),
+                requested_mode: "DRAFT".to_string(),
+                parent_contract_hash: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let stored = ContractRepo::find_by_hash(&pool, &response.contract_hash)
+            .await
+            .unwrap();
+        assert!(stored.is_some());
+    }
 }

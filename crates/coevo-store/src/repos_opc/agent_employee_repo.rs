@@ -137,6 +137,12 @@ mod tests {
         assert!(employees
             .iter()
             .any(|e| matches!(e.department, coevo_core::opc::Department::Governance)));
+        let risk = employees
+            .iter()
+            .find(|e| e.agent_id == "agent-risk-01")
+            .unwrap();
+        assert_eq!(risk.risk_ceiling, 0.6);
+        assert_eq!(risk.permission_boundary.max_risk_score, 0.6);
         assert!(employees.len() >= 10);
     }
 

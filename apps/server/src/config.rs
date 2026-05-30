@@ -11,6 +11,16 @@ fn coevo_home() -> PathBuf {
     PathBuf::from(".coevo")
 }
 
+fn ensure_default_workspace(home: &std::path::Path) {
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).ok();
+    let welcome = workspace.join("welcome.md");
+    if !welcome.exists() {
+        let content = "# coevo workspace\n\nThis file exists so the first Green WorkOrder can perform a real governed read-only file execution and produce audit evidence.\n";
+        std::fs::write(welcome, content).ok();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub bind_addr: String,
@@ -22,6 +32,7 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> Self {
         let home = coevo_home();
+        ensure_default_workspace(&home);
 
         let bind_addr = if let Ok(addr) = env::var("COEVO_BIND_ADDR") { addr }
         else if let Ok(port) = env::var("COEVO_PORT") { format!("127.0.0.1:{}", port) }
@@ -66,5 +77,19 @@ mod tests {
         assert!(!config.database_url.starts_with("sqlite:"), "COEVO_DB_PATH should be raw, got: {}", config.database_url);
         assert!(config.database_url.contains("coevo.db"));
         std::env::remove_var("COEVO_DB_PATH");
+    }
+    #[test]
+    fn test_coevo_home_seeds_readonly_workspace_file() {
+        let _lock = LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join(format!("coevo-home-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("COEVO_HOME", &home);
+
+        let _config = ServerConfig::from_env();
+
+        let welcome = home.join("workspace").join("welcome.md");
+        assert!(welcome.exists(), "expected {} to exist", welcome.display());
+        assert!(std::fs::read_to_string(&welcome).unwrap().contains("coevo"));
+        std::env::remove_var("COEVO_HOME");
+        std::fs::remove_dir_all(home).ok();
     }
 }

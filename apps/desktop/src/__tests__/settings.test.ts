@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { defaults } from "../settings/defaults";
+import { loadSettingsSnapshot } from "../hooks/useSettings";
 
 describe("Settings", () => {
   beforeEach(() => {
@@ -25,6 +26,18 @@ describe("Settings", () => {
     localStorage.setItem("coevo-settings", s);
     const loaded = JSON.parse(localStorage.getItem("coevo-settings")!);
     expect(loaded.general.default_home).toBe("dashboard");
+  });
+
+  it("deep merges partial stored settings with defaults", () => {
+    localStorage.setItem("coevo-settings", JSON.stringify({
+      model_provider: { provider: "openai-compatible", default_model: "gpt-4.1" },
+    }));
+
+    const loaded = loadSettingsSnapshot();
+
+    expect(loaded.model_provider.default_model).toBe("gpt-4.1");
+    expect(loaded.model_provider.base_url).toBe(defaults.model_provider.base_url);
+    expect(loaded.developer.api_base_url).toBe(defaults.developer.api_base_url);
   });
 
   it("api_base_url defaults to localhost", () => {

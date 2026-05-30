@@ -2,6 +2,7 @@
 //! Per coevo whitepaper Sections 3 & 4.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// The mission contract specification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,13 @@ pub struct MCLSpec {
     pub termination_policy: TerminationPolicy,
     /// Human responsibility anchoring.
     pub responsibility_anchor_policy: ResponsibilityAnchorPolicy,
+}
+
+pub fn hash_contract(contract: &MCLSpec) -> Result<String, serde_json::Error> {
+    let contract_json = serde_json::to_string(contract)?;
+    let mut hasher = Sha256::new();
+    hasher.update(contract_json.as_bytes());
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// MCL contract lifecycle states. Transition is strictly one-way.

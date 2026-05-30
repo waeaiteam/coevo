@@ -48,6 +48,8 @@ url = "2"
 ed25519-dalek = { version = "2", features = ["serde"] }
 rand = "0.8"
 petgraph = "0.6"
+keyring-core = "1"
+windows-native-keyring-store = "1"
 
 # --- server ---
 axum = { version = "0.8", features = ["macros"] }
