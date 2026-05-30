@@ -10,7 +10,11 @@ impl ReflectionEngine {
         let mut what_worked: Vec<String> = vec![];
         let mut what_failed: Vec<String> = vec![];
         let mut memory_to_add: Vec<String> = vec![];
-        let mut skill_to_update: Vec<String> = vec![];
+        let skill_to_update: Vec<String> = if skill_usage.is_empty() {
+            vec![]
+        } else {
+            vec![format!("Observed {} skill usage records", skill_usage.len())]
+        };
 
         for s in steps {
             let st = s["step_type"].as_str().unwrap_or("");

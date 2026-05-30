@@ -6,7 +6,7 @@ use coevo_store::repos::worker_run_repo::WorkerSkillUsageRepo;
 
 pub struct SkillRuntime;
 impl SkillRuntime {
-    pub async fn load_skill_index(pool: &SqlitePool, agent_id: &str) -> Result<Vec<serde_json::Value>, WorkerError> {
+    pub async fn load_skill_index(pool: &SqlitePool, _agent_id: &str) -> Result<Vec<serde_json::Value>, WorkerError> {
         let skills = SkillRepo::list(pool, None).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
         Ok(skills.iter().filter(|s| s.status == coevo_core::skills::SkillStatus::Active).map(|s| serde_json::json!({
             "skill_id": s.skill_id, "name": s.name, "version": s.version,
