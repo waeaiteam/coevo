@@ -73,6 +73,22 @@ describe("WorkOrders", () => {
     expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
   });
 
+  it("keeps completed red rows blocked from runnable re-execution", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({
+        work_order_id: "wo-red-completed",
+        mission_intent: "Delete production data",
+        track: "red",
+        status: "Completed",
+      }),
+    ]);
+
+    render(<WorkOrders />);
+
+    const runAgainButton = await screen.findByRole("button", { name: "Run again" });
+    expect(runAgainButton).toBeDisabled();
+  });
+
   it("renders Green execution result inline and auto-loads the row timeline", async () => {
     api.listWorkOrders
       .mockResolvedValueOnce([

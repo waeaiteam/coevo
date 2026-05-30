@@ -285,8 +285,6 @@ impl WorkerHarness {
         let now = || chrono::Utc::now().timestamp_millis();
         let mut steps: Vec<serde_json::Value> = vec![];
         let mut mem_ids: Vec<String> = vec![];
-        let model_profiles =
-            model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
 
         let wo = work_order_repo::WorkOrderRepo::get(pool, work_order_id)
             .await
@@ -295,6 +293,16 @@ impl WorkerHarness {
         let agent_id = wo.selected_agents.first().cloned().unwrap_or_default();
         if agent_id.is_empty() {
             return Err(WorkerError::WorkerNotFound("No agent selected".into()));
+        }
+
+        if wo.track == "red" {
+            return Err(WorkerError::RedTrackBlocked(
+                "RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER: Alpha does not support Red Track execution."
+                    .into(),
+            ));
+        }
+        if wo.track == "yellow" && options.approval_receipt.is_none() {
+            return Err(WorkerError::YellowApprovalRequired);
         }
 
         let worker_id = format!("worker-{}", agent_id);
@@ -474,52 +482,8 @@ impl WorkerHarness {
             }
         }
 
-        // OPC HTTP handlers are the authoritative governance gate for Red and
-        // Yellow execution. These checks defend direct/internal harness callers.
-        if wo.track == "red" {
-            return Self::finish(
-                pool,
-                work_order_id,
-                &session_id,
-                &worker_id,
-                &run_id,
-                &agent_id,
-                &wo,
-                steps,
-                mem_ids,
-                "Blocked",
-                "Red Track blocked by default.",
-            )
-            .await;
-        }
-        if wo.track == "yellow" && options.approval_receipt.is_none() {
-            WorkerEventRepo::append(
-                pool,
-                &run_id,
-                "ApprovalRequired",
-                &serde_json::to_string(&serde_json::json!({"reason":"Yellow requires approval"}))
-                    .unwrap(),
-            )
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-            WorkerRunRepo::set_status(pool, &run_id, "WaitingApproval")
-                .await
-                .map_err(|e| WorkerError::Internal(e.to_string()))?;
-            sqlx::query("UPDATE worker_sessions SET status='WaitingApproval',updated_at_ms=? WHERE session_id=?").bind(now()).bind(&session_id).execute(pool).await.map_err(|e| WorkerError::Internal(e.to_string()))?;
-            WorkerQueueService::release(pool, &session_id, &run_id).await?;
-            return Self::build_result(
-                pool,
-                work_order_id,
-                &run_id,
-                steps,
-                vec![],
-                None,
-                None,
-                "WaitingApproval",
-                "Yellow Track: WaitingApproval.".into(),
-            )
-            .await;
-        }
+        let model_profiles =
+            model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
 
         // ModelRouter: record routing decision for Think step (cognition only, not authorization)
         let route_req = ModelRoutingRequest {
@@ -893,72 +857,6 @@ impl WorkerHarness {
         .await
     }
 
-    async fn finish(
-        pool: &SqlitePool,
-        wo_id: &str,
-        session_id: &str,
-        worker_id: &str,
-        run_id: &str,
-        agent_id: &str,
-        wo: &coevo_core::opc::WorkOrder,
-        steps: Vec<serde_json::Value>,
-        mem_ids: Vec<String>,
-        status: &str,
-        summary: &str,
-    ) -> Result<WorkerHarnessResult, WorkerError> {
-        let now = chrono::Utc::now().timestamp_millis();
-        WorkerEventRepo::append(
-            pool,
-            run_id,
-            "WorkerBlocked",
-            &serde_json::to_string(&serde_json::json!({"reason":"Red Track blocked"})).unwrap(),
-        )
-        .await
-        .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        WorkerRunRepo::set_status(pool, run_id, status)
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        sqlx::query("UPDATE worker_sessions SET status=?,updated_at_ms=? WHERE session_id=?")
-            .bind(status)
-            .bind(now)
-            .bind(session_id)
-            .execute(pool)
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        WorkerQueueService::release(pool, session_id, run_id).await?;
-
-        let run = WorkerRun {
-            run_id: run_id.into(),
-            work_order_id: wo_id.into(),
-            agent_id: agent_id.into(),
-            worker_id: worker_id.into(),
-            session_id: session_id.into(),
-            status: crate::types::WorkerRunStatus::Blocked,
-            result_json: serde_json::json!({}),
-            memory_ids_json: serde_json::json!([]),
-            errors_json: serde_json::json!([]),
-            audit_ref: None,
-            started_at_ms: now,
-            ended_at_ms: Some(now),
-        };
-        let reflection =
-            ReflectionEngine::reflect(pool, run_id, wo_id, agent_id, worker_id, &steps, &[], &[])
-                .await?;
-        let proposal_id = SelfUpgradeLoop::run(pool, &run, &reflection, None).await?;
-        Self::build_result(
-            pool,
-            wo_id,
-            run_id,
-            steps,
-            mem_ids,
-            Some(reflection.reflection_id),
-            proposal_id,
-            status,
-            summary.into(),
-        )
-        .await
-    }
-
     async fn build_result(
         pool: &SqlitePool,
         wo_id: &str,
@@ -1024,5 +922,92 @@ impl WorkerHarness {
             status: status.into(),
             summary,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use coevo_store::migrate::run_migrations;
+    use coevo_store::pool::create_test_pool;
+    use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
+    use coevo_store::repos_opc::skill_repo::SkillRepo;
+    use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
+
+    fn test_work_order(work_order_id: &str, track: &str) -> WorkOrder {
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        WorkOrder {
+            work_order_id: work_order_id.to_string(),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze README".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: track.to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec!["delete".to_string()],
+            risk_summary: "test".to_string(),
+            created_at_ms: now,
+            updated_at_ms: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn red_track_blocks_before_model_provider_resolution() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+        SkillRepo::seed_default(&pool).await.unwrap();
+        let wo = test_work_order("wo-red-governance-first", "red");
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let err = WorkerHarness::run_work_order(
+            &pool,
+            &wo.work_order_id,
+            WorkerHarnessOptions {
+                approval_receipt: None,
+                max_runtime_ms: None,
+                deterministic_mode: true,
+                preferred_tool_ids: vec![],
+                allow_mock_model_routing: false,
+            },
+        )
+        .await
+        .expect_err("red should be blocked before provider resolution");
+
+        assert!(err
+            .to_string()
+            .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
+    }
+
+    #[tokio::test]
+    async fn yellow_without_approval_waits_before_model_provider_resolution() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+        SkillRepo::seed_default(&pool).await.unwrap();
+        let wo = test_work_order("wo-yellow-governance-first", "yellow");
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let err = WorkerHarness::run_work_order(
+            &pool,
+            &wo.work_order_id,
+            WorkerHarnessOptions {
+                approval_receipt: None,
+                max_runtime_ms: None,
+                deterministic_mode: true,
+                preferred_tool_ids: vec![],
+                allow_mock_model_routing: false,
+            },
+        )
+        .await
+        .expect_err("yellow should require approval before provider resolution");
+
+        assert!(err.to_string().contains("Yellow approval required"));
     }
 }

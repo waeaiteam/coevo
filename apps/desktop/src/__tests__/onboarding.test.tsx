@@ -131,6 +131,7 @@ describe("Desktop onboarding", () => {
       display_name: "Wae",
       preferred_language: "en",
       risk_preference: "conservative",
+      default_mission_mode: "read_only",
     }));
     expect(api.updateCompanyProfile).toHaveBeenCalledWith(expect.objectContaining({
       opc_id: opcId,
@@ -172,6 +173,27 @@ describe("Desktop onboarding", () => {
     await waitFor(() => expect(api.createMemory).toHaveBeenCalledTimes(1));
     expect(JSON.stringify(localStorage)).not.toMatch(/api[_-]?key|sk-live-secret/i);
     expect(localStorage.getItem("coevo-settings") || "").not.toMatch(/api[_-]?key|sk-live-secret/i);
+  });
+
+  it("fails fast in Company Foundation when bootstrap seed/list fails", async () => {
+    api.seedEmployees.mockRejectedValue(new Error("seed employees failed"));
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<FirstRun onDone={vi.fn()} />} />
+          <Route path="/settings/model_provider" element={<div>Model Provider Settings</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Continue to Company Foundation/i }));
+    expect(await screen.findByText(/seed employees failed/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Model Provider handoff/i })).not.toBeInTheDocument();
+
+    expect(api.updateUserProfile).not.toHaveBeenCalled();
+    expect(api.updateCompanyProfile).not.toHaveBeenCalled();
+    expect(api.createMemory).not.toHaveBeenCalled();
   });
 
   it("Model Providers does not expose the mock provider option", () => {

@@ -143,7 +143,7 @@ export default function WorkOrders() {
                   {completed && (
                     <>
                       <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.view_result")}</button>
-                      <button onClick={() => executeRow(id, track, true)} disabled={running} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)", opacity:running ? 0.5 : 1}}>{running ? t("workorders.running") : t("workorders.run_again")}</button>
+                      <button onClick={() => executeRow(id, track, true)} disabled={running || track === "red"} className="px-2 py-1 text-xs rounded border" style={{borderColor:track === "red" ? "var(--red)" : "var(--border-accent)",color:track === "red" ? "var(--red)" : "var(--text-secondary)", opacity:running || track === "red" ? 0.5 : 1}}>{running ? t("workorders.running") : t("workorders.run_again")}</button>
                     </>
                   )}
                   <button onClick={() => showTimeline(id, track)} className="px-2 py-1 text-xs rounded border" style={{borderColor:"var(--accent)",color:"var(--accent)"}}>{t("workorders.view_timeline")}</button>

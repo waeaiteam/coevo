@@ -45,13 +45,13 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setError("");
     try {
-      await Promise.allSettled([seedEmployees(), seedSkills()]);
-      const [employees, skills] = await Promise.all([
-        listEmployees().catch(() => []),
-        listSkills().catch(() => []),
-      ]);
+      await seedEmployees();
+      await seedSkills();
+      const [employees, skills] = await Promise.all([listEmployees(), listSkills()]);
       setTeamCount(employees.length);
       setSkillCount(skills.length);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }

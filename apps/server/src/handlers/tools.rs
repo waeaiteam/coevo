@@ -69,9 +69,16 @@ pub async fn assign_worker(State(s): State<AppState>, Json(body): Json<AssignReq
     }
 }
 pub async fn run_worker(State(s): State<AppState>, Path(_id): Path<String>, Json(body): Json<RunReq>) -> (StatusCode, Json<serde_json::Value>) {
-    match WorkerHarness::run_work_order(&s.pool, &body.work_order_id, WorkerHarnessOptions{approval_receipt:None,max_runtime_ms:None,deterministic_mode:true,preferred_tool_ids:vec![],allow_mock_model_routing:true}).await {
+    match WorkerHarness::run_work_order(&s.pool, &body.work_order_id, WorkerHarnessOptions{approval_receipt:None,max_runtime_ms:None,deterministic_mode:true,preferred_tool_ids:vec![],allow_mock_model_routing:false}).await {
         Ok(r) => ok!(serde_json::to_value(&r).unwrap()),
-        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("MODEL_PROVIDER_NOT_CONFIGURED") {
+                err!(StatusCode::CONFLICT, msg)
+            } else {
+                err!(StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
+        }
     }
 }
 pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
@@ -105,4 +112,57 @@ pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) ->
     }
     AgentWorkerRepo::set_status(&s.pool, &id, "Cancelled").await.map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())).ok();
     ok!(serde_json::json!({"worker_id":id,"status":"Cancelled","cancelled_run_id":cancelled_run,"session_id":cancelled_session,"queue_released":queue_released}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use axum::extract::Path;
+    use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use coevo_store::migrate::run_migrations;
+    use coevo_store::pool::create_test_pool;
+    use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
+
+    #[tokio::test]
+    async fn run_worker_rejects_public_mock_routing_when_no_model_provider() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let wo = WorkOrder {
+            work_order_id: "wo-run-worker-provider-required".to_string(),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Analyze README".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec!["delete".to_string()],
+            risk_summary: "test".to_string(),
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let (status, Json(body)) = run_worker(
+            State(state),
+            Path("worker-agent-founder-01".to_string()),
+            Json(RunReq {
+                work_order_id: wo.work_order_id.clone(),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("MODEL_PROVIDER_NOT_CONFIGURED"));
+    }
 }
