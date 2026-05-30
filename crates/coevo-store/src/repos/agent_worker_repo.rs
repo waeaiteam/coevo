@@ -1,4 +1,4 @@
-use sqlx::{SqlitePool, Row};
+use sqlx::SqlitePool;
 
 pub struct AgentWorkerRepo;
 impl AgentWorkerRepo {
