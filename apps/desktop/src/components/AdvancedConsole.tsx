@@ -2,8 +2,8 @@ import { Link } from "react-router-dom";
 import { t, useLanguage } from "../settings/i18n";
 
 type ConsoleItem = {
-  label: string;
-  desc: string;
+  labelKey: string;
+  descKey: string;
   to: string;
 };
 
@@ -11,37 +11,37 @@ const groups: { titleKey: string; items: ConsoleItem[] }[] = [
   {
     titleKey: "adv.group.context",
     items: [
-      { label: "Founder Profile", desc: "Founder identity, operating preferences, and profile context.", to: "/founder" },
-      { label: "Company Memory", desc: "Scoped memory records with provenance and lifecycle controls.", to: "/memory" },
-      { label: "Contracts", desc: "Mission contract anchors and compiled governance records.", to: "/contracts" },
-      { label: "Plans", desc: "Execution plans and routing outputs.", to: "/plans" },
+      { labelKey: "adv.founder_profile", descKey: "adv.founder_profile_desc", to: "/founder" },
+      { labelKey: "adv.company_memory", descKey: "adv.company_memory_desc", to: "/memory" },
+      { labelKey: "adv.contracts", descKey: "adv.contracts_desc", to: "/contracts" },
+      { labelKey: "adv.plans", descKey: "adv.plans_desc", to: "/plans" },
     ],
   },
   {
     titleKey: "adv.group.capabilities",
     items: [
-      { label: "AI Employees", desc: "Passports, departments, capabilities, and risk ceilings.", to: "/employees" },
-      { label: "Skills", desc: "Versioned capabilities with activation, rollback, and evolution.", to: "/skills" },
-      { label: "External Executors", desc: "Governed worker adapters and dry-run contracts.", to: "/executors" },
+      { labelKey: "adv.ai_employees", descKey: "adv.ai_employees_desc", to: "/employees" },
+      { labelKey: "adv.skills", descKey: "adv.skills_desc", to: "/skills" },
+      { labelKey: "adv.external_executors", descKey: "adv.external_executors_desc", to: "/executors" },
     ],
   },
   {
     titleKey: "adv.group.governance",
     items: [
-      { label: "Risk Gate", desc: "Green, Yellow, and Red threshold configuration.", to: "/risk" },
-      { label: "Resolution", desc: "ADR-A conflict handling and escalation review.", to: "/resolution" },
-      { label: "Cognitive Customs", desc: "Fact provenance, TTL, and promotion policy.", to: "/customs" },
-      { label: "Policy Engine", desc: "Policy profile, simulation, and decision logging.", to: "/settings/policy_engine" },
-      { label: "Privacy", desc: "Retention, prompt storage, PII redaction, and local paths.", to: "/settings/privacy" },
+      { labelKey: "adv.risk_gate", descKey: "adv.risk_gate_desc", to: "/risk" },
+      { labelKey: "adv.resolution", descKey: "adv.resolution_desc", to: "/resolution" },
+      { labelKey: "adv.cognitive_customs", descKey: "adv.cognitive_customs_desc", to: "/customs" },
+      { labelKey: "adv.policy_engine", descKey: "adv.policy_engine_desc", to: "/settings/policy_engine" },
+      { labelKey: "adv.privacy", descKey: "adv.privacy_desc", to: "/settings/privacy" },
     ],
   },
   {
     titleKey: "adv.group.system",
     items: [
-      { label: "Model Provider", desc: "Provider, credential-vault save path, and model discovery.", to: "/settings/model_provider" },
-      { label: "Language & Appearance", desc: "Language, theme, density, and accessibility preferences.", to: "/settings/appearance" },
-      { label: "Data Management", desc: "COEVO_HOME, logs, runtime files, and local data actions.", to: "/settings/data_management" },
-      { label: "Developer Mode", desc: "API base, trace panels, raw JSON, and feature flags.", to: "/settings/developer" },
+      { labelKey: "adv.model_provider", descKey: "adv.model_provider_desc", to: "/settings/model_provider" },
+      { labelKey: "adv.language_appearance", descKey: "adv.language_appearance_desc", to: "/settings/appearance" },
+      { labelKey: "adv.data_management", descKey: "adv.data_management_desc", to: "/settings/data_management" },
+      { labelKey: "adv.developer_mode", descKey: "adv.developer_mode_desc", to: "/settings/developer" },
     ],
   },
 ];
@@ -70,11 +70,11 @@ export default function AdvancedConsole() {
                   style={{ borderColor: "var(--border-subtle)", color: "var(--text-primary)" }}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold">{item.label}</span>
+                    <span className="text-xs font-semibold">{t(item.labelKey)}</span>
                     <span className="text-[10px]" style={{ color: "var(--accent)" }}>{t("opc.open")}</span>
                   </div>
                   <p className="mt-1 line-clamp-2 text-[11px] leading-5" style={{ color: "var(--text-muted)" }}>
-                    {item.desc}
+                    {t(item.descKey)}
                   </p>
                 </Link>
               ))}

@@ -76,7 +76,7 @@ export default function OpcOverview() {
           <h2 className="text-sm font-semibold">{t("opc.agents")}</h2>
           <p className="mt-1 text-xs leading-5" style={{ color: "var(--text-muted)" }}>{t("opc.agents_desc")}</p>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
-            <Link to="/employees" className="rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>AI Employees</Link>
+            <Link to="/employees" className="rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>{t("opc.ai_employees")}</Link>
             <Link to="/skills" className="rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>{t("workorders.skills")}</Link>
             <Link to="/executors" className="rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>{t("workorders.executors")}</Link>
           </div>

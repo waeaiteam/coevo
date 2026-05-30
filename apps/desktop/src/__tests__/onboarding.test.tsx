@@ -143,6 +143,8 @@ describe("Desktop onboarding", () => {
 
     expect(screen.getAllByRole("combobox")[0]).toHaveValue("openai");
     expect(screen.queryByRole("option", { name: /Mock/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Default Model/i)).toHaveValue("gpt-4o");
+    expect(screen.getByLabelText(/Fast Model/i)).toHaveValue("gpt-4o-mini");
   });
 
   it("Test / Discover Models marks the model provider as configured after success and populates model select", async () => {
@@ -180,8 +182,11 @@ describe("Desktop onboarding", () => {
 
     await waitFor(() => expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true"));
     expect(api.discoverModels).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole("option", { name: "gpt-4o-mini" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "gpt-4o-mini" }).length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/Default Model/i)).toHaveValue("gpt-4o");
+    expect(screen.getByLabelText(/Fast Model/i)).toHaveValue("gpt-4o-mini");
+    expect(screen.getByLabelText(/Reasoning Model/i)).toHaveValue("o3-mini");
+    expect(screen.getByLabelText(/Structured Output Model/i)).toHaveValue("gpt-4o");
     expect(api.updateModelConfig).toHaveBeenCalledWith(expect.objectContaining({
       default_model: "gpt-4o",
       fast_model: "gpt-4o-mini",

@@ -9,6 +9,8 @@ import Settings from "../pages/Settings";
 import { MODEL_PROVIDER_CONFIGURED_KEY } from "../settings/onboarding";
 import { setLanguage } from "../settings/i18n";
 
+const MOJIBAKE_PATTERN = /[\uFFFD\u6D93\u93BC\u7481\u59AF\u6E1A]/;
+
 const api = vi.hoisted(() => ({
   getHealth: vi.fn(),
   listExecutors: vi.fn(),
@@ -102,7 +104,7 @@ describe("ordinary user product surface", () => {
       "Model Provider",
       "Language & Appearance",
     ].forEach((label) => {
-      expect(within(advanced).getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
+      expect(within(advanced).getByRole("link", { name: new RegExp(`^${label}\\b`, "i") })).toBeInTheDocument();
     });
   });
 
@@ -230,13 +232,14 @@ describe("ordinary user product surface", () => {
 
     expect(await screen.findByRole("link", { name: "新对话" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
-    expect(screen.getByText("语言与外观")).toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/[\uFFFD]|涓|鎼|璁|妯|渚/);
+    expect(screen.getByRole("heading", { name: "语言与外观" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(MOJIBAKE_PATTERN);
   });
 
   it("English language switch immediately rerenders core navigation and Settings title", async () => {
     localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");
-    localStorage.setItem("coevo-lang", "zh");
+    setLanguage("zh");
+    localStorage.setItem("coevo-settings", JSON.stringify({ appearance: { language: "zh" } }));
     render(
       <MemoryRouter initialEntries={["/settings/appearance"]}>
         <App />

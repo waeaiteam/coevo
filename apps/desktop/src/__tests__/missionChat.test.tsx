@@ -120,7 +120,7 @@ describe("MissionChat WorkOrder creation", () => {
     expect(payload).not.toHaveProperty("restricted_actions");
     expect(payload).not.toHaveProperty("risk_summary");
     expect(screen.getByText(/Model cognition: This is a read-only analysis mission/i)).toBeInTheDocument();
-    expect(screen.getByText(/WorkOrder wo-mission-1 created/i)).toBeInTheDocument();
+    expect(screen.getByText(/WorkOrder wo-mission-1 \(GREEN Track\) created/i)).toBeInTheDocument();
   });
 
   it("selects a Yellow-capable employee for moderate-risk missions", async () => {
@@ -158,7 +158,7 @@ describe("MissionChat WorkOrder creation", () => {
       selected_agents: ["agent-risk-01"],
     }));
     expect(api.createWorkOrder.mock.calls[0][0]).not.toHaveProperty("track");
-    expect(screen.getByText(/created as RED Track/i)).toBeInTheDocument();
+    expect(screen.getByText(/WorkOrder wo-mission-1 \(RED Track\) created/i)).toBeInTheDocument();
   });
 
   it("does not let model cognition add WorkOrder authorization fields", async () => {
@@ -200,7 +200,7 @@ describe("MissionChat WorkOrder creation", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
 
-    await waitFor(() => expect(screen.getByText(/WorkOrder wo-server-red created as RED Track/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/WorkOrder wo-server-red \(RED Track\) created/i)).toBeInTheDocument());
   });
 
   it("creates the WorkOrder and tells the user when model cognition is unavailable", async () => {

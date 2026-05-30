@@ -54,7 +54,7 @@ function GeneralPanel() {
   return (
     <SettingsSection title={t("settings.general")}>
       <SettingRow label={t("settings.default_home")} desc={t("settings.default_home_desc")}>
-        <SelectField value={g.default_home} options={[{ value: "mission-chat", label: "Mission Chat" }, { value: "dashboard", label: "Dashboard" }]} onChange={(v) => update("general", { default_home: v as never })} />
+        <SelectField value={g.default_home} options={[{ value: "mission-chat", label: t("settings.home_mission_chat") }, { value: "dashboard", label: t("settings.home_opc") }]} onChange={(v) => update("general", { default_home: v as never })} />
       </SettingRow>
       <SettingRow label={t("settings.startup_behavior")} desc={t("settings.startup_behavior_desc")}>
         <SelectField value={g.startup_behavior} options={[{ value: "last-task", label: t("settings.open_last_task") }, { value: "new-task", label: t("settings.open_new_task") }]} onChange={(v) => update("general", { startup_behavior: v as never })} />
@@ -85,12 +85,29 @@ function ModelProviderPanel() {
   const [models, setModels] = useState<DiscoveredModel[]>([]);
   const selectedProvider = isKnownProvider(m.provider) ? m.provider : "openai";
   const preset = presetFor(selectedProvider);
-  const modelOptions = (models.length ? models : [{ id: m.default_model || preset.defaultModel }]).map((item) => ({ value: item.id, label: item.display_name || item.id }));
+  const safeModel = (value: string, fallback: string) => {
+    const trimmed = String(value || "").trim();
+    return trimmed && !trimmed.toLowerCase().includes("mock") ? trimmed : fallback;
+  };
+  const defaultModel = safeModel(m.default_model, preset.defaultModel);
+  const fastModel = safeModel(m.fast_model, preset.fastModel);
+  const reasoningModel = safeModel(m.reasoning_model, preset.reasoningModel);
+  const structuredModel = safeModel(m.structured_output_model, preset.structuredModel);
+  const modelOptions = [
+    ...models,
+    { id: defaultModel },
+    { id: fastModel },
+    { id: reasoningModel },
+    { id: structuredModel },
+  ]
+    .filter((item) => item.id && !item.id.toLowerCase().includes("mock"))
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index)
+    .map((item) => ({ value: item.id, label: item.display_name || item.id }));
 
   function configFromCurrent(patch: Partial<typeof m> = {}) {
     const next = { ...m, ...patch };
-    const p = presetFor(next.provider);
-    return { provider_id: "desktop", kind: p.kind, base_url: next.base_url || p.baseUrl, api_key: next.api_key, default_model: next.default_model || p.defaultModel, fast_model: next.fast_model || p.fastModel, reasoning_model: next.reasoning_model || p.reasoningModel, structured_output_model: next.structured_output_model || p.structuredModel, max_tokens: next.max_tokens || p.maxTokens, temperature: next.temperature, timeout_ms: next.request_timeout_ms, max_cost_per_task_usd: next.max_cost_per_task_usd };
+    const p = presetFor(isKnownProvider(next.provider) ? next.provider : selectedProvider);
+    return { provider_id: "desktop", kind: p.kind, base_url: next.base_url || p.baseUrl, api_key: next.api_key, default_model: safeModel(next.default_model, p.defaultModel), fast_model: safeModel(next.fast_model, p.fastModel), reasoning_model: safeModel(next.reasoning_model, p.reasoningModel), structured_output_model: safeModel(next.structured_output_model, p.structuredModel), max_tokens: next.max_tokens || p.maxTokens, temperature: next.temperature, timeout_ms: next.request_timeout_ms, max_cost_per_task_usd: next.max_cost_per_task_usd };
   }
 
   function changeProvider(value: string) {
@@ -115,7 +132,11 @@ function ModelProviderPanel() {
       const finalPatch = { default_model: roles.default_model, fast_model: roles.fast_model, reasoning_model: roles.reasoning_model, structured_output_model: roles.structured_output_model, max_tokens: roles.max_tokens };
       update("model_provider", finalPatch);
       await updateModelConfig(configFromCurrent(finalPatch));
-      await ensureWorkspaceDefaults();
+      try {
+        await ensureWorkspaceDefaults();
+      } catch (e: unknown) {
+        throw new Error(`Workspace bootstrap failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
       saveSettingsSnapshot({ ...settings, model_provider: { ...settings.model_provider, ...finalPatch } });
       markModelProviderConfigured();
       setTestResult("ok");
@@ -130,8 +151,10 @@ function ModelProviderPanel() {
     <SettingsSection title={t("settings.model_provider")}>
       <SettingRow label={t("settings.provider")} htmlFor="provider-select"><SelectField id="provider-select" value={selectedProvider} options={providerOptions()} onChange={changeProvider} /></SettingRow>
       <SettingRow label={t("settings.api_key")} desc={t("settings.api_key_warning")} htmlFor="provider-api-key"><PasswordField id="provider-api-key" value={m.api_key} onChange={(v) => update("model_provider", { api_key: v })} /></SettingRow>
-      <SettingRow label={t("settings.default_model")} htmlFor="provider-default-model"><SelectField id="provider-default-model" value={m.default_model || preset.defaultModel} options={modelOptions} onChange={(v) => update("model_provider", { default_model: v })} /></SettingRow>
-      <SettingRow label={t("settings.structured_model")}><SelectField value={m.structured_output_model || preset.structuredModel} options={modelOptions} onChange={(v) => update("model_provider", { structured_output_model: v })} /></SettingRow>
+      <SettingRow label={t("settings.default_model")} htmlFor="provider-default-model"><SelectField id="provider-default-model" value={defaultModel} options={modelOptions} onChange={(v) => update("model_provider", { default_model: v })} /></SettingRow>
+      <SettingRow label={t("settings.fast_model")} htmlFor="provider-fast-model"><SelectField id="provider-fast-model" value={fastModel} options={modelOptions} onChange={(v) => update("model_provider", { fast_model: v })} /></SettingRow>
+      <SettingRow label={t("settings.reasoning_model")} htmlFor="provider-reasoning-model"><SelectField id="provider-reasoning-model" value={reasoningModel} options={modelOptions} onChange={(v) => update("model_provider", { reasoning_model: v })} /></SettingRow>
+      <SettingRow label={t("settings.structured_model")} htmlFor="provider-structured-model"><SelectField id="provider-structured-model" value={structuredModel} options={modelOptions} onChange={(v) => update("model_provider", { structured_output_model: v })} /></SettingRow>
       <SettingRow label={t("settings.connection")}>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={handleSaveAndTestConnection} className="px-3 py-1.5 text-xs rounded-md border" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("settings.test_discover")}</button>
@@ -144,6 +167,7 @@ function ModelProviderPanel() {
       {advanced && (
         <>
           <SettingRow label={t("settings.base_url")} htmlFor="provider-base-url"><TextField id="provider-base-url" monospace value={m.base_url || preset.baseUrl} onChange={(v) => update("model_provider", { base_url: v })} /></SettingRow>
+          <SettingRow label={t("settings.max_tokens")} htmlFor="provider-max-tokens"><NumberField id="provider-max-tokens" value={m.max_tokens || preset.maxTokens} onChange={(v) => update("model_provider", { max_tokens: v })} min={1} max={1000000} step={1024} /></SettingRow>
           <SettingRow label={t("settings.max_cost_per_task")}><NumberField value={m.max_cost_per_task_usd} onChange={(v) => update("model_provider", { max_cost_per_task_usd: v })} min={0} max={100} step={0.1} /></SettingRow>
         </>
       )}
@@ -155,25 +179,26 @@ function AgentRuntimePanel() { return <SettingsSection title={t("settings.agent_
 function GovernancePanel() { return <SettingsSection title={t("settings.governance")}><div /></SettingsSection>; }
 function RiskGatePanel() { return <SettingsSection title={t("settings.risk_gate")}><div /></SettingsSection>; }
 function CognitiveCustomsPanel() { return <SettingsSection title={t("settings.cognitive_customs")}><div /></SettingsSection>; }
-function PolicyEnginePanel() { const { settings, update } = useSettings(); const p = settings.policy_engine; const selectedPolicyEngine: PolicyEngineType = p.policy_engine === "custom" ? "custom" : "opa"; return <SettingsSection title={t("settings.policy_engine")}><SettingRow label="Policy Engine"><SelectField value={selectedPolicyEngine} options={[{ value: "opa", label: "OPA" }, { value: "custom", label: "Custom" }]} onChange={(v) => update("policy_engine", { policy_engine: v as PolicyEngineType })} /></SettingRow></SettingsSection>; }
+function PolicyEnginePanel() { const { settings, update } = useSettings(); const p = settings.policy_engine; const selectedPolicyEngine: PolicyEngineType = p.policy_engine === "custom" ? "custom" : "opa"; return <SettingsSection title={t("settings.policy_engine")}><SettingRow label={t("settings.policy_engine_choice")}><SelectField value={selectedPolicyEngine} options={[{ value: "opa", label: "OPA" }, { value: "custom", label: t("settings.policy_custom") }]} onChange={(v) => update("policy_engine", { policy_engine: v as PolicyEngineType })} /></SettingRow></SettingsSection>; }
 function PrivacyPanel() { return <SettingsSection title={t("settings.privacy")}><div /></SettingsSection>; }
-function DeveloperPanel() { return <SettingsSection title={t("settings.developer")}><SettingRow label="Reset Local UI State"><button className="px-3 py-1.5 text-xs rounded-md border">Reset</button></SettingRow></SettingsSection>; }
+function DeveloperPanel() { return <SettingsSection title={t("settings.developer")}><SettingRow label={t("settings.reset_local_ui")}><button className="px-3 py-1.5 text-xs rounded-md border">{t("settings.reset_button")}</button></SettingRow></SettingsSection>; }
 
 function DataManagementPanel() {
-  const [coevoHome, setCoevoHome] = useState<string>("Loading...");
+  useLanguage();
+  const [coevoHome, setCoevoHome] = useState<string>(t("settings.loading"));
   useEffect(() => {
     (async () => {
       try {
         const invoke = getTauriInvoke();
         if (invoke) setCoevoHome(await invoke<string>("get_coevo_home"));
-        else setCoevoHome("~/.coevo (web mode)");
+        else setCoevoHome(t("settings.web_mode_home"));
       } catch { setCoevoHome("~/.coevo"); }
     })();
   }, []);
   return (
     <SettingsSection title={t("settings.data_management")}>
       <SettingRow label="COEVO_HOME"><div className="text-xs font-mono">{coevoHome}</div></SettingRow>
-      <SettingRow label="API Base"><div className="text-xs font-mono">{getApiBase()}</div></SettingRow>
+      <SettingRow label={t("settings.api_base")}><div className="text-xs font-mono">{getApiBase()}</div></SettingRow>
     </SettingsSection>
   );
 }

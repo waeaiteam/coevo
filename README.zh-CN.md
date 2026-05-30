@@ -59,8 +59,9 @@ coevo-opc **不是**普通聊天机器人、prompt 外壳，也不是多 Agent d
 2. 双击打开 coevo 桌面应用。
 3. 桌面应用自动以 sidecar 方式启动本地 core service。
 4. coevo 准备 `COEVO_HOME`，使用动态本地端口，并将运行日志写入本地日志目录。
-5. FirstRun 引导配置真实 OpenAI-compatible 模型 provider 和 API key。
-6. 连接测试通过后进入 MissionChat。
+5. FirstRun 先创建本地 OPC 身份：OPC 名称、负责人和语言。
+6. 应用打开 **Settings -> Model Provider**，用于连接真实模型 provider 和 API key。
+7. **Test / Discover Models** 成功后，应用会填充模型角色选择器，然后进入 MissionChat。
 
 Alpha 是 local-first。本地桌面应用和 core service 面向用户自己的机器，不建议暴露到公网。
 
@@ -68,21 +69,22 @@ Alpha 是 local-first。本地桌面应用和 core service 面向用户自己的
 
 ## 第一个 Mission 路径
 
-1. 在 FirstRun 中打开 **Settings -> Model Providers**。
-2. 选择 **OpenAI-compatible**。
-3. 填写 `base_url`、`api_key` 和模型名称。
-4. 点击 **Save & Test Connection**。
-5. 进入 **MissionChat**，描述你希望 AI 员工处理的任务。
+1. 在 FirstRun 中创建你的 OPC。
+2. 在 **Settings -> Model Provider** 中选择 OpenAI、DeepSeek 或其他 OpenAI-compatible provider。
+3. 粘贴 API key。Provider preset 会自动填充 base URL；自定义传输设置放在 **Advanced** 中。
+4. 点击 **Test / Discover Models**。发现到的模型 ID 会填充默认、快速、推理、结构化输出模型选择器。
+5. 进入 **New Chat / MissionChat**，描述你希望 AI 员工处理的任务。
 6. 审阅模型认知摘要、生成的 WorkOrder 和治理 Track。
 7. 执行允许的 Green 工作；按需审批 Yellow 工作；Red 工作在 Alpha 中会被阻断。
 8. 打开 **WorkOrders** 查看创建出的任务执行单。
-9. 打开 **Timeline / Audit** 查看 worker session、步骤、事件和治理决策。
+9. 打开 **Audit** 或 WorkOrder timeline 查看 worker session、步骤、事件和治理决策。
 
 产品主路径是：
 
 ```
 Desktop Launch
-  -> FirstRun model configuration
+  -> Create OPC
+  -> Connect real model provider
   -> MissionChat
   -> MCL compile
   -> PCDT route
@@ -92,6 +94,8 @@ Desktop Launch
   -> WorkerSession / WorkerRunStep / WorkerEvent
   -> Timeline / Audit
 ```
+
+一级导航刻意保持简洁：**新对话**、**OPC**、**工作单**、**审计**、**设置**。原有专业功能没有删除，统一放在 **OPC -> Advanced Console** 和 **Settings -> Advanced** 中。
 
 ---
 

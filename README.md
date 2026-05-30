@@ -59,8 +59,9 @@ The ordinary user path is desktop-first:
 2. Double-click the coevo desktop app.
 3. The app starts the local core service as a sidecar automatically.
 4. coevo prepares `COEVO_HOME`, uses a dynamic local port, and writes runtime logs under the local log directory.
-5. FirstRun asks for a real OpenAI-compatible model provider and API key.
-6. After the connection test passes, MissionChat opens.
+5. FirstRun creates a local OPC identity: OPC name, owner name, and language.
+6. The app opens **Settings -> Model Provider** for a real provider/API key connection.
+7. After **Test / Discover Models** succeeds, the app fills the model role selectors and MissionChat opens.
 
 Alpha is local-first. The desktop app and local core service are intended for a user's own machine, not public network exposure.
 
@@ -68,21 +69,22 @@ Alpha is local-first. The desktop app and local core service are intended for a 
 
 ## First Mission Path
 
-1. Open **Settings -> Model Providers** during FirstRun.
-2. Select **OpenAI-compatible**.
-3. Enter `base_url`, `api_key`, and model names for your provider.
-4. Click **Save & Test Connection**.
-5. Go to **MissionChat** and describe the mission you want an AI employee to handle.
+1. Create your OPC during FirstRun.
+2. In **Settings -> Model Provider**, select OpenAI, DeepSeek, or another OpenAI-compatible provider.
+3. Paste the API key. Provider presets fill the base URL; custom transport settings live under **Advanced**.
+4. Click **Test / Discover Models**. Discovered model IDs populate the default, fast, reasoning, and structured-output selectors.
+5. Go to **New Chat / MissionChat** and describe the mission you want an AI employee to handle.
 6. Review the model cognition summary, generated WorkOrder, and governance track.
 7. Execute allowed Green work, approve Yellow work when appropriate, and expect Red work to be blocked in Alpha.
 8. Open **WorkOrders** to inspect the created order.
-9. Open **Timeline / Audit** to inspect worker sessions, steps, events, and governance decisions.
+9. Open **Audit** or the WorkOrder timeline to inspect worker sessions, steps, events, and governance decisions.
 
 The expected product loop is:
 
 ```
 Desktop Launch
-  -> FirstRun model configuration
+  -> Create OPC
+  -> Connect real model provider
   -> MissionChat
   -> MCL compile
   -> PCDT route
@@ -92,6 +94,8 @@ Desktop Launch
   -> WorkerSession / WorkerRunStep / WorkerEvent
   -> Timeline / Audit
 ```
+
+Primary navigation is intentionally small: **New Chat**, **OPC**, **WorkOrders**, **Audit**, and **Settings**. The original specialist surfaces remain available under **OPC -> Advanced Console** and **Settings -> Advanced**.
 
 ---
 

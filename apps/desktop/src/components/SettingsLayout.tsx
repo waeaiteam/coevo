@@ -7,6 +7,7 @@ import { t, useLanguage } from "../settings/i18n";
 import type { CoevoSettings } from "../settings/types";
 
 type SectionKey = keyof CoevoSettings | "data_management";
+type SectionGroup = "common" | "advanced";
 
 const COMMON_SECTIONS: SectionKey[] = ["general", "model_provider", "appearance", "data_management"];
 const ADVANCED_SECTIONS: SectionKey[] = ["agent_runtime", "governance", "risk_gate", "cognitive_customs", "policy_engine", "privacy", "developer"];
@@ -20,18 +21,18 @@ export default function SettingsLayout({ section, content }: Props) {
   useLanguage();
   const [search, setSearch] = useState("");
   const { dirty, saved, saveNow, reset } = useSettings();
-  const sections = [
+  const sections: { key: SectionKey; label: string; icon: string; group: SectionGroup }[] = [
     ...COMMON_SECTIONS.map((key) => ({
       key,
       label: t(`settings.${key}`),
       icon: "C",
-      group: "common",
+      group: "common" as const,
     })),
     ...ADVANCED_SECTIONS.map((key) => ({
       key,
       label: t(`settings.${key}`),
       icon: "A",
-      group: "advanced",
+      group: "advanced" as const,
     })),
   ];
 

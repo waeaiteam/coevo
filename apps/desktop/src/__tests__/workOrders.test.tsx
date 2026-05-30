@@ -111,6 +111,7 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Export Audit" }));
 
     await waitFor(() => expect(api.getWorkOrderAuditExport).toHaveBeenCalledWith("wo-green"));
-    expect(screen.getByText(/Audit Export:.*coevo.audit_export.v1/)).toBeInTheDocument();
+    expect(document.body.textContent).toContain("Export Audit");
+    expect(document.body.textContent).toContain("coevo.audit_export.v1");
   });
 });

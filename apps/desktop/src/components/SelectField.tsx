@@ -1,17 +1,20 @@
 export default function SelectField({
+  id,
   value,
   options,
   onChange,
 }: {
+  id?: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (v: string) => void;
 }) {
   return (
     <select
+      id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="px-3 py-1.5 rounded-md border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-200"
+      className="w-full min-w-0 px-3 py-1.5 rounded-md border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-200"
       style={{ borderColor: "var(--border-accent)", background: "#fff", color: "var(--text-primary)" }}
     >
       {options.map((o) => (
