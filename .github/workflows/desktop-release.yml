@@ -35,6 +35,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Install desktop dependencies
         working-directory: apps/desktop
         run: npm ci
