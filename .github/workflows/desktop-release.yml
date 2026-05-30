@@ -50,17 +50,25 @@ jobs:
         id: collect
         shell: pwsh
         run: |
-          $bundleRoot = "apps/desktop/src-tauri/target/release/bundle"
-          if (!(Test-Path $bundleRoot)) {
-            Write-Error "Tauri bundle directory not found: $bundleRoot"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $bundleRoots = @(
+            "apps/desktop/src-tauri/target/release/bundle",
+            "target/release/bundle",
+            "C:/ct/release/bundle"
+          ) | Where-Object { Test-Path $_ }
+
+          if (!$bundleRoots -or $bundleRoots.Count -eq 0) {
+            Write-Error "Tauri bundle directory not found in known target locations."
           }
 
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $files = Get-ChildItem $bundleRoot -Recurse -File |
+          $files = $bundleRoots | ForEach-Object {
+            Write-Host "Scanning bundle directory: $_"
+            Get-ChildItem $_ -Recurse -File
+          } |
             Where-Object { $_.Extension -in ".msi", ".exe", ".msix", ".zip" }
 
           if (!$files -or $files.Count -eq 0) {
-            Write-Error "No installer artifacts found under $bundleRoot"
+            Write-Error "No installer artifacts found under: $($bundleRoots -join ', ')"
           }
 
           foreach ($file in $files) {
