@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   executorHealth: vi.fn(),
   executorDryRun: vi.fn(),
   listWorkOrders: vi.fn(),
+  listMemory: vi.fn(),
+  listConversations: vi.fn(),
   discoverModels: vi.fn(),
   testModelConnection: vi.fn(),
   updateModelConfig: vi.fn(),
@@ -37,6 +39,8 @@ vi.mock("../api/client", () => ({
   executorHealth: api.executorHealth,
   executorDryRun: api.executorDryRun,
   listWorkOrders: api.listWorkOrders,
+  listMemory: api.listMemory,
+  listConversations: api.listConversations,
   discoverModels: api.discoverModels,
   testModelConnection: api.testModelConnection,
   updateModelConfig: api.updateModelConfig,
@@ -59,11 +63,13 @@ describe("ordinary user product surface", () => {
     api.getHealth.mockResolvedValue({ status: "ok", version: "1.0.0" });
     api.listExecutors.mockResolvedValue([]);
     api.listWorkOrders.mockResolvedValue([]);
+    api.listMemory.mockResolvedValue([]);
+    api.listConversations.mockResolvedValue([]);
     api.registerExecutor.mockResolvedValue({ ok: true });
     api.testModelConnection.mockResolvedValue({ model: "gpt-4o", latency_ms: 9, provider_kind: "OpenAI" });
     api.updateModelConfig.mockResolvedValue({ ok: true });
     api.discoverModels.mockResolvedValue({ models: [] });
-    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
+    api.listEmployees.mockResolvedValue([]);
     api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
     api.seedEmployees.mockResolvedValue({ ok: true });
     api.seedSkills.mockResolvedValue({ ok: true });
@@ -123,6 +129,49 @@ describe("ordinary user product surface", () => {
     expect(screen.getByRole("heading", { name: "WAE AI Team" })).toBeInTheDocument();
     expect(screen.getByText("Owner")).toBeInTheDocument();
     expect(screen.getByText("Wae")).toBeInTheDocument();
+  });
+
+  it("Dashboard presents the live OPC company space for ordinary founders", async () => {
+    localStorage.setItem("coevo-opc-name", "WAE AI Team");
+    localStorage.setItem("coevo-user-name", "Wae");
+    localStorage.setItem("coevo-opc-id", "opc-123");
+    api.listEmployees.mockResolvedValue([
+      { agent_id: "agent-founder-01", display_name: "Founder Chief of Staff", department: "FounderOffice", lifecycle_status: "Active", risk_ceiling: 0.3 },
+      { agent_id: "agent-risk-01", display_name: "Risk Reviewer", department: "Governance", lifecycle_status: "Active", risk_ceiling: 0.6 },
+    ]);
+    api.listMemory.mockResolvedValue([
+      { memory_id: "mem-1", title: "Company operating rules", scope: "Company", status: "Active" },
+      { memory_id: "mem-2", title: "Launch positioning", scope: "Company", status: "Active" },
+    ]);
+    api.listWorkOrders.mockResolvedValue([
+      { work_order_id: "wo-green", mission_intent: "Analyze onboarding feedback", track: "green", status: "Completed" },
+      { work_order_id: "wo-yellow", mission_intent: "Draft customer notification", track: "yellow", status: "WaitingApproval" },
+      { work_order_id: "wo-red", mission_intent: "Delete production data", track: "red", status: "Planned" },
+    ]);
+    api.listConversations.mockResolvedValue([
+      { conversation_id: "conv-1", title: "Onboarding feedback", updated_at_ms: 1700000000000 },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText("Company Operating Room")).toBeInTheDocument();
+    expect(await screen.findByText("2 active AI employees")).toBeInTheDocument();
+    expect(screen.getByText("2 company memories")).toBeInTheDocument();
+    expect(screen.getByText("3 work orders")).toBeInTheDocument();
+    expect(screen.getByText("1 conversation")).toBeInTheDocument();
+    expect(screen.getByText("Founder Chief of Staff")).toBeInTheDocument();
+    expect(screen.getByText("Risk Reviewer")).toBeInTheDocument();
+    expect(screen.getByText("Company operating rules")).toBeInTheDocument();
+    expect(screen.getByText("Draft customer notification")).toBeInTheDocument();
+    expect(screen.getByText("WaitingApproval")).toBeInTheDocument();
+    expect(screen.getByText("Red blocked")).toBeInTheDocument();
+    expect(screen.getByText("Onboarding feedback")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Manage employees/i })).toHaveAttribute("href", "/employees");
+    expect(screen.getByRole("link", { name: /Open task center/i })).toHaveAttribute("href", "/work-orders");
   });
 
   it("does not expose a Demos route in the ordinary desktop app", async () => {

@@ -1,5 +1,6 @@
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getApiBase } from "../api/client";
+import { getApiBase, listConversations, listEmployees, listMemory, listWorkOrders } from "../api/client";
 import { getLocalIdentity, getTenantId } from "../settings/identity";
 import { t, useLanguage } from "../settings/i18n";
 
@@ -29,9 +30,117 @@ export default function OpcOverview() {
   useLanguage();
   const identity = getLocalIdentity();
   const tenant = getTenantId();
+  const [employees, setEmployees] = useState<Record<string, unknown>[]>([]);
+  const [memories, setMemories] = useState<Record<string, unknown>[]>([]);
+  const [workOrders, setWorkOrders] = useState<Record<string, unknown>[]>([]);
+  const [conversations, setConversations] = useState<Record<string, unknown>[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([
+      listEmployees().catch(() => []),
+      listMemory({ scope: "Company" }).catch(() => []),
+      listWorkOrders().catch(() => []),
+      listConversations().catch(() => []),
+    ]).then(([e, m, w, c]) => {
+      if (!alive) return;
+      const nextEmployees = Array.isArray(e) ? e : [];
+      const nextMemories = Array.isArray(m) ? m : [];
+      const nextWorkOrders = Array.isArray(w) ? w : [];
+      const nextConversations = Array.isArray(c) ? c : [];
+      if (!nextEmployees.length && !nextMemories.length && !nextWorkOrders.length && !nextConversations.length) return;
+      setEmployees(nextEmployees);
+      setMemories(nextMemories);
+      setWorkOrders(nextWorkOrders);
+      setConversations(nextConversations);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const activeEmployees = useMemo(
+    () => employees.filter((row) => String(row.lifecycle_status || "").toLowerCase() === "active"),
+    [employees]
+  );
+  const hasRedWorkOrder = useMemo(
+    () => workOrders.some((row) => String(row.track || "").toLowerCase() === "red"),
+    [workOrders]
+  );
 
   return (
     <div className="space-y-5">
+      <section className="card">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">{t("opc.operating_room")}</h2>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+              {t("opc.operating_room_desc")}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Link to="/employees" className="rounded-md border px-3 py-1.5 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>
+              {t("opc.manage_employees")}
+            </Link>
+            <Link to="/work-orders" className="rounded-md border px-3 py-1.5 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>
+              {t("opc.open_task_center")}
+            </Link>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <InfoCell label={t("opc.metric_people")} value={`${activeEmployees.length} ${t("opc.metric_active_employees")}`} />
+          <InfoCell label={t("opc.metric_memory")} value={`${memories.length} ${t("opc.metric_company_memories")}`} />
+          <InfoCell label={t("opc.metric_work")} value={`${workOrders.length} ${t("opc.metric_work_orders")}`} />
+          <InfoCell
+            label={t("opc.metric_conversations")}
+            value={`${conversations.length} ${conversations.length === 1 ? t("opc.metric_conversation") : t("opc.metric_conversations_unit")}`}
+          />
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-4">
+          <div className="rounded-md border bg-white p-3" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="mb-2 text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{t("opc.ai_employees")}</div>
+            <div className="space-y-1.5 text-xs">
+              {activeEmployees.slice(0, 6).map((row, index) => (
+                <div key={String(row.agent_id || `agent-${index}`)}>{String(row.display_name || row.agent_id || "Agent")}</div>
+              ))}
+              {!activeEmployees.length && <div style={{ color: "var(--text-muted)" }}>{t("opc.no_active_employees")}</div>}
+            </div>
+          </div>
+          <div className="rounded-md border bg-white p-3" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="mb-2 text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{t("opc.company_memory")}</div>
+            <div className="space-y-1.5 text-xs">
+              {memories.slice(0, 6).map((row, index) => (
+                <div key={String(row.memory_id || `memory-${index}`)}>{String(row.title || row.memory_id || "Memory")}</div>
+              ))}
+              {!memories.length && <div style={{ color: "var(--text-muted)" }}>{t("opc.no_company_memories")}</div>}
+            </div>
+          </div>
+          <div className="rounded-md border bg-white p-3" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="mb-2 text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{t("workorders.title")}</div>
+            <div className="space-y-2 text-xs">
+              {workOrders.slice(0, 6).map((row, index) => (
+                <div key={String(row.work_order_id || `work-order-${index}`)} className="rounded border px-2 py-1" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div>{String(row.mission_intent || row.work_order_id || "Work order")}</div>
+                  <div className="font-semibold" style={{ color: "var(--text-secondary)" }}>{String(row.status || "")}</div>
+                  <div style={{ color: "var(--text-muted)" }}>{t("opc.track_label")}: {String(row.track || "")}</div>
+                </div>
+              ))}
+              {!workOrders.length && <div style={{ color: "var(--text-muted)" }}>{t("opc.no_work_orders")}</div>}
+            </div>
+            {hasRedWorkOrder && <div className="mt-2 text-xs font-semibold" style={{ color: "var(--red)" }}>{t("opc.red_blocked_short")}</div>}
+          </div>
+          <div className="rounded-md border bg-white p-3" style={{ borderColor: "var(--border-subtle)" }}>
+            <div className="mb-2 text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>{t("opc.recent_conversations")}</div>
+            <div className="space-y-1.5 text-xs">
+              {conversations.slice(0, 6).map((row, index) => (
+                <div key={String(row.conversation_id || `conversation-${index}`)}>{String(row.title || row.conversation_id || "Conversation")}</div>
+              ))}
+              {!conversations.length && <div style={{ color: "var(--text-muted)" }}>{t("opc.no_conversations")}</div>}
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="card">
           <div className="mb-4 flex items-start justify-between gap-4">
