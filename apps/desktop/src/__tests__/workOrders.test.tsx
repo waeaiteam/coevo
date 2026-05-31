@@ -172,4 +172,63 @@ describe("WorkOrders", () => {
     expect(document.body.textContent).toContain("Export Audit");
     expect(document.body.textContent).toContain("coevo.audit_export.v1");
   });
+
+  it("does not submit stale feedback after selecting a different task", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-a", mission_intent: "Analyze onboarding feedback", track: "green" }),
+      workOrder({ work_order_id: "wo-b", mission_intent: "Draft customer notification", track: "yellow" }),
+    ]);
+
+    render(<WorkOrders />);
+
+    const feedbackInput = await screen.findByPlaceholderText("Feedback...");
+    fireEvent.change(feedbackInput, { target: { value: "looks good" } });
+    fireEvent.click(screen.getByRole("button", { name: /Draft customer notification/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
+
+    expect(api.submitWorkOrderFeedback).not.toHaveBeenCalled();
+  });
+
+  it("clears the feedback input after successful submit", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-a", mission_intent: "Analyze onboarding feedback", track: "green" }),
+    ]);
+
+    render(<WorkOrders />);
+
+    const feedbackInput = await screen.findByPlaceholderText("Feedback...");
+    fireEvent.change(feedbackInput, { target: { value: "approved with notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
+
+    await waitFor(() => expect(api.submitWorkOrderFeedback).toHaveBeenCalledWith("wo-a", "approved with notes"));
+    expect(feedbackInput).toHaveValue("");
+  });
+
+  it("presents a founder-readable Task Center with selected task details, approval, timeline, and audit actions", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-green", mission_intent: "Analyze onboarding feedback", track: "green", status: "Completed" }),
+      workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft customer notification", track: "yellow", status: "WaitingApproval" }),
+      workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red", status: "Planned" }),
+    ]);
+    api.getWorkOrderTimeline.mockResolvedValue([{ type: "ApprovalRequested", title: "Human approval requested" }]);
+
+    render(<WorkOrders />);
+
+    expect(await screen.findByText("Task Center")).toBeInTheDocument();
+    expect(screen.getByText("3 total tasks")).toBeInTheDocument();
+    expect(screen.getByText("1 waiting approval")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Draft customer notification/i }));
+
+    expect(screen.getByText("Selected Task Details")).toBeInTheDocument();
+    expect(screen.getByText("Approval & Audit")).toBeInTheDocument();
+    expect(screen.getByText("Yellow approval required")).toBeInTheDocument();
+    expect(screen.getByText("Assigned AI Employees")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Submit for Approval" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export Audit" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View Timeline" }));
+    await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-yellow"));
+    expect(screen.getByText("Task Timeline")).toBeInTheDocument();
+    expect(screen.getByText("ApprovalRequested")).toBeInTheDocument();
+  });
 });
