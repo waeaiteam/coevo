@@ -201,7 +201,7 @@ fn validate_config_request(
                 "MODEL_CONFIG_INVALID: default_model required".to_string(),
             ));
         }
-        if temperature < 0.0 || temperature > 2.0 {
+        if !(0.0..=2.0).contains(&temperature) {
             return Err((
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("INVALID_TEMPERATURE: {}", temperature),

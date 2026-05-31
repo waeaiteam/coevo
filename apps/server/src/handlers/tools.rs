@@ -13,7 +13,7 @@ use crate::state::AppState;
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
 
-#[derive(Deserialize)] pub struct ToolExecReq { pub work_order_id: String, pub input: serde_json::Value }
+#[derive(Deserialize)] pub struct ToolExecReq { pub work_order_id: String, pub input: serde_json::Value, pub approval_receipt: Option<String> }
 #[derive(Deserialize)] pub struct AssignReq { pub agent_id: String, pub work_order_id: Option<String> }
 #[derive(Deserialize)] pub struct RunReq { pub work_order_id: String }
 
@@ -51,6 +51,9 @@ pub async fn tool_execute(State(s): State<AppState>, Path(id): Path<String>, Jso
     };
     let decision = ToolPolicyEngine::evaluate(tool, &wo.track, &wo.allowed_actions, &wo.restricted_actions);
     if !decision.allowed { return err!(StatusCode::FORBIDDEN, format!("ToolDeniedByPolicy: {}", decision.reason)); }
+    if decision.required_approval && req.approval_receipt.is_none() {
+        return err!(StatusCode::PRECONDITION_REQUIRED, format!("ToolApprovalRequired: {}", decision.reason));
+    }
     match r.execute(&id, req.input).await {
         Ok(result) => ok!(result),
         Err(e) => err!(StatusCode::BAD_REQUEST, e.to_string()),
@@ -102,7 +105,7 @@ pub async fn cancel_worker(State(s): State<AppState>, Path(id): Path<String>) ->
                 let _ = sqlx::query("INSERT INTO worker_events VALUES (?,?,?,?,?,?)")
                     .bind(format!("ev-{}-cancel", run_id)).bind(run_id).bind(999i64)
                     .bind("LifecycleEnd").bind(serde_json::to_string(&serde_json::json!({"reason":"CancelledByUser"})).unwrap())
-                    .bind(chrono::Utc::now().timestamp_millis()).execute(&s.pool);
+                    .bind(chrono::Utc::now().timestamp_millis()).execute(&s.pool).await;
             }
             // Update session
             sqlx::query("UPDATE worker_sessions SET status='Cancelled',updated_at_ms=? WHERE session_id=?")

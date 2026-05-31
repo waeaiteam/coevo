@@ -35,13 +35,13 @@ impl CognitiveCustoms {
         }
 
         // ---- Guard 2: Cannot directly write to Fact layer without MCP verification ----
-        if cognitive_layer == CognitiveLayer::Fact {
-            if provenance_envelope.verification_tool_urn.is_empty() {
-                return Err(ProposeError::CognitiveBoundViolation {
-                    detail: "Cannot write directly to FACT layer without MCP-verified provenance"
-                        .to_string(),
-                });
-            }
+        if cognitive_layer == CognitiveLayer::Fact
+            && provenance_envelope.verification_tool_urn.is_empty()
+        {
+            return Err(ProposeError::CognitiveBoundViolation {
+                detail: "Cannot write directly to FACT layer without MCP-verified provenance"
+                    .to_string(),
+            });
         }
 
         // ---- Guard 3: Optimistic concurrency control ----

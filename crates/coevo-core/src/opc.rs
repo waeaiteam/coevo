@@ -287,5 +287,5 @@ pub struct WorkOrder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkOrderStatus {
-    Draft, Planned, Running, WaitingApproval, Completed, Failed, Cancelled,
+    Draft, Planned, Running, WaitingApproval, Completed, Failed, Cancelled, Blocked,
 }

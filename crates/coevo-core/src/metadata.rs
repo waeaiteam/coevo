@@ -57,7 +57,7 @@ impl CommonMetadataHeader {
             traceparent: format!(
                 "00-{}-{}-01",
                 hex::encode(Uuid::new_v4().as_bytes()),
-                hex::encode(&rand::random::<[u8; 8]>())
+                hex::encode(rand::random::<[u8; 8]>())
             ),
             tracestate: None,
             caller_identity_proof: None,
@@ -103,11 +103,7 @@ impl CommonMetadataHeader {
             return Err(HeaderValidationError::MissingActorRole);
         }
         let now = Utc::now().timestamp_millis() as u64;
-        let drift = if self.timestamp > now {
-            self.timestamp - now
-        } else {
-            now - self.timestamp
-        };
+        let drift = self.timestamp.abs_diff(now);
         if drift > 5000 {
             return Err(HeaderValidationError::TimestampDriftExceeded { drift_ms: drift });
         }

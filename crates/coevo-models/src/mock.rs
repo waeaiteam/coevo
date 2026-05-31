@@ -61,6 +61,7 @@ impl ModelGateway for MockModelGateway {
         _schema: &serde_json::Value,
     ) -> Result<ModelResponse, ModelError> {
         let json = match request.role {
+            ModelRole::AgentReasoning => deterministic_agent_reasoning_json(request),
             ModelRole::MissionDraft => serde_json::json!({
                 "goal_summary": "Summarize coevo-opc progress and propose next roadmap",
                 "suggested_track": "Green",
@@ -91,4 +92,77 @@ impl ModelGateway for MockModelGateway {
             provider_kind: ModelProviderKind::Mock,
         })
     }
+}
+
+fn deterministic_agent_reasoning_json(request: &ModelRequest) -> serde_json::Value {
+    let prompt = request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    if prompt.contains("previous_observation") || prompt.contains("governance denied") {
+        return serde_json::json!({
+            "thought": "I have enough governed observations to finish.",
+            "proposal": {
+                "kind": "finish",
+                "summary": "Mock reasoning completed under governance.",
+                "result": {"mock": true}
+            },
+            "confidence": 0.8
+        });
+    }
+
+    if let Some(path) = deterministic_file_target(&prompt) {
+        return serde_json::json!({
+            "thought": "The mission asks for local evidence that can be read through the file readonly tool.",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_id": "file-readonly",
+                "input": {
+                    "action": "ReadFile",
+                    "path": path,
+                    "allowed_paths": deterministic_allowed_paths(),
+                    "max_bytes": 5000
+                },
+                "rationale": "Green Track permits read-only file evidence through GovernGate."
+            },
+            "confidence": 0.78
+        });
+    }
+
+    serde_json::json!({
+        "thought": "No tool evidence is required for this governed dry run.",
+        "proposal": {
+            "kind": "finish",
+            "summary": "Mock reasoning finished without external action.",
+            "result": {"mock": true}
+        },
+        "confidence": 0.7
+    })
+}
+
+fn deterministic_allowed_paths() -> Vec<String> {
+    if let Ok(root) = std::env::var("COEVO_WORKSPACE_DIR") {
+        return vec![root];
+    }
+    std::env::current_dir()
+        .map(|path| vec![path.to_string_lossy().to_string()])
+        .unwrap_or_default()
+}
+
+fn deterministic_file_target(prompt: &str) -> Option<String> {
+    let roots = deterministic_allowed_paths();
+    for name in ["mission-notes.md", "README.md", "README.zh-CN.md"] {
+        if prompt.contains(&name.to_lowercase()) {
+            for root in &roots {
+                let path = std::path::Path::new(root).join(name);
+                if path.is_file() {
+                    return Some(path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
 }

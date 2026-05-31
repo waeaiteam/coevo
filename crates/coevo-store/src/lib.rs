@@ -1,4 +1,10 @@
 //! coevo-store: SQLite persistence layer with sqlx.
+#![allow(
+    clippy::redundant_closure,
+    clippy::too_many_arguments,
+    clippy::unnecessary_lazy_evaluations
+)]
+
 pub(crate) mod enum_db;
 pub mod migrate;
 pub mod models;

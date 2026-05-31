@@ -26,3 +26,9 @@ impl ToolRegistry {
         r
     }
 }
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

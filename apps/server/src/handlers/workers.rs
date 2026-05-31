@@ -21,7 +21,7 @@ fn row_to_json(r: &sqlx::sqlite::SqliteRow) -> serde_json::Value {
 }
 
 fn rows_to_json(rows: Vec<sqlx::sqlite::SqliteRow>) -> Vec<serde_json::Value> {
-    rows.iter().map(|r| row_to_json(r)).collect()
+    rows.iter().map(row_to_json).collect()
 }
 
 pub async fn list_workers(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {

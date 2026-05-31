@@ -5,6 +5,7 @@ use coevo_store::repos::worker_run_repo::WorkerReflectionRepo;
 
 pub struct ReflectionEngine;
 impl ReflectionEngine {
+    #[allow(clippy::too_many_arguments)]
     pub async fn reflect(pool: &SqlitePool, run_id: &str, wo_id: &str, agent_id: &str, worker_id: &str, steps: &[serde_json::Value], tool_calls: &[serde_json::Value], skill_usage: &[serde_json::Value]) -> Result<ReflectionRecord, WorkerError> {
         let now = chrono::Utc::now().timestamp_millis();
         let mut what_worked: Vec<String> = vec![];
@@ -18,8 +19,7 @@ impl ReflectionEngine {
 
         for s in steps {
             let st = s["step_type"].as_str().unwrap_or("");
-            let err = s["error"].as_str();
-            if err.is_some() { what_failed.push(format!("Step {}: {}", st, err.unwrap())); }
+            if let Some(err) = s["error"].as_str() { what_failed.push(format!("Step {}: {}", st, err)); }
             else { what_worked.push(format!("Step {} completed", st)); }
         }
         for tc in tool_calls {

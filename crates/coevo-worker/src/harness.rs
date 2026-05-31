@@ -1,6 +1,8 @@
 use crate::agent_harness::{AgentRunContract, AgentSubHarness, RunAuthorization};
 use crate::error::WorkerError;
 use crate::queue::WorkerQueueService;
+use crate::r#loop::SandboxProfile;
+use coevo_models::gateway::select_gateway;
 use coevo_models::router::{
     default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel,
 };
@@ -37,17 +39,19 @@ pub struct WorkerHarnessResult {
 async fn model_profiles_for_execution(
     pool: &SqlitePool,
     allow_mock_model_routing: bool,
-) -> Result<Vec<ModelProfile>, WorkerError> {
+) -> Result<(Vec<ModelProfile>, ModelProviderConfig), WorkerError> {
     let active = ModelConfigRepo::get_active_config(pool)
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
     match active {
-        Some(config) if config.kind != ModelProviderKind::Mock => Ok(model_profiles_from_config(&config)),
-        Some(_) if allow_mock_model_routing => Ok(default_model_profiles()),
+        Some(config) if config.kind != ModelProviderKind::Mock => {
+            Ok((model_profiles_from_config(&config), config))
+        }
+        Some(config) if allow_mock_model_routing => Ok((default_model_profiles(), config)),
         Some(_) => Err(WorkerError::Internal(
             "MODEL_PROVIDER_NOT_CONFIGURED: active provider is Mock; configure a real model provider before WorkOrder execution".into(),
         )),
-        None if allow_mock_model_routing => Ok(default_model_profiles()),
+        None if allow_mock_model_routing => Ok((default_model_profiles(), ModelProviderConfig::mock())),
         None => Err(WorkerError::Internal(
             "MODEL_PROVIDER_NOT_CONFIGURED: configure a real model provider before WorkOrder execution".into(),
         )),
@@ -177,8 +181,9 @@ impl WorkerHarness {
         if wo.track == "yellow" && options.approval_receipt.is_none() {
             return Err(WorkerError::YellowApprovalRequired);
         }
-        let model_profiles =
+        let (model_profiles, provider_config) =
             model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
+        let gateway = select_gateway(provider_config.kind);
 
         let worker_id = format!("worker-{}", agent_id);
         match AgentWorkerRepo::get(pool, &worker_id)
@@ -315,6 +320,7 @@ impl WorkerHarness {
             approval_receipt: options.approval_receipt.clone(),
             contract_hash: wo.contract_hash.clone(),
             plan_hash: wo.plan_hash.clone(),
+            sandbox_profile: SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()),
         };
         let sub_result = AgentSubHarness::execute(
             pool,
@@ -322,6 +328,9 @@ impl WorkerHarness {
             &authorization,
             &model_profiles,
             options.max_runtime_ms,
+            gateway.as_ref(),
+            &provider_config,
+            &[],
         )
         .await?;
 
@@ -358,6 +367,7 @@ impl WorkerHarness {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_result(
         pool: &SqlitePool,
         wo_id: &str,

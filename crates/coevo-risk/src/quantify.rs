@@ -44,7 +44,7 @@ pub fn required_confidence(action_risk: f64) -> f64 {
 /// Compute AvailableConfidence from support and opposition stances.
 pub fn available_confidence(support_confidence: f64, opposition_confidence: f64) -> f64 {
     let raw = support_confidence - opposition_confidence;
-    raw.max(0.0).min(1.0)
+    raw.clamp(0.0, 1.0)
 }
 
 /// Compute SupportConfidence: Σ(Reputation_i · EvidenceWeight_i)

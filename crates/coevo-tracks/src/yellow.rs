@@ -145,7 +145,7 @@ impl YellowTrackRunner {
         let traceparent = format!(
             "00-{}-{}-01",
             hex::encode(uuid::Uuid::new_v4().as_bytes()),
-            hex::encode(&rand::random::<[u8; 8]>())
+            hex::encode(rand::random::<[u8; 8]>())
         );
         let meta = CommonMetadataHeader::new(
             contract_hash.clone(),

@@ -6,23 +6,16 @@
 use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::contract::*;
 use coevo_core::decision::*;
-use coevo_core::lease::EmergencyLease;
 use coevo_core::reputation::ReputationDimension;
 use coevo_core::stance::*;
-use coevo_customs::blackboard::Blackboard;
 use coevo_customs::dependency::{CognitiveDependencyGraph, EdgeType};
 use coevo_customs::propose::CognitiveCustoms;
 use coevo_mcl::compiler::MCLCompiler;
-use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
-use coevo_policy::mock::MockPolicyEngine;
 use coevo_reputation::scoring::{ErrorSeverity, ReputationEngine};
 use coevo_resolution::engine::ResolutionEngine;
-use coevo_risk::decision_tree::RiskGate;
 use coevo_risk::lease::LeaseManager;
-use coevo_router::pcdt::PcdtRouter;
 use coevo_store::pool::create_test_pool;
 use coevo_store::repos::*;
-use coevo_tracks::dispatch;
 use coevo_tracks::green::GreenTrackRunner;
 use coevo_tracks::red::RedTrackRunner;
 use coevo_tracks::yellow::YellowTrackRunner;
@@ -180,7 +173,6 @@ async fn test_02_green_cannot_bypass_customs_write_fact() {
 #[tokio::test]
 async fn test_03_yellow_negative_consent_creates_approval() {
     let pool = setup().await;
-    let runner = YellowTrackRunner;
 
     let result = YellowTrackRunner::run(
         &pool,
@@ -213,7 +205,7 @@ async fn test_03_yellow_negative_consent_creates_approval() {
 // ============================================================================
 #[tokio::test]
 async fn test_04_yellow_explicit_approval_requires_human() {
-    let pool = setup().await;
+    let _pool = setup().await;
 
     // Compile high-risk intent — forces EXPLICIT_APPROVAL
     let meta = coevo_core::metadata::CommonMetadataHeader::new(

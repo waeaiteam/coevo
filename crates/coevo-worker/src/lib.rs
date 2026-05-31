@@ -3,6 +3,7 @@ pub mod error;
 pub mod event_stream;
 pub mod agent_harness;
 pub mod harness;
+pub mod r#loop;
 pub mod memory_context;
 pub mod queue;
 pub mod reflection;

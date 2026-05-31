@@ -62,7 +62,7 @@ impl Blackboard {
             pool,
             key,
             &serde_json::to_string(value).unwrap(),
-            &serde_json::to_string(&layer).unwrap().trim_matches('"'),
+            serde_json::to_string(&layer).unwrap().trim_matches('"'),
             source_agent_id,
             contract_hash,
             ttl_ms,
