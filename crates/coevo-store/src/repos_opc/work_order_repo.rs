@@ -5,6 +5,16 @@ pub struct WorkOrderRepo;
 impl WorkOrderRepo {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> WorkOrder {
         let s: String = row.get("status");
+        let governance_proposal = row
+            .try_get::<Option<String>, _>("governance_proposal_json")
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok());
+        let governance_verdict = row
+            .try_get::<Option<String>, _>("governance_verdict_json")
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok());
         WorkOrder {
             work_order_id: row.get("work_order_id"),
             conversation_id: row.get("conversation_id"),
@@ -26,6 +36,8 @@ impl WorkOrderRepo {
             restricted_actions: serde_json::from_str(row.get("restricted_actions_json"))
                 .unwrap_or_default(),
             risk_summary: row.get("risk_summary"),
+            governance_proposal,
+            governance_verdict,
             created_at_ms: row.get::<i64, _>("created_at_ms") as u64,
             updated_at_ms: row.get::<i64, _>("updated_at_ms") as u64,
         }
@@ -67,9 +79,11 @@ impl WorkOrderRepo {
                 allowed_actions_json,
                 restricted_actions_json,
                 risk_summary,
+                governance_proposal_json,
+                governance_verdict_json,
                 created_at_ms,
                 updated_at_ms
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&w.work_order_id)
         .bind(&w.conversation_id)
@@ -86,6 +100,8 @@ impl WorkOrderRepo {
         .bind(serde_json::to_string(&w.allowed_actions).unwrap())
         .bind(serde_json::to_string(&w.restricted_actions).unwrap())
         .bind(&w.risk_summary)
+        .bind(w.governance_proposal.as_ref().map(|value| serde_json::to_string(value).unwrap()))
+        .bind(w.governance_verdict.as_ref().map(|value| serde_json::to_string(value).unwrap()))
         .bind(now)
         .bind(now)
         .execute(pool)
@@ -134,6 +150,8 @@ mod tests {
             allowed_actions: vec!["FileReadonly".to_string()],
             restricted_actions: vec![],
             risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -170,6 +188,8 @@ mod tests {
             allowed_actions: vec!["read".to_string()],
             restricted_actions: vec!["delete".to_string()],
             risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
             created_at_ms: now,
             updated_at_ms: now,
         };

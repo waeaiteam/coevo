@@ -116,8 +116,28 @@ export async function verifySkillProposal(id: string) { return post(`/opc/skills
 export async function approveSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/approve`, {}); }
 export async function rejectSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/reject`, {}); }
 export async function listWorkOrders(): Promise<Record<string,unknown>[]> { return get("/opc/work-orders"); }
-export async function createWorkOrder(wo: Record<string,unknown>) { return post("/opc/work-orders", wo); }
+export type GovernanceProposal = {
+  autonomy_ceiling: "read_only" | "workspace_write" | "full_access";
+  model_preference: "fast" | "standard" | "reasoning";
+  assigned_agent_id?: string | null;
+};
+
+export type GovernanceVerdict = {
+  effective_track: "green" | "yellow" | "red";
+  effective_tier: "read_only" | "workspace_write" | "full_access";
+  requested_ceiling: "read_only" | "workspace_write" | "full_access";
+  downgraded: boolean;
+  downgrade_reason?: string | null;
+  blocked: boolean;
+  block_reason?: string | null;
+  resolved_agent_id?: string | null;
+};
+
+export async function createWorkOrder(wo: Record<string,unknown> & { governance_proposal?: GovernanceProposal }) { return post("/opc/work-orders", wo); }
 export async function executeWorkOrder(id: string, req: Record<string,unknown> = {}) { return post(`/opc/work-orders/${id}/execute`, req); }
+export async function decideWorkOrderApproval(id: string, req: { approval_id: string; decision: "approve" | "reject"; comment?: string }) {
+  return post(`/opc/work-orders/${id}/approval`, req);
+}
 export async function cancelWorkOrder(id: string) { return post(`/opc/work-orders/${id}/cancel`, {}); }
 export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
 export async function getWorkOrderTimeline(id: string): Promise<Record<string,unknown>[]> { return get(`/opc/work-orders/${id}/timeline`); }
@@ -148,6 +168,42 @@ export async function listWorkerRuns(workerId: string) { return get(`/opc/worker
 export async function getWorkerRun(runId: string) { return get(`/opc/workers/runs/${runId}`); }
 export async function listWorkerRunSteps(runId: string) { return get(`/opc/workers/runs/${runId}/steps`); }
 export async function listWorkerRunEvents(runId: string) { return get(`/opc/workers/runs/${runId}/events`); }
+export function streamWorkerRunEvents(
+  runId: string,
+  onEvent: (event: Record<string, unknown>) => void,
+  onFallback?: () => void,
+) {
+  const url = `${getApiBase()}/opc/workers/runs/${runId}/events/stream`;
+  const source = new EventSource(url);
+  source.onmessage = (event) => {
+    try {
+      onEvent(JSON.parse(event.data));
+    } catch {
+      onEvent({ event_type: event.type, payload_json: event.data });
+    }
+  };
+  source.addEventListener("AssistantDelta", (event) => {
+    try {
+      onEvent(JSON.parse((event as MessageEvent).data));
+    } catch {
+      onEvent({ event_type: "AssistantDelta", payload_json: (event as MessageEvent).data });
+    }
+  });
+  ["LifecycleStart", "LifecycleEnd", "ToolStart", "ToolEnd", "ApprovalRequired", "WorkerBlocked", "MemoryWrite"].forEach((type) => {
+    source.addEventListener(type, (event) => {
+      try {
+        onEvent(JSON.parse((event as MessageEvent).data));
+      } catch {
+        onEvent({ event_type: type, payload_json: (event as MessageEvent).data });
+      }
+    });
+  });
+  source.onerror = () => {
+    source.close();
+    onFallback?.();
+  };
+  return () => source.close();
+}
 export async function getWorkerRunReflection(runId: string) { return get(`/opc/workers/runs/${runId}/reflection`); }
 
 // === Tool API ===

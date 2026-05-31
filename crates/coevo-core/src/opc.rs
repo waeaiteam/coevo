@@ -212,6 +212,42 @@ pub struct ModelProviderProfile {
     pub max_cost_per_task_usd: f64,
 }
 
+// ---- Work Order Governance Proposal/Verdict ----
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyCeiling {
+    ReadOnly,
+    WorkspaceWrite,
+    FullAccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPreference {
+    Fast,
+    Standard,
+    Reasoning,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceProposal {
+    pub autonomy_ceiling: AutonomyCeiling,
+    pub model_preference: ModelPreference,
+    pub assigned_agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernanceVerdict {
+    pub effective_track: String,
+    pub effective_tier: AutonomyCeiling,
+    pub requested_ceiling: AutonomyCeiling,
+    pub downgraded: bool,
+    pub downgrade_reason: Option<String>,
+    pub blocked: bool,
+    pub block_reason: Option<String>,
+    pub resolved_agent_id: Option<String>,
+}
+
 // ---- Agent Memory ----
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMemory {
@@ -281,6 +317,8 @@ pub struct WorkOrder {
     pub allowed_actions: Vec<String>,
     pub restricted_actions: Vec<String>,
     pub risk_summary: String,
+    pub governance_proposal: Option<GovernanceProposal>,
+    pub governance_verdict: Option<GovernanceVerdict>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }

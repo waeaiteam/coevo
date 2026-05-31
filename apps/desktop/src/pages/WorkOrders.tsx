@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelWorkOrder,
+  decideWorkOrderApproval,
   executeWorkOrder,
   getWorkOrderAuditExport,
   getWorkOrderTimeline,
   listWorkOrders,
   submitWorkOrderFeedback,
 } from "../api/client";
+import GovernanceTimeline, { type TimelineSpan } from "../components/GovernanceTimeline";
 import { t, useLanguage } from "../settings/i18n";
 
 type WorkOrderRecord = Record<string, unknown>;
@@ -15,6 +17,50 @@ type RowResult = {
   label: string;
   payload: Record<string, unknown>;
 };
+
+function parseJson(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function timelineToSpans(items: WorkOrderRecord[]): TimelineSpan[] {
+  return items.map((item, index) => {
+    const details = (item.details || {}) as Record<string, unknown>;
+    const input = parseJson(details.input_json);
+    const output = parseJson(details.output_json);
+    const payload = parseJson(details.payload_json) as Record<string, unknown>;
+    const outputRecord = output && typeof output === "object" ? output as Record<string, unknown> : {};
+    const gate = outputRecord.gate && typeof outputRecord.gate === "object"
+      ? outputRecord.gate as TimelineSpan["gate"]
+      : payload?.reason
+        ? { outcome: item.type === "ApprovalRequired" ? "need_approval" : item.type === "WorkerBlocked" ? "blocked" : "allow", reason: String(payload.reason), action_digest: String(payload.action_digest || "") }
+        : { outcome: "allow" };
+    const started = Number(details.started_at_ms || item.time_ms || 0);
+    const ended = Number(details.ended_at_ms || started);
+    return {
+      id: String(details.step_id || details.event_id || `${item.type}-${index}`),
+      type: String(item.type || "event"),
+      label: String(item.type || item.title || "步骤"),
+      round: Number((outputRecord.round ?? (payload as Record<string, unknown>)?.round ?? 0) || 0),
+      durationMs: Math.max(0, ended - started),
+      tokens: Number((outputRecord.usage_total as Record<string, unknown> | undefined)?.total_tokens || (outputRecord.usage as Record<string, unknown> | undefined)?.total_tokens || 0),
+      costUsd: Number(outputRecord.cost_total_usd || outputRecord.estimated_cost_usd || 0),
+      trust: String(item.type || "").includes("Executor") ? "external" : "native",
+      gate,
+      overlays: gate?.outcome === "deny" ? ["deny"] : gate?.outcome === "need_approval" ? ["need_approval"] : gate?.outcome === "blocked" ? ["sandbox_blocked"] : [],
+      thought: String(outputRecord.thought || ""),
+      proposal: outputRecord.proposal,
+      confidence: Number(outputRecord.confidence || 0),
+      usage: outputRecord.usage || outputRecord.usage_total,
+      input,
+      output: output || payload || item.details,
+    };
+  });
+}
 
 function stringField(row: WorkOrderRecord | undefined, key: string): string {
   const value = row?.[key];
@@ -120,6 +166,22 @@ export default function WorkOrders() {
     }
   }
 
+  async function decideApproval(id: string, decision: "approve" | "reject", comment: string) {
+    const approvalId = String(rowResults[id]?.payload?.approval_id || "");
+    if (!approvalId) {
+      setResult(`${t("workorders.result_error")}: approval_id missing`);
+      return;
+    }
+    try {
+      const payload = await decideWorkOrderApproval(id, { approval_id: approvalId, decision, comment });
+      setRowResults((prev) => ({ ...prev, [id]: { label: decision === "approve" ? "批准" : "拒绝", payload: payload as Record<string, unknown> } }));
+      await load();
+      await showTimeline(id, selectedTrack);
+    } catch (e: unknown) {
+      setResult(`${t("workorders.result_error")}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   async function executeRow(id: string, track: string, rerun = false) {
     setRunningIds((prev) => ({ ...prev, [id]: true }));
     setRowResults((prev) => {
@@ -153,6 +215,7 @@ export default function WorkOrders() {
   const selectedRunning = Boolean(runningIds[selectedIdValue]) || selectedStatus === "Running";
   const selectedTimelineTrack = timelineWoIds[selectedIdValue];
   const selectedTimeline = timelines[selectedIdValue] || [];
+  const selectedTimelineSpans = useMemo(() => timelineToSpans(selectedTimeline), [selectedTimeline]);
   const selectedResult = rowResults[selectedIdValue];
   const currentFeedback = fbWoId === selectedIdValue ? fbText : "";
 
@@ -338,14 +401,16 @@ export default function WorkOrders() {
                     {selectedTimelineTrack === "red" ? t("workorders.red_no_timeline") : t("workorders.empty_timeline")}
                   </div>
                 )}
-                <div className="space-y-2">
-                  {selectedTimeline.slice(0, 20).map((item, timelineIndex) => (
-                    <div key={timelineIndex} className="flex gap-2 text-xs">
-                      <span className="font-mono" style={{ color: "var(--accent)" }}>{String(item.type || item.title || "event")}</span>
-                      <span style={{ color: "var(--text-secondary)" }}>{String(item.title || "")}</span>
-                    </div>
-                  ))}
-                </div>
+                {selectedTimeline.length > 0 && (
+                  <div className="h-[520px]">
+                    <GovernanceTimeline
+                      spans={selectedTimelineSpans}
+                      title={t("workorders.task_timeline")}
+                      onApprove={(_, comment) => decideApproval(selectedIdValue, "approve", comment)}
+                      onReject={(_, comment) => decideApproval(selectedIdValue, "reject", comment)}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </section>

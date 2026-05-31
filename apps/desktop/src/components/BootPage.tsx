@@ -6,12 +6,12 @@ interface BootStatus { label: string; done: boolean; error?: string }
 
 export default function BootPage({ onReady }: { onReady: () => void }) {
   const [stages, setStages] = useState<BootStatus[]>([
-    { label: "Initializing COEVO_HOME...", done: false },
-    { label: "Starting coevo core service...", done: false },
-    { label: "Checking database...", done: false },
-    { label: "Running migrations...", done: false },
-    { label: "Connecting governance kernel...", done: false },
-    { label: "Loading AI Employees...", done: false },
+    { label: "准备本地工作区", done: false },
+    { label: "启动本地 AI 员工服务", done: false },
+    { label: "检查本地数据", done: false },
+    { label: "更新工作区结构", done: false },
+    { label: "连接安全守护", done: false },
+    { label: "载入 AI 员工", done: false },
   ]);
   const [error, setError] = useState("");
 
@@ -25,9 +25,9 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       let apiBase = "";
       if (invoke) {
         try { apiBase = await invoke("launch_server"); } catch (e: unknown) {
-          setError(`Server start failed: ${e instanceof Error ? e.message : String(e)}`); return;
+          setError(`启动本地服务失败：${e instanceof Error ? e.message : String(e)}`); return;
         }
-        if (!apiBase) { setError("Server returned empty API base URL"); return; }
+        if (!apiBase) { setError("本地服务没有返回连接地址"); return; }
       } else {
         // Web dev mode: try existing server
         apiBase = "http://127.0.0.1:8717";
@@ -39,7 +39,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       for (let i = 0; i < 20; i++) {
         try { const r = await fetch(`${apiBase}/health`); if (r.ok) { healthy = true; break; } } catch { await sleep(500); }
       }
-      if (!healthy) { setStage(1, "Server did not respond. Check logs."); setError("Server did not respond. Check logs."); return; }
+      if (!healthy) { setStage(1, "本地服务暂时没有响应，请查看日志。"); setError("本地服务暂时没有响应，请查看日志。"); return; }
       setStage(2); setStage(3); setStage(4); setStage(5);
       setTimeout(onReady, 600);
     } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
@@ -52,30 +52,30 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   async function openLogs() {
     const invoke = getTauriInvoke();
     if (invoke) { try { await invoke("open_logs_dir"); return; } catch {} }
-    alert("Logs: ~/.coevo/logs");
+    alert("日志位置：~/.coevo/logs");
   }
 
   if (error) return (
-    <div className="flex flex-col items-center justify-center h-screen" style={{background:"var(--bg-primary)",color:"var(--text-primary)"}}>
-      <div className="text-4xl mb-4" style={{color:"var(--red)"}}>⚠</div>
-      <div className="text-lg font-bold mb-2">coevo failed to start</div>
-      <div className="text-sm mb-4" style={{color:"var(--red)"}}>{error}</div>
-      <div className="flex gap-3">
-        <button onClick={() => { setError(""); boot(); }} className="px-4 py-2 text-sm rounded-md text-white" style={{background:"var(--accent)"}}>Retry</button>
-        <button onClick={openLogs} className="px-4 py-2 text-sm rounded-md border" style={{borderColor:"var(--border-accent)",color:"var(--text-secondary)"}}>Open Logs</button>
+    <div className="boot-screen">
+      <div className="boot-mark boot-mark-error">!</div>
+      <div className="boot-title">coevo 启动失败</div>
+      <div className="boot-error">{error}</div>
+      <div className="boot-actions">
+        <button onClick={() => { setError(""); boot(); }} className="boot-button">重试</button>
+        <button onClick={openLogs} className="boot-button boot-button-secondary">打开日志</button>
       </div>
     </div>
   );
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen" style={{background:"var(--bg-primary)",color:"var(--text-primary)"}}>
-      <div className="text-4xl mb-6" style={{color:"var(--accent)"}}>◈</div>
-      <div className="text-xl font-bold mb-6">coevo is starting</div>
-      <div className="space-y-2 w-80">
+    <div className="boot-screen">
+      <div className="boot-mark">c</div>
+      <div className="boot-title">coevo 正在准备</div>
+      <div className="boot-list">
         {stages.map((s, i) => (
-          <div key={i} className="flex items-center gap-3">
-            {s.done ? <span style={{color:"var(--green)"}}>✓</span> : s.error ? <span style={{color:"var(--red)"}}>✗</span> : <span className="animate-spin">◌</span>}
-            <span className="text-sm" style={{color: s.error ? "var(--red)" : s.done ? "var(--text-secondary)" : "var(--text-primary)"}}>{s.label}</span>
+          <div key={i} className="boot-row">
+            {s.done ? <span className="boot-icon boot-icon-done">✓</span> : s.error ? <span className="boot-icon boot-icon-error">×</span> : <span className="boot-icon boot-icon-pending" />}
+            <span className={s.error ? "boot-row-label is-error" : s.done ? "boot-row-label is-done" : "boot-row-label"}>{s.label}</span>
           </div>
         ))}
       </div>

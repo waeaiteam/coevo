@@ -201,17 +201,17 @@ describe("ordinary user product surface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
 
     const nav = await screen.findByRole("navigation", { name: /Primary/i });
-    expect(within(nav).getByRole("link", { name: /New Chat/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /^OPC$/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /WorkOrders/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /Audit/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /Settings/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /Workbench/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /AI Employees/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /^Tasks$/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /Clients/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /^Files$/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /^Outcomes$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Advanced Settings/i })).toBeInTheDocument();
 
-    expect(within(nav).queryByRole("link", { name: /AI Employees/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /New Chat/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /^Skills$/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Executors/i })).not.toBeInTheDocument();
-    expect(within(nav).queryByRole("link", { name: /^Contracts$/i })).not.toBeInTheDocument();
-    expect(within(nav).queryByRole("link", { name: /^Plans$/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Risk Gate/i })).not.toBeInTheDocument();
   });
 
@@ -279,8 +279,8 @@ describe("ordinary user product surface", () => {
 
     fireEvent.change(await screen.findByLabelText(/Language/i), { target: { value: "zh" } });
 
-    expect(await screen.findByRole("link", { name: "新对话" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "高级设置" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "语言与外观" })).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(MOJIBAKE_PATTERN);
   });
@@ -298,8 +298,8 @@ describe("ordinary user product surface", () => {
 
     fireEvent.change(await screen.findByLabelText("语言"), { target: { value: "en" } });
 
-    expect(await screen.findByRole("link", { name: /New Chat/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Workbench/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Advanced Settings/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Language & Appearance/ })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("新对话");
   });

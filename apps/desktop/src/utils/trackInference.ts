@@ -1,4 +1,4 @@
-// TODO(v0.2): move track classification to backend MCLCompiler/RiskGate.
+// Frontend-only preview. The server verdict is the only authority for execution.
 
 export type InferTrackResult = {
   track: "green" | "yellow" | "red";
@@ -24,7 +24,7 @@ export function inferTrackFromIntent(intent: string): InferTrackResult {
     if (lower.includes(trigger)) {
       return {
         track: "red",
-        reason: `Intent matches high-risk trigger: "${trigger}". Production/critical operations require Red Track.`,
+        reason: `Intent matches high-risk trigger: "${trigger}". This is only a gray preview.`,
       };
     }
   }
@@ -33,21 +33,21 @@ export function inferTrackFromIntent(intent: string): InferTrackResult {
     if (lower.includes(trigger)) {
       return {
         track: "yellow",
-        reason: `Intent matches moderate-risk trigger: "${trigger}". Internal write/notification requires Yellow Track with approval window.`,
+        reason: `Intent matches moderate-risk trigger: "${trigger}". This is only a gray preview.`,
       };
     }
   }
 
   return {
     track: "green",
-    reason: "Low-risk read/analyze intent. Green Track auto-execution is safe.",
+    reason: "Low-risk read/analyze intent. This is only a gray preview.",
   };
 }
 
 export function trackLabel(track: "green" | "yellow" | "red"): string {
   return {
-    green: "Green Track — read-only analysis, auto-execute",
-    yellow: "Yellow Track — internal write, approval window required",
-    red: "Red Track — production operation, emergency lease + MFA required",
+    green: "预估：可直接整理",
+    yellow: "预估：需要确认",
+    red: "预估：需要人工处理",
   }[track];
 }

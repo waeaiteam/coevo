@@ -1,8 +1,14 @@
-use axum::{extract::{Path, State}, Json, http::StatusCode};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
+    Json,
+};
 use sqlx::{Row, Column};
 use coevo_store::repos::agent_worker_repo::AgentWorkerRepo;
 use coevo_store::repos::worker_run_repo::{WorkerRunRepo, WorkerStepRepo, WorkerEventRepo, WorkerReflectionRepo};
 use crate::state::AppState;
+use std::{convert::Infallible, time::Duration};
 
 macro_rules! ok { ($v:expr) => { (StatusCode::OK, Json($v)) } }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
@@ -49,6 +55,38 @@ pub async fn get_run_steps(State(s): State<AppState>, Path(run_id): Path<String>
 }
 pub async fn get_run_events(State(s): State<AppState>, Path(run_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
     WorkerEventRepo::list_by_run(&s.pool, &run_id).await.map_or_else(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()), |rows| ok!(serde_json::json!(rows_to_json(rows))))
+}
+pub async fn stream_run_events(
+    State(s): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let pool = s.pool.clone();
+    let stream = async_stream::stream! {
+        let mut last_seq = -1_i64;
+        let mut interval = tokio::time::interval(Duration::from_millis(750));
+        loop {
+            interval.tick().await;
+            let rows = sqlx::query(
+                "SELECT * FROM worker_events WHERE run_id=? AND event_seq>? ORDER BY event_seq LIMIT 25",
+            )
+            .bind(&run_id)
+            .bind(last_seq)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+            for row in rows {
+                let seq = row.try_get::<i64, _>("event_seq").unwrap_or(last_seq + 1);
+                last_seq = seq;
+                let event_type = row.try_get::<String, _>("event_type").unwrap_or_else(|_| "WorkerEvent".to_string());
+                let data = row_to_json(&row);
+                yield Ok(Event::default()
+                    .id(seq.to_string())
+                    .event(event_type)
+                    .data(serde_json::to_string(&data).unwrap_or_else(|_| "{}".to_string())));
+            }
+        }
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 pub async fn get_run_reflection(State(s): State<AppState>, Path(run_id): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
     match WorkerReflectionRepo::get_by_run(&s.pool, &run_id).await {

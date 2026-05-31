@@ -29,10 +29,10 @@ export default function TopStatusBar() {
   }, []);
 
   return (
-    <div className="flex min-h-10 items-center gap-4 border-b px-5 py-2 text-xs" style={{ background: "#fff", borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}>
+    <div className="top-status flex items-center gap-4 px-5 py-2 text-xs">
       <div className="flex items-center gap-1.5">
         <span className={`status-dot ${status.ok ? "online pulse" : "offline"}`} />
-        <span style={{ color: status.ok ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
+        <span className={status.ok ? "status-online" : "status-offline"}>
           {status.ok ? t("top.online") : t("top.offline")}
         </span>
       </div>

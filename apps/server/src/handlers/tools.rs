@@ -149,6 +149,8 @@ mod tests {
             allowed_actions: vec!["read".to_string()],
             restricted_actions: vec!["delete".to_string()],
             risk_summary: "test".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
             created_at_ms: now,
             updated_at_ms: now,
         };

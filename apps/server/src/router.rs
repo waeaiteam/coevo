@@ -47,6 +47,7 @@ pub fn build_router(state: AppState) -> Router {
         // OPC — Work Orders
         .route("/opc/work-orders", get(handlers::opc::list_work_orders).post(handlers::opc::create_work_order))
         .route("/opc/work-orders/{id}/execute", post(handlers::opc::execute_work_order))
+        .route("/opc/work-orders/{id}/approval", post(handlers::opc::decide_work_order_approval))
         .route("/opc/work-orders/{id}/cancel", post(handlers::opc::cancel_work_order))
         .route("/opc/work-orders/{id}/feedback", post(handlers::opc::work_order_feedback))
         .route("/opc/conversations", get(handlers::conversations::list_conversations).post(handlers::conversations::create_conversation))
@@ -72,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/workers/runs/{run_id}", get(handlers::workers::get_run))
         .route("/opc/workers/runs/{run_id}/steps", get(handlers::workers::get_run_steps))
         .route("/opc/workers/runs/{run_id}/events", get(handlers::workers::get_run_events))
+        .route("/opc/workers/runs/{run_id}/events/stream", get(handlers::workers::stream_run_events))
         .route("/opc/workers/runs/{run_id}/reflection", get(handlers::workers::get_run_reflection))
         .route("/opc/workers/assign", post(handlers::tools::assign_worker))
         .route("/opc/workers/{id}/run", post(handlers::tools::run_worker))

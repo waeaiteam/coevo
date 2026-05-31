@@ -208,6 +208,7 @@ mod tests {
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track("green", None),
+            model_preference: None,
         }
     }
 

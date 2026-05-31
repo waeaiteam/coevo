@@ -45,6 +45,12 @@ pub struct ExecuteRequest {
     pub lease_id: Option<String>,
 }
 #[derive(Deserialize)]
+pub struct ApprovalDecisionRequest {
+    pub approval_id: String,
+    pub decision: String,
+    pub comment: Option<String>,
+}
+#[derive(Deserialize)]
 pub struct CreateWORequest {
     pub work_order_id: Option<String>,
     pub conversation_id: Option<String>,
@@ -56,6 +62,7 @@ pub struct CreateWORequest {
     pub selected_agents: Vec<String>,
     pub selected_executors: Vec<String>,
     pub required_skills: Vec<String>,
+    pub governance_proposal: Option<GovernanceProposal>,
 }
 
 macro_rules! ok {
@@ -78,6 +85,104 @@ struct TrackDecision {
     risk_summary: String,
     allowed_actions: Vec<String>,
     restricted_actions: Vec<String>,
+}
+
+fn tier_rank(tier: AutonomyCeiling) -> u8 {
+    match tier {
+        AutonomyCeiling::ReadOnly => 0,
+        AutonomyCeiling::WorkspaceWrite => 1,
+        AutonomyCeiling::FullAccess => 2,
+    }
+}
+
+fn min_tier(requested: AutonomyCeiling, ceiling: AutonomyCeiling) -> AutonomyCeiling {
+    if tier_rank(requested) <= tier_rank(ceiling) {
+        requested
+    } else {
+        ceiling
+    }
+}
+
+fn track_tier_ceiling(track: &str) -> AutonomyCeiling {
+    match track {
+        "yellow" => AutonomyCeiling::WorkspaceWrite,
+        "red" => AutonomyCeiling::ReadOnly,
+        _ => AutonomyCeiling::ReadOnly,
+    }
+}
+
+fn default_governance_proposal(req: &CreateWORequest) -> GovernanceProposal {
+    GovernanceProposal {
+        autonomy_ceiling: AutonomyCeiling::ReadOnly,
+        model_preference: ModelPreference::Standard,
+        assigned_agent_id: req
+            .selected_agents
+            .first()
+            .filter(|id| !id.trim().is_empty())
+            .cloned(),
+    }
+}
+
+fn choose_agent_for_track(employees: &[AgentEmployee], track: &str) -> Option<String> {
+    let risk = if track == "red" { track_risk("yellow") } else { track_risk(track) };
+    let qualified = |employee: &&AgentEmployee| {
+        employee.lifecycle_status == LifecycleStatus::Active
+            && employee.risk_ceiling >= risk
+            && employee.permission_boundary.max_risk_score >= risk
+    };
+    employees
+        .iter()
+        .filter(qualified)
+        .find(|employee| employee.agent_id == "agent-founder-01")
+        .or_else(|| {
+            employees
+                .iter()
+                .filter(qualified)
+                .find(|employee| employee.agent_id == "agent-risk-01")
+        })
+        .or_else(|| employees.iter().find(qualified))
+        .map(|employee| employee.agent_id.clone())
+}
+
+fn resolve_governance_verdict(
+    proposal: &GovernanceProposal,
+    track_decision: &TrackDecision,
+    employees: &[AgentEmployee],
+    client_selected_agents: &[String],
+) -> GovernanceVerdict {
+    let risk_ceiling = track_tier_ceiling(track_decision.track);
+    let effective_tier = min_tier(proposal.autonomy_ceiling, risk_ceiling);
+    let downgraded = effective_tier != proposal.autonomy_ceiling;
+    let requested_agent = proposal
+        .assigned_agent_id
+        .as_ref()
+        .filter(|id| !id.trim().is_empty() && id.as_str() != "auto");
+    let requested_agent_is_active = requested_agent.and_then(|id| {
+        employees
+            .iter()
+            .find(|employee| employee.agent_id == *id && employee.lifecycle_status == LifecycleStatus::Active)
+    });
+    let resolved_agent_id = requested_agent_is_active
+        .map(|employee| employee.agent_id.clone())
+        .or_else(|| choose_agent_for_track(employees, track_decision.track))
+        .or_else(|| client_selected_agents.first().filter(|id| !id.is_empty()).cloned());
+    let blocked = track_decision.track == "red";
+
+    GovernanceVerdict {
+        effective_track: track_decision.track.to_string(),
+        effective_tier,
+        requested_ceiling: proposal.autonomy_ceiling,
+        downgraded,
+        downgrade_reason: downgraded.then(|| {
+            "Requested autonomy exceeds the server RiskGate ceiling for this task.".to_string()
+        }),
+        blocked,
+        block_reason: blocked.then(|| {
+            "Red Track execution is blocked in Alpha until the production verifier is available."
+                .to_string()
+        }),
+        resolved_agent_id,
+    }
 }
 
 const RED_TRIGGERS: [&str; 11] = [
@@ -393,6 +498,20 @@ pub async fn create_work_order(
     }
     let now = chrono::Utc::now().timestamp_millis() as u64;
     let track_decision = classify_mission_track(&req.mission_intent);
+    let employees = agent_employee_repo::AgentEmployeeRepo::list(&s.pool)
+        .await
+        .unwrap_or_default();
+    let proposal = req
+        .governance_proposal
+        .clone()
+        .unwrap_or_else(|| default_governance_proposal(&req));
+    let verdict =
+        resolve_governance_verdict(&proposal, &track_decision, &employees, &req.selected_agents);
+    let selected_agents = verdict
+        .resolved_agent_id
+        .clone()
+        .map(|id| vec![id])
+        .unwrap_or_else(|| req.selected_agents.clone());
     let wo = WorkOrder {
         work_order_id: req
             .work_order_id
@@ -403,20 +522,22 @@ pub async fn create_work_order(
         user_id: req.user_id,
         opc_id: req.opc_id,
         mission_intent: req.mission_intent,
-        selected_agents: req.selected_agents,
+        selected_agents,
         selected_executors: req.selected_executors,
         required_skills: req.required_skills,
-        track: track_decision.track.to_string(),
+        track: verdict.effective_track.clone(),
         status: WorkOrderStatus::Planned,
         allowed_actions: track_decision.allowed_actions,
         restricted_actions: track_decision.restricted_actions,
         risk_summary: track_decision.risk_summary,
+        governance_proposal: Some(proposal.clone()),
+        governance_verdict: Some(verdict.clone()),
         created_at_ms: now,
         updated_at_ms: now,
     };
     match work_order_repo::WorkOrderRepo::create(&s.pool, &wo).await {
         Ok(()) => ok!(
-            serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","track":wo.track,"risk_summary":wo.risk_summary,"allowed_actions":wo.allowed_actions,"restricted_actions":wo.restricted_actions,"created_at_ms":now})
+            serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","track":wo.track,"risk_summary":wo.risk_summary,"allowed_actions":wo.allowed_actions,"restricted_actions":wo.restricted_actions,"governance_proposal":proposal,"governance_verdict":verdict,"created_at_ms":now})
         ),
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -631,6 +752,75 @@ pub async fn execute_work_order(
         "tool_calls":harness_result.tool_calls,"memory_ids":harness_result.memory_ids,
         "reflection_id":harness_result.reflection_id,"proposal_id":harness_result.proposal_id
     }))
+}
+
+pub async fn decide_work_order_approval(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<ApprovalDecisionRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let approval = match ApprovalRepo::find_by_id(&s.pool, &req.approval_id).await {
+        Ok(Some(approval)) => approval,
+        Ok(None) => return err!(StatusCode::NOT_FOUND, "Approval request not found"),
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let expected_action_urn = format!("urn:coevo:work-order:{}:execute", id);
+    if approval.action_urn != expected_action_urn {
+        return err!(StatusCode::FORBIDDEN, "APPROVAL_ACTION_MISMATCH");
+    }
+
+    let actor = "default-founder";
+    match req.decision.as_str() {
+        "approve" | "approved" => {
+            if let Err(e) = ApprovalRepo::approve(&s.pool, &req.approval_id, actor).await {
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+            let (status, Json(mut body)) = execute_work_order(
+                State(s.clone()),
+                Path(id.clone()),
+                Json(ExecuteRequest {
+                    caller_identity_proof: Some(req.approval_id.clone()),
+                    monitoring_signature: None,
+                    diagnostic_signature: None,
+                    lease_id: None,
+                }),
+            )
+            .await;
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert(
+                    "approval_receipt".to_string(),
+                    serde_json::json!(req.approval_id),
+                );
+                if let Some(comment) = req.comment {
+                    obj.insert("approval_comment".to_string(), serde_json::json!(comment));
+                }
+                if let Some(run_id) = obj
+                    .get("worker_runs")
+                    .and_then(|runs| runs.as_array())
+                    .and_then(|runs| runs.first())
+                    .and_then(|run| run.get("run_id"))
+                    .cloned()
+                {
+                    obj.insert("run_id".to_string(), run_id);
+                }
+            }
+            (status, Json(body))
+        }
+        "reject" | "rejected" | "deny" | "denied" => {
+            if let Err(e) = ApprovalRepo::deny(&s.pool, &req.approval_id, actor).await {
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+            let _ = work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Failed").await;
+            ok!(serde_json::json!({
+                "ok":true,
+                "status":"ApprovalDenied",
+                "approval_receipt":req.approval_id,
+                "approval_comment":req.comment,
+                "message":"Approval denied; task execution was not resumed."
+            }))
+        }
+        _ => err!(StatusCode::BAD_REQUEST, "decision must be approve or reject"),
+    }
 }
 
 pub async fn cancel_work_order(
@@ -968,6 +1158,7 @@ mod tests {
             selected_agents: vec!["agent-risk-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, Json(created)) = create_work_order(State(state), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
@@ -1040,6 +1231,7 @@ mod tests {
             selected_agents: vec!["agent-risk-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK);
@@ -1083,12 +1275,15 @@ mod tests {
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
 
         let (status, Json(body)) = create_work_order(State(state), Json(create)).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["track"], "red");
+        assert_eq!(body["governance_verdict"]["effective_track"], "red");
+        assert_eq!(body["governance_verdict"]["blocked"], true);
         assert!(body["risk_summary"]
             .as_str()
             .unwrap_or_default()
@@ -1100,6 +1295,51 @@ mod tests {
         assert_eq!(stored.track, "red");
         assert!(stored.restricted_actions.contains(&"delete".to_string()));
         assert!(stored.restricted_actions.contains(&"production".to_string()));
+    }
+
+    #[tokio::test]
+    async fn governance_verdict_downgrades_requested_tier_on_server() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-verdict-downgrade";
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Read metrics and summarize customer trends".to_string(),
+            selected_agents: vec![],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: Some(GovernanceProposal {
+                autonomy_ceiling: AutonomyCeiling::FullAccess,
+                model_preference: ModelPreference::Reasoning,
+                assigned_agent_id: Some("agent-risk-01".to_string()),
+            }),
+        };
+
+        let (status, Json(body)) = create_work_order(State(state), Json(create)).await;
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["governance_proposal"]["autonomy_ceiling"], "full_access");
+        assert_eq!(body["governance_verdict"]["effective_track"], "green");
+        assert_eq!(body["governance_verdict"]["requested_ceiling"], "full_access");
+        assert_eq!(body["governance_verdict"]["effective_tier"], "read_only");
+        assert_eq!(body["governance_verdict"]["downgraded"], true);
+        assert_eq!(body["governance_verdict"]["resolved_agent_id"], "agent-risk-01");
+        let stored = work_order_repo::WorkOrderRepo::get(&pool, work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.governance_verdict.unwrap().effective_tier,
+            AutonomyCeiling::ReadOnly
+        );
     }
 
     #[tokio::test]
@@ -1128,6 +1368,7 @@ mod tests {
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK);
@@ -1183,6 +1424,7 @@ mod tests {
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
@@ -1233,6 +1475,7 @@ mod tests {
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
@@ -1296,6 +1539,7 @@ mod tests {
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, _) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK);
@@ -1402,6 +1646,7 @@ mod tests {
             selected_agents: vec!["agent-risk-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK);
@@ -1458,6 +1703,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approval_endpoint_approves_and_reenters_with_receipt() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
+        let state = AppState::new(pool.clone());
+        let work_order_id = "wo-yellow-approval-endpoint";
+        let contract_hash = "e".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        create_yellow_work_order(state.clone(), work_order_id, &contract_hash).await;
+        let (wait_status, Json(wait_body)) = execute_work_order(
+            State(state.clone()),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(wait_status, StatusCode::OK);
+        let approval_id = wait_body["approval_id"].as_str().unwrap().to_string();
+
+        let (status, Json(body)) = decide_work_order_approval(
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ApprovalDecisionRequest {
+                approval_id: approval_id.clone(),
+                decision: "approve".to_string(),
+                comment: Some("approved in timeline".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["approval_receipt"], approval_id);
+        assert_eq!(body["approval_comment"], "approved in timeline");
+        assert_eq!(body["status"], "Completed");
+        assert!(count_rows(&pool, "worker_runs", work_order_id).await >= 1);
+    }
+
+    #[tokio::test]
     async fn yellow_execute_rejects_arbitrary_identity_string_as_approval_receipt() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
@@ -1479,6 +1769,7 @@ mod tests {
             selected_agents: vec!["agent-risk-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
         };
         let (create_status, Json(created)) =
             create_work_order(State(state.clone()), Json(create)).await;

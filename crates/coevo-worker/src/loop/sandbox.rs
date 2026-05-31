@@ -26,6 +26,19 @@ pub struct SandboxProfile {
 }
 
 impl SandboxProfile {
+    pub fn from_tier(tier: SandboxTier, workspace_root: Option<PathBuf>) -> Self {
+        match tier {
+            SandboxTier::ReadOnly => Self::read_only(workspace_root),
+            SandboxTier::WorkspaceWrite => Self::workspace_write(workspace_root),
+            SandboxTier::FullAccess => Self {
+                tier: SandboxTier::FullAccess,
+                workspace_root,
+                network: NetworkPolicy::Open,
+                readonly_guards: vec![],
+            },
+        }
+    }
+
     pub fn from_track(track: &str, workspace_root: Option<PathBuf>) -> Self {
         match track {
             "yellow" => Self::workspace_write(workspace_root),
@@ -213,6 +226,13 @@ mod tests {
         let profile = SandboxProfile::from_track("red", None);
         assert_eq!(profile.tier, SandboxTier::ReadOnly);
         assert_eq!(profile.network, NetworkPolicy::Blocked);
+    }
+
+    #[test]
+    fn explicit_full_access_tier_opens_network_only_when_server_verdict_allows_it() {
+        let profile = SandboxProfile::from_tier(SandboxTier::FullAccess, Some(PathBuf::from("workspace")));
+        assert_eq!(profile.tier, SandboxTier::FullAccess);
+        assert_eq!(profile.network, NetworkPolicy::Open);
     }
 
     #[test]

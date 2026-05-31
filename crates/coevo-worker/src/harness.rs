@@ -1,7 +1,8 @@
 use crate::agent_harness::{AgentRunContract, AgentSubHarness, RunAuthorization};
 use crate::error::WorkerError;
 use crate::queue::WorkerQueueService;
-use crate::r#loop::SandboxProfile;
+use crate::r#loop::{SandboxProfile, SandboxTier};
+use coevo_core::opc::{AutonomyCeiling, ModelPreference};
 use coevo_models::gateway::select_gateway;
 use coevo_models::router::{
     default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel,
@@ -75,9 +76,13 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
         (
             config.fast_model.as_str(),
             format!("{} Fast", provider_name),
-            base_caps.clone(),
+            {
+                let mut caps = base_caps.clone();
+                caps.push(ModelCapability::ToolPlanning);
+                caps
+            },
             true,
-            false,
+            true,
             300,
         ),
         (
@@ -152,6 +157,22 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
         });
     }
     out
+}
+
+fn sandbox_tier_from_ceiling(ceiling: AutonomyCeiling) -> SandboxTier {
+    match ceiling {
+        AutonomyCeiling::ReadOnly => SandboxTier::ReadOnly,
+        AutonomyCeiling::WorkspaceWrite => SandboxTier::WorkspaceWrite,
+        AutonomyCeiling::FullAccess => SandboxTier::FullAccess,
+    }
+}
+
+fn model_preference_to_role(preference: ModelPreference) -> &'static str {
+    match preference {
+        ModelPreference::Fast => "fast",
+        ModelPreference::Standard => "standard",
+        ModelPreference::Reasoning => "reasoning",
+    }
 }
 
 pub struct WorkerHarness;
@@ -308,6 +329,15 @@ impl WorkerHarness {
             user_id: wo.user_id.clone(),
             opc_id: wo.opc_id.clone(),
         };
+        let effective_tier = wo
+            .governance_verdict
+            .as_ref()
+            .map(|verdict| sandbox_tier_from_ceiling(verdict.effective_tier))
+            .unwrap_or_else(|| SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()).tier);
+        let model_preference = wo
+            .governance_proposal
+            .as_ref()
+            .map(|proposal| model_preference_to_role(proposal.model_preference).to_string());
         let authorization = RunAuthorization {
             work_order_id: work_order_id.to_string(),
             agent_id: agent_id.clone(),
@@ -320,7 +350,8 @@ impl WorkerHarness {
             approval_receipt: options.approval_receipt.clone(),
             contract_hash: wo.contract_hash.clone(),
             plan_hash: wo.plan_hash.clone(),
-            sandbox_profile: SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()),
+            sandbox_profile: SandboxProfile::from_tier(effective_tier, std::env::current_dir().ok()),
+            model_preference,
         };
         let sub_result = AgentSubHarness::execute(
             pool,
@@ -464,6 +495,8 @@ mod tests {
             allowed_actions: vec!["read".to_string()],
             restricted_actions: vec!["delete".to_string()],
             risk_summary: "test".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
             created_at_ms: now,
             updated_at_ms: now,
         }

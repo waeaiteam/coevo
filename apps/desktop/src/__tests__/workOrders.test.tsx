@@ -228,7 +228,7 @@ describe("WorkOrders", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View Timeline" }));
     await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-yellow"));
-    expect(screen.getByText("Task Timeline")).toBeInTheDocument();
+    expect(screen.getAllByText("Task Timeline").length).toBeGreaterThan(0);
     expect(screen.getByText("ApprovalRequested")).toBeInTheDocument();
   });
 });

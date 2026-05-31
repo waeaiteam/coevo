@@ -38,6 +38,7 @@ pub struct RunAuthorization {
     pub contract_hash: String,
     pub plan_hash: String,
     pub sandbox_profile: SandboxProfile,
+    pub model_preference: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +202,7 @@ impl AgentSubHarness {
         let mut total_prompt_tokens = 0u64;
         let mut total_completion_tokens = 0u64;
         let mut total_tokens = 0u64;
+        let mut total_estimated_cost_usd = 0.0f64;
 
         for round in 0..max_rounds {
             if let Some(max_runtime_ms) = max_runtime_ms {
@@ -256,10 +258,12 @@ impl AgentSubHarness {
                 max_tokens: provider_config.max_tokens,
                 response_format: ResponseFormat::Json,
             };
+            let model_started_at_ms = now();
             let response = gateway
                 .structured(&request, &schema)
                 .await
                 .map_err(|e| WorkerError::Internal(e.to_string()))?;
+            let model_ended_at_ms = now();
             let reasoning: ReasoningOutput = serde_json::from_value(
                 response
                     .json
@@ -269,6 +273,7 @@ impl AgentSubHarness {
             total_prompt_tokens += response.usage.prompt_tokens;
             total_completion_tokens += response.usage.completion_tokens;
             total_tokens += response.usage.total_tokens;
+            total_estimated_cost_usd += routing.estimated_cost_usd.unwrap_or(0.0);
             loop_history.push(ModelMessage {
                 role: "assistant".to_string(),
                 content: serde_json::to_string(&reasoning).unwrap_or_default(),
@@ -293,6 +298,10 @@ impl AgentSubHarness {
                     }),
                 );
                 obj.insert(
+                    "cost_total_usd".into(),
+                    serde_json::json!(total_estimated_cost_usd),
+                );
+                obj.insert(
                     "context".into(),
                     serde_json::json!({
                         "engine_version": context_engine.engine_version(),
@@ -306,13 +315,33 @@ impl AgentSubHarness {
                 );
                 obj.insert("gate".into(), gate_to_json(&gate));
             }
-            step_create(
+            WorkerEventRepo::append(
+                pool,
+                &authorization.run_id,
+                "AssistantDelta",
+                &serde_json::to_string(&serde_json::json!({
+                    "round": round,
+                    "delta": serde_json::to_string(&reasoning).unwrap_or_default(),
+                    "usage_delta": response.usage,
+                    "usage_total": {
+                        "prompt_tokens": total_prompt_tokens,
+                        "completion_tokens": total_completion_tokens,
+                        "total_tokens": total_tokens,
+                    },
+                    "cost_total_usd": total_estimated_cost_usd,
+                }))
+                .unwrap(),
+            )
+            .await
+            .map_err(|e| WorkerError::Internal(e.to_string()))?;
+            step_create_timed(
                 pool,
                 &mut steps,
                 &authorization.run_id,
                 "ModelCall",
                 &serde_json::json!({"intent":run_contract.mission_intent,"round":round}),
                 Some(&model_output),
+                (model_started_at_ms, model_ended_at_ms),
             )
             .await?;
 
@@ -916,6 +945,10 @@ fn route_for_step(
     model_profiles: &[ModelProfile],
     max_latency_ms: Option<u64>,
 ) -> ModelRoutingDecision {
+    let preferred_model_id = preferred_model_id_for_role(
+        authorization.model_preference.as_deref(),
+        model_profiles,
+    );
     let req = ModelRoutingRequest {
         work_order_id: run_contract.work_order_id.clone(),
         agent_id: authorization.agent_id.clone(),
@@ -933,7 +966,7 @@ fn route_for_step(
         max_latency_ms,
         max_cost_usd: None,
         privacy_boundary: PrivacyLevel::PublicApi,
-        preferred_model_id: None,
+        preferred_model_id,
     };
     ModelRouter::route(&req, model_profiles, None).unwrap_or_else(|_| ModelRoutingDecision {
         selected_provider_id: "unavailable".into(),
@@ -947,6 +980,22 @@ fn route_for_step(
         decision_id: format!("mrd-{}", uuid::Uuid::new_v4()),
         created_at_ms: chrono::Utc::now().timestamp_millis(),
     })
+}
+
+fn preferred_model_id_for_role(
+    model_preference: Option<&str>,
+    model_profiles: &[ModelProfile],
+) -> Option<String> {
+    let label = match model_preference {
+        Some("fast") => "fast",
+        Some("standard") | Some("default") => "default",
+        Some("reasoning") => "reasoning",
+        _ => return None,
+    };
+    model_profiles
+        .iter()
+        .find(|profile| profile.display_name.to_ascii_lowercase().contains(label))
+        .map(|profile| profile.model_id.clone())
 }
 
 fn gate_to_json(gate: &GateOutcome) -> serde_json::Value {
@@ -1036,9 +1085,22 @@ async fn step_create(
     input: &serde_json::Value,
     output: Option<&serde_json::Value>,
 ) -> Result<String, WorkerError> {
+    let now = chrono::Utc::now().timestamp_millis();
+    step_create_timed(pool, steps, run_id, step_type, input, output, (now, now)).await
+}
+
+async fn step_create_timed(
+    pool: &SqlitePool,
+    steps: &mut Vec<serde_json::Value>,
+    run_id: &str,
+    step_type: &str,
+    input: &serde_json::Value,
+    output: Option<&serde_json::Value>,
+    timing_ms: (i64, i64),
+) -> Result<String, WorkerError> {
     let idx = steps.len() as i64;
     let sid = format!("s-{}-{}", &run_id[..8.min(run_id.len())], idx);
-    let now = chrono::Utc::now().timestamp_millis();
+    let (started_at_ms, ended_at_ms) = timing_ms;
     sqlx::query("INSERT INTO worker_steps VALUES (?,?,?,?,?,?,?,?,?,?)")
         .bind(&sid)
         .bind(run_id)
@@ -1047,8 +1109,8 @@ async fn step_create(
         .bind(serde_json::to_string(input).unwrap())
         .bind(output.map(|o| serde_json::to_string(o).unwrap()))
         .bind("Completed")
-        .bind(now)
-        .bind(Some(now))
+        .bind(started_at_ms)
+        .bind(Some(ended_at_ms))
         .bind(Option::<String>::None)
         .execute(pool)
         .await
@@ -1196,6 +1258,7 @@ mod tests {
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track("green", Some(std::env::temp_dir())),
+            model_preference: None,
         }
     }
 

@@ -101,7 +101,26 @@ pub async fn timeline(
                         for step in &steps {
                             let tp: String = step.get("step_type");
                             let tm: i64 = step.get("started_at_ms");
-                            items.push(serde_json::json!({"time_ms":tm,"type":tp,"title":tp,"details":{"step_id":step.get::<String,_>("step_id"),"run_id":&run_id,"session_id":&sid}}));
+                            let ended_at_ms = step.try_get::<Option<i64>, _>("ended_at_ms").ok().flatten();
+                            let input_json = step.try_get::<String, _>("input_json").unwrap_or_else(|_| "{}".to_string());
+                            let output_json = step.try_get::<Option<String>, _>("output_json").ok().flatten();
+                            let status = step.try_get::<String, _>("status").unwrap_or_else(|_| "Completed".to_string());
+                            items.push(serde_json::json!({
+                                "time_ms":tm,
+                                "type":tp,
+                                "title":tp,
+                                "details":{
+                                    "step_id":step.get::<String,_>("step_id"),
+                                    "run_id":&run_id,
+                                    "session_id":&sid,
+                                    "step_index":step.get::<i64,_>("step_index"),
+                                    "status":status,
+                                    "started_at_ms":tm,
+                                    "ended_at_ms":ended_at_ms,
+                                    "input_json":input_json,
+                                    "output_json":output_json,
+                                }
+                            }));
                         }
                     }
                     if let Ok(evts) = sqlx::query("SELECT * FROM worker_events WHERE run_id=? ORDER BY event_seq")
@@ -112,7 +131,8 @@ pub async fn timeline(
                         for evt in &evts {
                             let et: String = evt.get("event_type");
                             let tm: i64 = evt.get("created_at_ms");
-                            items.push(serde_json::json!({"time_ms":tm,"type":et,"title":et,"details":{"event_id":evt.get::<String,_>("event_id"),"run_id":&run_id,"session_id":&sid}}));
+                            let payload_json = evt.try_get::<String, _>("payload_json").unwrap_or_else(|_| "{}".to_string());
+                            items.push(serde_json::json!({"time_ms":tm,"type":et,"title":et,"details":{"event_id":evt.get::<String,_>("event_id"),"run_id":&run_id,"session_id":&sid,"event_seq":evt.get::<i64,_>("event_seq"),"payload_json":payload_json}}));
                         }
                     }
                 }

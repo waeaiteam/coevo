@@ -130,8 +130,13 @@ impl ModelRouter {
         if req.required_capabilities.contains(&ModelCapability::ToolPlanning) { candidates.retain(|p| p.supports_tools || p.supports_json); }
         if candidates.is_empty() { return Err(ModelRoutingError::NoModelAvailable); }
 
-        // Prefer agent preference if it matches and doesn't break governance
-        let chosen = if let Some(pf) = pref {
+        // Prefer explicit request/agent preference if it matches and doesn't break governance.
+        let chosen = if let Some(preferred_model_id) = req.preferred_model_id.as_ref() {
+            candidates
+                .iter()
+                .find(|c| &c.model_id == preferred_model_id)
+                .unwrap_or(&candidates[0])
+        } else if let Some(pf) = pref {
             let by_pref = candidates.iter().find(|c| pf.default_model_id.as_ref() == Some(&c.model_id)
                 || (req.required_capabilities.contains(&ModelCapability::CodeGeneration) && pf.code_model_id.as_ref() == Some(&c.model_id))
                 || (req.required_capabilities.contains(&ModelCapability::DeepReasoning) && pf.reasoning_model_id.as_ref() == Some(&c.model_id)));
@@ -185,5 +190,15 @@ mod tests {
         let profiles = default_model_profiles();
         let d = ModelRouter::route(&make_req("test", vec![ModelCapability::StructuredJSON, ModelCapability::ImageGeneration], "green"), &profiles, None);
         assert!(d.is_err()); // Image provider doesn't support JSON
+    }
+    #[test] fn explicit_preferred_model_wins_after_governance_filters() {
+        let mut req = make_req(
+            "summarize",
+            vec![ModelCapability::StructuredJSON],
+            "green",
+        );
+        req.preferred_model_id = Some("mock-reasoning".into());
+        let d = ModelRouter::route(&req, &default_model_profiles(), None).unwrap();
+        assert_eq!(d.selected_model_id, "mock-reasoning");
     }
 }

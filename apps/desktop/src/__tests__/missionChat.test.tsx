@@ -62,6 +62,16 @@ describe("MissionChat WorkOrder creation", () => {
       ok: true,
       work_order_id: "wo-mission-1",
       status: "Planned",
+      governance_verdict: {
+        effective_track: "green",
+        effective_tier: "read_only",
+        requested_ceiling: "read_only",
+        downgraded: false,
+        downgrade_reason: null,
+        blocked: false,
+        block_reason: null,
+        resolved_agent_id: "agent-founder-01",
+      },
     });
     api.listConversations.mockResolvedValue([]);
     api.createConversation.mockResolvedValue({
@@ -91,7 +101,7 @@ describe("MissionChat WorkOrder creation", () => {
     vi.restoreAllMocks();
   });
 
-  it("turns a low-risk mission into a planned Green WorkOrder", async () => {
+  it("turns a low-risk mission into a planned customer task", async () => {
     localStorage.setItem("coevo-user-id", "user-local-123");
     localStorage.setItem("coevo-opc-id", "opc-local-456");
 
@@ -100,7 +110,7 @@ describe("MissionChat WorkOrder creation", () => {
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Analyze the README and summarize the project direction" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
 
@@ -129,6 +139,11 @@ describe("MissionChat WorkOrder creation", () => {
       selected_agents: ["agent-founder-01"],
       selected_executors: [],
       required_skills: ["skill-mission-draft"],
+      governance_proposal: {
+        autonomy_ceiling: "read_only",
+        model_preference: "standard",
+        assigned_agent_id: null,
+      },
     }));
     const payload = api.createWorkOrder.mock.calls[0][0];
     expect(payload).not.toHaveProperty("track");
@@ -149,46 +164,63 @@ describe("MissionChat WorkOrder creation", () => {
         linked_work_order_id: "wo-mission-1",
       })
     );
-    expect(screen.getByText(/Model cognition: This is a read-only analysis mission/i)).toBeInTheDocument();
-    expect(screen.getByText(/WorkOrder wo-mission-1 \(GREEN Track\) created/i)).toBeInTheDocument();
+    expect(screen.getByText(/This is a read-only analysis mission/i)).toBeInTheDocument();
+    expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument();
+    expect(screen.getByText("治理裁定")).toBeInTheDocument();
   });
 
-  it("selects a Yellow-capable employee for moderate-risk missions", async () => {
+  it("keeps frontend intent inference as preview and lets the server resolve assignment", async () => {
     renderMissionChat();
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Draft a marketing announcement and send it after approval" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
 
     expect(api.routePlan).toHaveBeenCalledWith(
       { mission: "Analyze the README" },
-      ["agent-risk-01"],
+      ["agent-founder-01"],
       "a".repeat(64)
     );
     expect(api.createWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
-      selected_agents: ["agent-risk-01"],
+      selected_agents: ["agent-founder-01"],
+      governance_proposal: expect.objectContaining({ assigned_agent_id: null }),
     }));
     expect(api.createWorkOrder.mock.calls[0][0]).not.toHaveProperty("track");
   });
 
-  it("creates an auditable Red WorkOrder without requiring a Red-capable executor path", async () => {
+  it("creates a task for high-risk intent without client-side track authorization", async () => {
+    api.createWorkOrder.mockResolvedValue({
+      ok: true,
+      work_order_id: "wo-mission-1",
+      status: "Planned",
+      governance_verdict: {
+        effective_track: "red",
+        effective_tier: "read_only",
+        requested_ceiling: "read_only",
+        downgraded: false,
+        downgrade_reason: null,
+        blocked: true,
+        block_reason: "blocked by server",
+        resolved_agent_id: "agent-risk-01",
+      },
+    });
     renderMissionChat();
 
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Delete production customer data" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
 
     expect(api.createWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
-      selected_agents: ["agent-risk-01"],
+      selected_agents: ["agent-founder-01"],
     }));
     expect(api.createWorkOrder.mock.calls[0][0]).not.toHaveProperty("track");
-    expect(screen.getByText(/WorkOrder wo-mission-1 \(RED Track\) created/i)).toBeInTheDocument();
+    expect(screen.getByText("需要人工处理")).toBeInTheDocument();
   });
 
   it("does not let model cognition add WorkOrder authorization fields", async () => {
@@ -201,7 +233,7 @@ describe("MissionChat WorkOrder creation", () => {
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Analyze the README and summarize risks" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
 
@@ -212,15 +244,21 @@ describe("MissionChat WorkOrder creation", () => {
     expect(payload).not.toHaveProperty("risk_summary");
   });
 
-  it("uses the server-authoritative track returned by WorkOrder creation", async () => {
+  it("uses the server-authoritative verdict returned by task creation", async () => {
     api.createWorkOrder.mockResolvedValue({
       ok: true,
       work_order_id: "wo-server-red",
       status: "Planned",
-      track: "red",
-      allowed_actions: ["read", "draft"],
-      restricted_actions: ["write", "delete", "deploy", "payment", "production"],
-      risk_summary: "Server RiskGate: intent matches high-risk trigger.",
+      governance_verdict: {
+        effective_track: "red",
+        effective_tier: "read_only",
+        requested_ceiling: "read_only",
+        downgraded: false,
+        downgrade_reason: null,
+        blocked: true,
+        block_reason: "blocked by server",
+        resolved_agent_id: "agent-risk-01",
+      },
     });
 
     renderMissionChat();
@@ -228,9 +266,9 @@ describe("MissionChat WorkOrder creation", () => {
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Analyze the README and summarize risks" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => expect(screen.getByText(/WorkOrder wo-server-red \(RED Track\) created/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("需要人工处理")).toBeInTheDocument());
   });
 
   it("creates the WorkOrder and tells the user when model cognition is unavailable", async () => {
@@ -241,9 +279,9 @@ describe("MissionChat WorkOrder creation", () => {
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "Analyze the README and summarize risks" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Create WorkOrder/i }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
-    expect(screen.getByText(/Cognition summary unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/模型摘要暂不可用/)).toBeInTheDocument();
   });
 });
