@@ -1,6 +1,7 @@
 pub mod dto;
 pub mod error;
 pub mod event_stream;
+pub mod agent_harness;
 pub mod harness;
 pub mod memory_context;
 pub mod queue;

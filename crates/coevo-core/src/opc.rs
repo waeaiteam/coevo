@@ -267,6 +267,7 @@ pub enum ExecutorStatus { Draft, Registered, Disabled }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkOrder {
     pub work_order_id: String,
+    pub conversation_id: Option<String>,
     pub contract_hash: String,
     pub plan_hash: String,
     pub user_id: String,

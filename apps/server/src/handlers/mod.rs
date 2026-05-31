@@ -1,4 +1,5 @@
 pub mod compile;
+pub mod conversations;
 pub mod evaluate;
 pub mod health;
 pub mod models;

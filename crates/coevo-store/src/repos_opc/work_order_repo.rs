@@ -7,6 +7,7 @@ impl WorkOrderRepo {
         let s: String = row.get("status");
         WorkOrder {
             work_order_id: row.get("work_order_id"),
+            conversation_id: row.get("conversation_id"),
             contract_hash: row.get("contract_hash"),
             plan_hash: row.get("plan_hash"),
             user_id: row.get("user_id"),
@@ -52,6 +53,7 @@ impl WorkOrderRepo {
         sqlx::query(
             "INSERT INTO work_orders (
                 work_order_id,
+                conversation_id,
                 contract_hash,
                 plan_hash,
                 user_id,
@@ -67,9 +69,10 @@ impl WorkOrderRepo {
                 risk_summary,
                 created_at_ms,
                 updated_at_ms
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&w.work_order_id)
+        .bind(&w.conversation_id)
         .bind(&w.contract_hash)
         .bind(&w.plan_hash)
         .bind(&w.user_id)
@@ -117,6 +120,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp_millis() as u64;
         let work_order = WorkOrder {
             work_order_id: "wo-store-create-test".to_string(),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -143,5 +147,39 @@ mod tests {
         assert_eq!(saved.work_order_id, work_order.work_order_id);
         assert_eq!(saved.status, WorkOrderStatus::Planned);
         assert_eq!(saved.selected_agents, work_order.selected_agents);
+    }
+
+    #[tokio::test]
+    async fn create_persists_conversation_binding_for_task_workspace() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let work_order = WorkOrder {
+            work_order_id: "wo-conversation-binding".to_string(),
+            conversation_id: Some("conv-product-feedback".to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "persist this task in its originating conversation".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec!["delete".to_string()],
+            risk_summary: "green".to_string(),
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+        let saved = WorkOrderRepo::get(&pool, "wo-conversation-binding")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(saved.conversation_id.as_deref(), Some("conv-product-feedback"));
     }
 }

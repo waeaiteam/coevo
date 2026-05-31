@@ -1,12 +1,19 @@
 use sqlx::SqlitePool;
 use crate::types::*;
 use crate::error::WorkerError;
-use coevo_core::opc::WorkOrder;
 use coevo_store::repos_opc::{memory_repo, agent_memory_repo};
 
 pub struct MemoryContextBuilder;
 impl MemoryContextBuilder {
-    pub async fn build(pool: &SqlitePool, agent_id: &str, wo: &WorkOrder) -> Result<MemoryContext, WorkerError> {
+    pub async fn build(
+        pool: &SqlitePool,
+        agent_id: &str,
+        user_id: &str,
+        opc_id: &str,
+        _work_order_id: &str,
+        contract_hash: &str,
+        plan_hash: &str,
+    ) -> Result<MemoryContext, WorkerError> {
         let mut company = vec![];
         let mut agent_mem = vec![];
         let mut task = vec![];
@@ -19,11 +26,11 @@ impl MemoryContextBuilder {
         let mut company_profile = None;
 
         // User Profile
-        if let Ok(Some(up)) = coevo_store::repos_opc::user_profile_repo::UserProfileRepo::get(pool, "default-founder").await {
+        if let Ok(Some(up)) = coevo_store::repos_opc::user_profile_repo::UserProfileRepo::get(pool, user_id).await {
             user_profile = Some(serde_json::to_value(up).unwrap_or_default());
         }
         // Company Profile
-        if let Ok(Some(cp)) = coevo_store::repos_opc::opc_profile_repo::OPCProfileRepo::get(pool, "default-opc").await {
+        if let Ok(Some(cp)) = coevo_store::repos_opc::opc_profile_repo::OPCProfileRepo::get(pool, opc_id).await {
             company_profile = Some(serde_json::to_value(cp).unwrap_or_default());
         }
 
@@ -48,7 +55,7 @@ impl MemoryContextBuilder {
         if let Ok(task_all) = memory_repo::MemoryRepo::list(pool, Some("Task"), None, false).await {
             for r in task_all {
                 if used >= budget { break; }
-                if r.linked_contract_hash.as_ref() != Some(&wo.contract_hash) && r.linked_plan_hash.as_ref() != Some(&wo.plan_hash) { continue; }
+                if r.linked_contract_hash.as_deref() != Some(contract_hash) && r.linked_plan_hash.as_deref() != Some(plan_hash) { continue; }
                 let s = serde_json::to_string(&r).unwrap_or_default();
                 used += s.len();
                 task.push(serde_json::to_value(r).unwrap_or_default());

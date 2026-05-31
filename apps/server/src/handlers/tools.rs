@@ -132,6 +132,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp_millis() as u64;
         let wo = WorkOrder {
             work_order_id: "wo-run-worker-provider-required".to_string(),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),

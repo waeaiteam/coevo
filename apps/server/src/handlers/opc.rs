@@ -47,6 +47,7 @@ pub struct ExecuteRequest {
 #[derive(Deserialize)]
 pub struct CreateWORequest {
     pub work_order_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub contract_hash: String,
     pub plan_hash: String,
     pub user_id: String,
@@ -396,6 +397,7 @@ pub async fn create_work_order(
         work_order_id: req
             .work_order_id
             .unwrap_or_else(|| format!("wo-{}", uuid::Uuid::new_v4())),
+        conversation_id: req.conversation_id,
         contract_hash: req.contract_hash,
         plan_hash: req.plan_hash,
         user_id: req.user_id,
@@ -957,6 +959,7 @@ mod tests {
     ) {
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: contract_hash.to_string(),
             plan_hash: "d".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1028,6 +1031,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1070,6 +1074,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1114,6 +1119,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1168,6 +1174,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1217,6 +1224,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1279,6 +1287,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1384,6 +1393,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash: contract_hash.clone(),
             plan_hash: "d".repeat(64),
             user_id: "default-founder".to_string(),
@@ -1460,6 +1470,7 @@ mod tests {
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
             contract_hash,
             plan_hash: "d".repeat(64),
             user_id: "default-founder".to_string(),

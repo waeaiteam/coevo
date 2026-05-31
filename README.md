@@ -20,6 +20,7 @@ It is an **AI Employee Operating System** for an OPC (One-Person Company): a loc
 The product shape is an **Agent Governance Mesh**:
 
 - **MissionChat** - the desktop entry point for real user missions
+- **Persistent Conversations** - chat threads and messages stored in the local core database, linked to WorkOrders
 - **WorkOrders** - governed execution records with tracks, approvals, events, and audit
 - **AI Employees** - workers with passports, departments, capabilities, and risk ceilings
 - **Company Memory** - scoped long-term memory with provenance and lifecycle controls
@@ -107,11 +108,13 @@ Primary navigation is intentionally small: **New Chat**, **OPC**, **WorkOrders**
 - Company Memory create, search, stale, revoke, and scope filtering
 - AI Employees with passports, departments, capabilities, and risk ceilings
 - External Executor registry, disable, health check, and dry-run contracts
+- Persistent MissionChat conversations with message history linked to generated WorkOrders
 - WorkOrders with create, execute, cancel, feedback, timeline, and audit export
 - Green / Yellow / Red tracks with differentiated governance behavior
 - Server-authoritative track classification at WorkOrder creation
 - Red Track Alpha hard block with explicit reason
 - Scoped `FileReadonlyTool` execution for Green read/analyze work under the local workspace
+- Agent Sub-Harness runtime boundary under WorkerHarness: context, skill loading, model routing, tool policy, memory write, reflection, and self-upgrade proposal
 - Skill packages with seed/list/activate/rollback support
 - Skill Evolution proposal flow for governed improvement
 - OpenAI-compatible model provider configuration
@@ -266,6 +269,7 @@ tests/e2e               - acceptance test suite
 
 `GET/PUT /opc/profile/user` `GET/PUT /opc/profile/company`
 `GET/POST /opc/memory` `POST /opc/memory/:id/stale` `POST /opc/memory/:id/revoke`
+`GET/POST /opc/conversations` `GET /opc/conversations/:id/messages` `POST /opc/conversations/:id/messages`
 `GET /opc/agents/employees` `POST /opc/agents/employees/seed`
 `GET /opc/executors` `POST /opc/executors/register` `POST /opc/executors/:id/disable`
 `GET/POST /opc/work-orders` `POST /opc/work-orders/:id/execute`

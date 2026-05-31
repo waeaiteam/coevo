@@ -122,6 +122,11 @@ export async function cancelWorkOrder(id: string) { return post(`/opc/work-order
 export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
 export async function getWorkOrderTimeline(id: string): Promise<Record<string,unknown>[]> { return get(`/opc/work-orders/${id}/timeline`); }
 export async function getWorkOrderAuditExport(id: string): Promise<Record<string,unknown>> { return get(`/opc/work-orders/${id}/audit-export`); }
+export async function listConversations(): Promise<Record<string,unknown>[]> { return get("/opc/conversations"); }
+export async function createConversation(conversation: Record<string,unknown>) { return post("/opc/conversations", conversation); }
+export async function getConversation(id: string) { return get(`/opc/conversations/${id}`); }
+export async function listConversationMessages(id: string): Promise<Record<string,unknown>[]> { return get(`/opc/conversations/${id}/messages`); }
+export async function appendConversationMessage(id: string, message: Record<string,unknown>) { return post(`/opc/conversations/${id}/messages`, message); }
 
 // === Model Gateway ===
 export async function getModelConfig() { return get("/opc/models/config"); }

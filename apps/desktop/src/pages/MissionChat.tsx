@@ -1,7 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ensureWorkspaceDefaults } from "../api/bootstrap";
-import { compileContract, createWorkOrder, modelChat, routePlan } from "../api/client";
+import {
+  appendConversationMessage,
+  compileContract,
+  createConversation,
+  createWorkOrder,
+  listConversationMessages,
+  listConversations,
+  modelChat,
+  routePlan,
+} from "../api/client";
 import { useGovernance } from "../hooks/useGovernance";
 import { getLocalIdentity } from "../settings/identity";
 import { t, useLanguage } from "../settings/i18n";
@@ -9,13 +18,91 @@ import { inferTrackFromIntent } from "../utils/trackInference";
 
 type Msg = { role: "user" | "system"; text: string };
 
+const ACTIVE_CONVERSATION_KEY = "coevo-active-conversation-id";
+
+function toMsg(row: Record<string, unknown>): Msg {
+  return {
+    role: row.role === "user" ? "user" : "system",
+    text: String(row.content || ""),
+  };
+}
+
+function conversationTitle(text: string): string {
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.length > 48 ? `${clean.slice(0, 45)}...` : clean || "New OPC conversation";
+}
+
 export default function MissionChat() {
   useLanguage();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [creating, setCreating] = useState(false);
   const [lastWorkOrderId, setLastWorkOrderId] = useState("");
+  const [conversationId, setConversationId] = useState("");
   const { set: setGovernance } = useGovernance();
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadActiveConversation() {
+      let active = "";
+      try {
+        active = localStorage.getItem(ACTIVE_CONVERSATION_KEY) || "";
+      } catch {
+        active = "";
+      }
+      try {
+        if (!active) {
+          const threads = await listConversations();
+          active = String(threads[0]?.conversation_id || "");
+          if (active) localStorage.setItem(ACTIVE_CONVERSATION_KEY, active);
+        }
+        if (!active || cancelled) return;
+        const rows = await listConversationMessages(active);
+        if (cancelled) return;
+        setConversationId(active);
+        setMessages(rows.map(toMsg).filter((m) => m.text));
+        const linked = [...rows]
+          .reverse()
+          .find((row) => typeof row.linked_work_order_id === "string");
+        setLastWorkOrderId(String(linked?.linked_work_order_id || ""));
+      } catch {
+        if (!cancelled) setConversationId(active);
+      }
+    }
+    loadActiveConversation();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function ensureConversation(text: string): Promise<string> {
+    if (conversationId) return conversationId;
+    let active = "";
+    try {
+      active = localStorage.getItem(ACTIVE_CONVERSATION_KEY) || "";
+    } catch {
+      active = "";
+    }
+    if (active) {
+      setConversationId(active);
+      return active;
+    }
+    const identity = getLocalIdentity();
+    const created = await createConversation({
+      opc_id: identity.opcId,
+      user_id: identity.userId,
+      title: conversationTitle(text),
+    }) as Record<string, unknown>;
+    active = String(created.conversation_id || "");
+    if (!active) throw new Error("Conversation was not created");
+    try {
+      localStorage.setItem(ACTIVE_CONVERSATION_KEY, active);
+    } catch {
+      // Keep server persistence even when localStorage is unavailable.
+    }
+    setConversationId(active);
+    return active;
+  }
 
   async function send() {
     const text = input.trim();
@@ -28,7 +115,13 @@ export default function MissionChat() {
       { role: "system", text: t("mission.compiling") },
     ]);
 
+    let activeConversationId = conversationId;
     try {
+      activeConversationId = await ensureConversation(text);
+      await appendConversationMessage(activeConversationId, {
+        role: "user",
+        content: text,
+      });
       const track = inferTrackFromIntent(text);
       const bootstrap = await ensureWorkspaceDefaults(track.track);
       const compiled = await compileContract(text, "DRAFT");
@@ -55,6 +148,7 @@ export default function MissionChat() {
       const cognitionText = String(cognition?.content || "").trim();
       const identity = getLocalIdentity();
       const created = await createWorkOrder({
+        conversation_id: activeConversationId,
         contract_hash: contractHash,
         plan_hash: planHash,
         user_id: identity.userId,
@@ -73,6 +167,21 @@ export default function MissionChat() {
         ? created.allowed_actions.map(String)
         : [];
       const serverRiskSummary = String(created.risk_summary || track.reason);
+      const systemMessages: Msg[] = [
+        ...(cognitionText ? [{ role: "system" as const, text: `${t("mission.model_cognition")}: ${cognitionText}` }] : []),
+        ...(!cognitionText && cognitionError ? [{ role: "system" as const, text: `${t("mission.cognition_unavailable")}: ${cognitionError}` }] : []),
+        {
+          role: "system",
+          text: `${t("mission.created_prefix")} ${workOrderId} (${serverTrack.toUpperCase()} Track) ${t("mission.created_suffix")}`,
+        },
+      ];
+      for (const msg of systemMessages) {
+        await appendConversationMessage(activeConversationId, {
+          role: "assistant",
+          content: msg.text,
+          linked_work_order_id: msg.text.includes(workOrderId) ? workOrderId : undefined,
+        });
+      }
       setLastWorkOrderId(workOrderId);
       setGovernance({
         phase: "review",
@@ -87,17 +196,15 @@ export default function MissionChat() {
         approvalRequired: serverTrack !== "green",
         traceparent: crypto.randomUUID(),
       });
-      setMessages((prev) => [
-        ...prev,
-        ...(cognitionText ? [{ role: "system" as const, text: `${t("mission.model_cognition")}: ${cognitionText}` }] : []),
-        ...(!cognitionText && cognitionError ? [{ role: "system" as const, text: `${t("mission.cognition_unavailable")}: ${cognitionError}` }] : []),
-        {
-          role: "system",
-          text: `${t("mission.created_prefix")} ${workOrderId} (${serverTrack.toUpperCase()} Track) ${t("mission.created_suffix")}`,
-        },
-      ]);
+      setMessages((prev) => [...prev, ...systemMessages]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (activeConversationId) {
+        await appendConversationMessage(activeConversationId, {
+          role: "assistant",
+          content: `${t("mission.error_prefix")}: ${msg}`,
+        }).catch(() => undefined);
+      }
       setMessages((prev) => [
         ...prev,
         { role: "system", text: `${t("mission.error_prefix")}: ${msg}` },

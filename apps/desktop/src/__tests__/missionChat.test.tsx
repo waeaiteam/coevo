@@ -9,6 +9,10 @@ const api = vi.hoisted(() => ({
   compileContract: vi.fn(),
   routePlan: vi.fn(),
   createWorkOrder: vi.fn(),
+  listConversations: vi.fn(),
+  createConversation: vi.fn(),
+  listConversationMessages: vi.fn(),
+  appendConversationMessage: vi.fn(),
   modelChat: vi.fn(),
   listEmployees: vi.fn(),
   seedEmployees: vi.fn(),
@@ -20,6 +24,10 @@ vi.mock("../api/client", () => ({
   compileContract: api.compileContract,
   routePlan: api.routePlan,
   createWorkOrder: api.createWorkOrder,
+  listConversations: api.listConversations,
+  createConversation: api.createConversation,
+  listConversationMessages: api.listConversationMessages,
+  appendConversationMessage: api.appendConversationMessage,
   modelChat: api.modelChat,
   listEmployees: api.listEmployees,
   seedEmployees: api.seedEmployees,
@@ -55,6 +63,13 @@ describe("MissionChat WorkOrder creation", () => {
       work_order_id: "wo-mission-1",
       status: "Planned",
     });
+    api.listConversations.mockResolvedValue([]);
+    api.createConversation.mockResolvedValue({
+      conversation_id: "conv-mission-1",
+      title: "Analyze the README",
+    });
+    api.listConversationMessages.mockResolvedValue([]);
+    api.appendConversationMessage.mockResolvedValue({ ok: true });
     api.modelChat.mockResolvedValue({
       content: "This is a read-only analysis mission.",
       model: "gpt-4o",
@@ -105,6 +120,7 @@ describe("MissionChat WorkOrder creation", () => {
       ]),
     }));
     expect(api.createWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
+      conversation_id: "conv-mission-1",
       contract_hash: "a".repeat(64),
       plan_hash: "b".repeat(64),
       user_id: "user-local-123",
@@ -119,6 +135,20 @@ describe("MissionChat WorkOrder creation", () => {
     expect(payload).not.toHaveProperty("allowed_actions");
     expect(payload).not.toHaveProperty("restricted_actions");
     expect(payload).not.toHaveProperty("risk_summary");
+    expect(api.appendConversationMessage).toHaveBeenCalledWith(
+      "conv-mission-1",
+      expect.objectContaining({
+        role: "user",
+        content: "Analyze the README and summarize the project direction",
+      })
+    );
+    expect(api.appendConversationMessage).toHaveBeenCalledWith(
+      "conv-mission-1",
+      expect.objectContaining({
+        role: "assistant",
+        linked_work_order_id: "wo-mission-1",
+      })
+    );
     expect(screen.getByText(/Model cognition: This is a read-only analysis mission/i)).toBeInTheDocument();
     expect(screen.getByText(/WorkOrder wo-mission-1 \(GREEN Track\) created/i)).toBeInTheDocument();
   });

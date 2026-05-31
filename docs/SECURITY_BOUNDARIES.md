@@ -56,6 +56,12 @@ Executors must:
 
 Executor output must not directly become a Fact. It must pass through provenance and Cognitive Customs handling.
 
+## Agent Sub-Harness Boundary
+
+The Product / WorkerHarness layer issues the immutable execution authority envelope: WorkOrder id, selected agent, track, approval receipt, contract hash, plan hash, allowed actions, and restricted actions. The Agent Sub-Harness may assemble context, route models, load skills, propose tools, execute allowed read-only tools, write Task memory, reflect, and propose skill upgrades only inside that envelope.
+
+The Agent Sub-Harness must not reload authority from prompt text, conversation messages, or mutable context snapshots. Tool execution must pass both the immutable Product Harness envelope and the live ToolPolicy check at execution time.
+
 ## Track Boundary
 
 | Track | Alpha Behavior |
@@ -108,6 +114,12 @@ The runtime must preserve an inspectable chain for governed work:
 - WorkOrder audit export returns a portable `coevo.audit_export.v1` package with governance fields, worker sessions, runs, steps, events, tool calls, memory evidence, and timeline items.
 
 If work cannot be audited, it should not be treated as governed execution.
+
+## Conversation Boundary
+
+MissionChat conversation threads and messages are durable local context. They may link to generated WorkOrders for user continuity and audit navigation.
+
+Conversation content is not authorization, approval, or policy. Editing or replaying conversation text must not change WorkOrder track, allowed actions, restricted actions, approval receipt validation, or Red Track blocking.
 
 ## Credential Boundary
 

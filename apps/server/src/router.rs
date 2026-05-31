@@ -49,6 +49,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/opc/work-orders/{id}/execute", post(handlers::opc::execute_work_order))
         .route("/opc/work-orders/{id}/cancel", post(handlers::opc::cancel_work_order))
         .route("/opc/work-orders/{id}/feedback", post(handlers::opc::work_order_feedback))
+        .route("/opc/conversations", get(handlers::conversations::list_conversations).post(handlers::conversations::create_conversation))
+        .route("/opc/conversations/{id}", get(handlers::conversations::get_conversation))
+        .route("/opc/conversations/{id}/messages", get(handlers::conversations::list_conversation_messages).post(handlers::conversations::append_conversation_message))
         // OPC — Skills
         .route("/opc/skills", get(handlers::opc::list_skills))
         .route("/opc/skills/seed", post(handlers::opc::seed_skills))

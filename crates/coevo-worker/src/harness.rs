@@ -1,27 +1,15 @@
+use crate::agent_harness::{AgentRunContract, AgentSubHarness, RunAuthorization};
 use crate::error::WorkerError;
-use crate::memory_context::MemoryContextBuilder;
 use crate::queue::WorkerQueueService;
-use crate::reflection::ReflectionEngine;
-use crate::self_upgrade::SelfUpgradeLoop;
-use crate::skill_runtime::SkillRuntime;
-use crate::tool_policy::ToolPolicyEngine;
-use crate::tool_registry::ToolRegistry;
-use crate::types::WorkerRun;
-use coevo_core::cognitive::CognitiveLayer;
-use coevo_core::opc::*;
 use coevo_models::router::{
-    default_model_profiles, required_capabilities_for_step, ModelCapability, ModelProfile,
-    ModelRouter, ModelRoutingRequest, PrivacyLevel,
+    default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel,
 };
 use coevo_models::types::{ModelProviderConfig, ModelProviderKind};
-use coevo_store::repos::worker_run_repo::{
-    WorkerEventRepo, WorkerRunRepo, WorkerSkillUsageRepo, WorkerStepRepo, WorkerToolCallRepo,
-};
+use coevo_store::repos::worker_run_repo::{WorkerEventRepo, WorkerRunRepo, WorkerStepRepo};
 use coevo_store::repos::{agent_worker_repo::AgentWorkerRepo, model_config_repo::ModelConfigRepo};
-use coevo_store::repos_opc::{memory_repo, work_order_repo};
+use coevo_store::repos_opc::work_order_repo;
 use sqlx::SqlitePool;
 use sqlx::{Column, Row};
-use std::path::PathBuf;
 
 pub struct WorkerHarnessOptions {
     pub approval_receipt: Option<String>,
@@ -44,90 +32,6 @@ pub struct WorkerHarnessResult {
     pub proposal_id: Option<String>,
     pub status: String,
     pub summary: String,
-}
-
-fn find_github_url(text: &str) -> Option<String> {
-    for prefix in &["https://github.com/", "http://github.com/", "github.com/"] {
-        if let Some(idx) = text.find(prefix) {
-            let rest = &text[idx + prefix.len()..];
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == ')' || c == ']')
-                .unwrap_or(rest.len());
-            let path = rest[..end].trim_end_matches('/');
-            if path.split('/').count() >= 2 {
-                return Some(format!("https://github.com/{}", path));
-            }
-        }
-    }
-    None
-}
-
-fn workspace_roots() -> Vec<PathBuf> {
-    if let Ok(root) = std::env::var("COEVO_WORKSPACE_DIR") {
-        return vec![PathBuf::from(root)];
-    }
-    if let Ok(home) = std::env::var("COEVO_HOME") {
-        return vec![PathBuf::from(home).join("workspace")];
-    }
-    std::env::current_dir().map(|p| vec![p]).unwrap_or_default()
-}
-
-fn clean_path_token(token: &str) -> &str {
-    token.trim_matches(|c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                '"' | '\'' | '`' | ',' | ';' | ':' | ')' | '(' | '[' | ']' | '{' | '}' | '<' | '>'
-            )
-    })
-}
-
-fn looks_like_file_reference(token: &str) -> bool {
-    token.contains('/')
-        || token.contains('\\')
-        || token.contains(".md")
-        || token.contains(".txt")
-        || token.contains(".json")
-        || token.contains(".toml")
-        || token.contains(".yaml")
-        || token.contains(".yml")
-        || token.contains(".rs")
-        || token.contains(".ts")
-        || token.contains(".tsx")
-}
-
-fn find_readonly_file_target(intent: &str, roots: &[PathBuf]) -> Option<PathBuf> {
-    for token in intent
-        .split_whitespace()
-        .map(clean_path_token)
-        .filter(|t| looks_like_file_reference(t))
-    {
-        let candidate = PathBuf::from(token);
-        if candidate.is_absolute() && candidate.is_file() {
-            return Some(candidate);
-        }
-        for root in roots {
-            let joined = root.join(token);
-            if joined.is_file() {
-                return Some(joined);
-            }
-        }
-    }
-
-    for fallback in [
-        "README.md",
-        "README.zh-CN.md",
-        "mission-notes.md",
-        "welcome.md",
-    ] {
-        for root in roots {
-            let joined = root.join(fallback);
-            if joined.is_file() {
-                return Some(joined);
-            }
-        }
-    }
-    None
 }
 
 async fn model_profiles_for_execution(
@@ -246,35 +150,6 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
     out
 }
 
-async fn step_create(
-    pool: &SqlitePool,
-    steps: &mut Vec<serde_json::Value>,
-    run_id: &str,
-    step_type: &str,
-    input: &serde_json::Value,
-    output: Option<&serde_json::Value>,
-) -> Result<String, WorkerError> {
-    let idx = steps.len() as i64;
-    let sid = format!("s-{}-{}", &run_id[..8.min(run_id.len())], idx);
-    let now = chrono::Utc::now().timestamp_millis();
-    sqlx::query("INSERT INTO worker_steps VALUES (?,?,?,?,?,?,?,?,?,?)")
-        .bind(&sid)
-        .bind(run_id)
-        .bind(idx)
-        .bind(step_type)
-        .bind(serde_json::to_string(input).unwrap())
-        .bind(output.map(|o| serde_json::to_string(o).unwrap()))
-        .bind("Completed")
-        .bind(now)
-        .bind(Some(now))
-        .bind(Option::<String>::None)
-        .execute(pool)
-        .await
-        .map_err(|e| WorkerError::Internal(e.to_string()))?;
-    steps.push(serde_json::json!({"step_id":sid,"run_id":run_id,"step_index":idx,"step_type":step_type,"status":"Completed"}));
-    Ok(sid)
-}
-
 pub struct WorkerHarness;
 impl WorkerHarness {
     pub async fn run_work_order(
@@ -283,9 +158,6 @@ impl WorkerHarness {
         options: WorkerHarnessOptions,
     ) -> Result<WorkerHarnessResult, WorkerError> {
         let now = || chrono::Utc::now().timestamp_millis();
-        let mut steps: Vec<serde_json::Value> = vec![];
-        let mut mem_ids: Vec<String> = vec![];
-
         let wo = work_order_repo::WorkOrderRepo::get(pool, work_order_id)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?
@@ -295,6 +167,7 @@ impl WorkerHarness {
             return Err(WorkerError::WorkerNotFound("No agent selected".into()));
         }
 
+        // Authoritative governance gate stays in Product Harness.
         if wo.track == "red" {
             return Err(WorkerError::RedTrackBlocked(
                 "RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER: Alpha does not support Red Track execution."
@@ -304,7 +177,6 @@ impl WorkerHarness {
         if wo.track == "yellow" && options.approval_receipt.is_none() {
             return Err(WorkerError::YellowApprovalRequired);
         }
-
         let model_profiles =
             model_profiles_for_execution(pool, options.allow_mock_model_routing).await?;
 
@@ -338,7 +210,6 @@ impl WorkerHarness {
             }
         }
 
-        // Stable session_id
         let session_id = format!("session-{}", work_order_id);
         sqlx::query(
             "INSERT OR IGNORE INTO worker_sessions (
@@ -398,7 +269,7 @@ impl WorkerHarness {
         )
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        // Acquire queue with run_id and update AgentWorker
+
         WorkerQueueService::acquire(pool, &session_id, &run_id, 120_000).await?;
         AgentWorkerRepo::upsert(
             pool,
@@ -425,417 +296,48 @@ impl WorkerHarness {
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
 
-        // MemoryContext with real data
-        let mem_ctx = MemoryContextBuilder::build(pool, &agent_id, &wo).await?;
-        step_create(
-            pool,
-            &mut steps,
-            &run_id,
-            "BuildContext",
-            &serde_json::json!({"intent":wo.mission_intent}),
-            None,
-        )
-        .await?;
-        step_create(pool, &mut steps, &run_id, "LoadMemory", &serde_json::json!({
-            "user_profile_loaded":mem_ctx.user_profile.is_some(),"company_profile_loaded":!mem_ctx.company_profile.is_empty(),
-            "company_memory_count":mem_ctx.company_memory.len(),"agent_memory_count":mem_ctx.agent_memory.len(),
-            "task_memory_count":mem_ctx.task_memory.len(),"stale_memory_ids":mem_ctx.stale_memory_ids.len(),
-            "excluded_revoked_count":mem_ctx.excluded_revoked_count,
-            "excluded_fact_without_provenance":mem_ctx.fact_without_provenance
-        }), None).await?;
-
-        // SkillRuntime
-        let index = SkillRuntime::load_skill_index(pool, &agent_id).await?;
-        let selected =
-            SkillRuntime::select_relevant(&wo.mission_intent, &wo.required_skills, &index);
-        step_create(
-            pool,
-            &mut steps,
-            &run_id,
-            "LoadSkillIndex",
-            &serde_json::json!({"skills_found":index.len(),"selected":selected}),
-            None,
-        )
-        .await?;
-        for sid in &selected {
-            if let Some(_full) = SkillRuntime::load_full(pool, sid).await? {
-                step_create(
-                    pool,
-                    &mut steps,
-                    &run_id,
-                    "LoadSkillFull",
-                    &serde_json::json!({"loaded_skill":sid}),
-                    None,
-                )
-                .await?;
-                WorkerSkillUsageRepo::create(
-                    pool,
-                    &format!("su-{}", uuid::Uuid::new_v4()),
-                    &run_id,
-                    sid,
-                    "1.0.0",
-                    "execution",
-                    true,
-                    0.9,
-                    "",
-                    now(),
-                )
-                .await
-                .map_err(|e| WorkerError::Internal(e.to_string()))?;
-            }
-        }
-
-        // ModelRouter: record routing decision for Think step (cognition only, not authorization)
-        let route_req = ModelRoutingRequest {
-            work_order_id: work_order_id.into(),
+        let run_contract = AgentRunContract {
+            work_order_id: work_order_id.to_string(),
+            mission_intent: wo.mission_intent.clone(),
+            required_skills: wo.required_skills.clone(),
+            user_id: wo.user_id.clone(),
+            opc_id: wo.opc_id.clone(),
+        };
+        let authorization = RunAuthorization {
+            work_order_id: work_order_id.to_string(),
             agent_id: agent_id.clone(),
-            worker_step_type: "Think".into(),
-            intent: wo.mission_intent.clone(),
-            required_capabilities: required_capabilities_for_step("Think", &wo.mission_intent),
+            worker_id: worker_id.clone(),
+            session_id: session_id.clone(),
+            run_id: run_id.clone(),
             track: wo.track.clone(),
-            risk_score: if wo.track == "red" {
-                0.9
-            } else if wo.track == "yellow" {
-                0.6
-            } else {
-                0.3
-            },
-            max_latency_ms: options.max_runtime_ms.map(|m| m as u64),
-            max_cost_usd: None,
-            privacy_boundary: PrivacyLevel::PublicApi,
-            preferred_model_id: None,
+            allowed_actions: wo.allowed_actions.clone(),
+            restricted_actions: wo.restricted_actions.clone(),
+            approval_receipt: options.approval_receipt.clone(),
+            contract_hash: wo.contract_hash.clone(),
+            plan_hash: wo.plan_hash.clone(),
         };
-        let route_decision =
-            ModelRouter::route(&route_req, &model_profiles, None).unwrap_or_else(|_| {
-                coevo_models::router::ModelRoutingDecision {
-                    selected_provider_id: "unavailable".into(),
-                    selected_model_id: "unavailable".into(),
-                    selected_capabilities: vec![],
-                    reason: "NoModelAvailable for configured provider profiles".into(),
-                    fallback_model_ids: vec![],
-                    estimated_cost_usd: None,
-                    estimated_latency_ms: None,
-                    governance_notes: vec![
-                        "ModelRouter failed for configured provider profiles".into()
-                    ],
-                    decision_id: format!("mrd-{}", uuid::Uuid::new_v4()),
-                    created_at_ms: now(),
-                }
-            });
-        step_create(
+        let sub_result = AgentSubHarness::execute(
             pool,
-            &mut steps,
-            &run_id,
-            "ModelCall",
-            &serde_json::json!({"intent":wo.mission_intent}),
-            Some(&serde_json::to_value(&route_decision).unwrap()),
-        )
-        .await?;
-
-        // ToolPolicy + Tool execution
-        let registry = ToolRegistry::default_registry();
-        let allowed = ToolPolicyEngine::filter(
-            registry.list(),
-            &wo.track,
-            &wo.allowed_actions,
-            &wo.restricted_actions,
-        );
-        step_create(
-            pool,
-            &mut steps,
-            &run_id,
-            "SelectTool",
-            &serde_json::json!({"allowed_tools":allowed.len()}),
-            None,
-        )
-        .await?;
-
-        let lower = wo.mission_intent.to_lowercase();
-        let gh_url = find_github_url(&lower);
-        let file_roots = workspace_roots();
-        let file_target = find_readonly_file_target(&wo.mission_intent, &file_roots);
-        let tool_id = if gh_url.is_some() && allowed.iter().any(|t| t.tool_id == "github-readonly")
-        {
-            "github-readonly"
-        } else if file_target.is_some() && allowed.iter().any(|t| t.tool_id == "file-readonly") {
-            "file-readonly"
-        } else {
-            ""
-        };
-
-        let mut tool_failed = false;
-        let mut last_tool_summary = String::new();
-        if !tool_id.is_empty() {
-            WorkerEventRepo::append(
-                pool,
-                &run_id,
-                "ToolStart",
-                &serde_json::to_string(&serde_json::json!({"tool_id":tool_id})).unwrap(),
-            )
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-            step_create(
-                pool,
-                &mut steps,
-                &run_id,
-                "CallTool",
-                &serde_json::json!({"tool_id":tool_id}),
-                None,
-            )
-            .await?;
-
-            let input = if tool_id == "github-readonly" {
-                if let Some(url) = &gh_url {
-                    serde_json::json!({"repo_url":url,"action":"ReadReadme","max_bytes":5000})
-                } else {
-                    serde_json::json!({"error":"No valid GitHub URL found"})
-                }
-            } else {
-                serde_json::json!({
-                    "action":"ReadFile",
-                    "path":file_target.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-                    "allowed_paths":file_roots.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
-                    "max_bytes":5000
-                })
-            };
-
-            let tool_result = registry
-                .execute(tool_id, input)
-                .await
-                .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}));
-            let success = tool_result.get("error").is_none();
-            tool_failed = !success;
-            let output_str = serde_json::to_string(&tool_result).unwrap_or_default();
-            last_tool_summary = output_str.chars().take(1000).collect::<String>();
-            let tool_type = match tool_id {
-                "github-readonly" => "GitHubReadonly",
-                "file-readonly" => "FileReadonly",
-                _ => tool_id,
-            };
-            WorkerToolCallRepo::create(
-                pool,
-                &format!("tc-{}", uuid::Uuid::new_v4()),
-                &run_id,
-                tool_id,
-                tool_type,
-                &format!("{} execution", tool_id),
-                &output_str.chars().take(500).collect::<String>(),
-                success,
-                0.5,
-                None,
-                now(),
-                Some(now()),
-            )
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-            WorkerEventRepo::append(
-                pool,
-                &run_id,
-                "ToolEnd",
-                &serde_json::to_string(&serde_json::json!({"tool_id":tool_id,"success":success}))
-                    .unwrap(),
-            )
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        }
-
-        // Task Memory
-        let mem_id = format!("tm-{}", uuid::Uuid::new_v4());
-        let mem = MemoryRecord {
-            memory_id: mem_id.clone(),
-            scope: MemoryScope::Task,
-            owner_id: wo.work_order_id.clone(),
-            title: format!("WorkerRun {}", &run_id),
-            content: if last_tool_summary.is_empty() {
-                format!("Harness: {}", wo.mission_intent)
-            } else {
-                format!(
-                    "Harness: {}\nTool evidence: {}",
-                    wo.mission_intent, last_tool_summary
-                )
-            },
-            tags: vec![],
-            source: "worker-harness".into(),
-            provenance: format!("worker-run-{}", run_id),
-            confidence: 0.9,
-            ttl_seconds: 86400,
-            created_at_ms: now() as u64,
-            updated_at_ms: now() as u64,
-            access_policy: String::new(),
-            status: MemoryStatus::Active,
-            cognitive_layer: CognitiveLayer::Hypothesis,
-            linked_contract_hash: Some(wo.contract_hash.clone()),
-            linked_plan_hash: Some(wo.plan_hash.clone()),
-            linked_adr_id: None,
-        };
-        memory_repo::MemoryRepo::create(pool, &mem)
-            .await
-            .map_err(|e| WorkerError::Internal(e.to_string()))?;
-        mem_ids.push(mem_id.clone());
-        step_create(
-            pool,
-            &mut steps,
-            &run_id,
-            "WriteMemory",
-            &serde_json::json!({"memory_id":mem_id}),
-            None,
-        )
-        .await?;
-        WorkerEventRepo::append(
-            pool,
-            &run_id,
-            "MemoryWrite",
-            &serde_json::to_string(&serde_json::json!({"memory_id":mem_id})).unwrap(),
-        )
-        .await
-        .map_err(|e| WorkerError::Internal(e.to_string()))?;
-
-        // Reflect ModelRouter decision
-        let reflect_route = ModelRouter::route(
-            &ModelRoutingRequest {
-                work_order_id: work_order_id.into(),
-                agent_id: agent_id.clone(),
-                worker_step_type: "Reflect".into(),
-                intent: wo.mission_intent.clone(),
-                required_capabilities: required_capabilities_for_step(
-                    "Reflect",
-                    &wo.mission_intent,
-                ),
-                track: wo.track.clone(),
-                risk_score: if wo.track == "red" {
-                    0.9
-                } else if wo.track == "yellow" {
-                    0.6
-                } else {
-                    0.3
-                },
-                max_latency_ms: None,
-                max_cost_usd: None,
-                privacy_boundary: PrivacyLevel::PublicApi,
-                preferred_model_id: None,
-            },
+            &run_contract,
+            &authorization,
             &model_profiles,
-            None,
-        );
-        if let Ok(ref d) = reflect_route {
-            step_create(
-                pool,
-                &mut steps,
-                &run_id,
-                "ModelCall",
-                &serde_json::json!({"purpose":"Reflect"}),
-                Some(&serde_json::to_value(d).unwrap()),
-            )
-            .await?;
-        }
-
-        // Reflection with real fields
-        step_create(
-            pool,
-            &mut steps,
-            &run_id,
-            "Reflect",
-            &serde_json::json!({"type":"post-execution"}),
-            None,
+            options.max_runtime_ms,
         )
         .await?;
-        let reflection = ReflectionEngine::reflect(
-            pool,
-            &run_id,
-            work_order_id,
-            &agent_id,
-            &worker_id,
-            &steps,
-            &[],
-            &[],
-        )
-        .await?;
-        let ref_id = Some(reflection.reflection_id.clone());
 
-        // ProposeSkillUpdate ModelRouter decision
-        let skill_route = ModelRouter::route(
-            &ModelRoutingRequest {
-                work_order_id: work_order_id.into(),
-                agent_id: agent_id.clone(),
-                worker_step_type: "ProposeSkillUpdate".into(),
-                intent: wo.mission_intent.clone(),
-                required_capabilities: vec![
-                    coevo_models::router::ModelCapability::SkillGeneration,
-                    coevo_models::router::ModelCapability::StructuredJSON,
-                ],
-                track: wo.track.clone(),
-                risk_score: if wo.track == "red" {
-                    0.9
-                } else if wo.track == "yellow" {
-                    0.6
-                } else {
-                    0.3
-                },
-                max_latency_ms: None,
-                max_cost_usd: None,
-                privacy_boundary: PrivacyLevel::PublicApi,
-                preferred_model_id: None,
-            },
-            &model_profiles,
-            None,
-        );
-        if let Ok(ref d) = skill_route {
-            step_create(
-                pool,
-                &mut steps,
-                &run_id,
-                "ModelCall",
-                &serde_json::json!({"purpose":"ProposeSkillUpdate"}),
-                Some(&serde_json::to_value(d).unwrap()),
-            )
-            .await?;
-        }
-
-        // SelfUpgrade — generate proposal if tool failed or skill update needed
-        let mut proposal_id = None;
-        if tool_failed
-            || reflection.needs_human_review
-            || !reflection
-                .skill_to_update_json
-                .as_array()
-                .map(|a| a.is_empty())
-                .unwrap_or(true)
-        {
-            let run = WorkerRun {
-                run_id: run_id.clone(),
-                work_order_id: work_order_id.into(),
-                agent_id: agent_id.clone(),
-                worker_id: worker_id.clone(),
-                session_id: session_id.clone(),
-                status: if tool_failed {
-                    crate::types::WorkerRunStatus::Failed
-                } else {
-                    crate::types::WorkerRunStatus::Completed
-                },
-                result_json: serde_json::json!({}),
-                memory_ids_json: serde_json::json!([]),
-                errors_json: serde_json::json!([]),
-                audit_ref: None,
-                started_at_ms: now(),
-                ended_at_ms: Some(now()),
-            };
-            proposal_id = SelfUpgradeLoop::run(pool, &run, &reflection, None).await?;
-        }
-
-        let final_status = if tool_failed { "Failed" } else { "Completed" };
-        WorkerRunRepo::set_status(pool, &run_id, final_status)
+        WorkerRunRepo::set_status(pool, &run_id, &sub_result.final_status)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?;
         WorkerEventRepo::append(
             pool,
             &run_id,
             "LifecycleEnd",
-            &serde_json::to_string(&serde_json::json!({"status":final_status})).unwrap(),
+            &serde_json::to_string(&serde_json::json!({"status":sub_result.final_status})).unwrap(),
         )
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
         sqlx::query("UPDATE worker_sessions SET status=?,updated_at_ms=? WHERE session_id=?")
-            .bind(final_status)
+            .bind(&sub_result.final_status)
             .bind(now())
             .bind(&session_id)
             .execute(pool)
@@ -847,12 +349,11 @@ impl WorkerHarness {
             pool,
             work_order_id,
             &run_id,
-            steps,
-            mem_ids,
-            ref_id,
-            proposal_id,
-            final_status,
-            format!("WorkerHarness {} execution.", final_status),
+            sub_result.memory_ids,
+            sub_result.reflection_id,
+            sub_result.proposal_id,
+            &sub_result.final_status,
+            sub_result.summary,
         )
         .await
     }
@@ -861,7 +362,6 @@ impl WorkerHarness {
         pool: &SqlitePool,
         wo_id: &str,
         run_id: &str,
-        _steps: Vec<serde_json::Value>,
         mem_ids: Vec<String>,
         reflection_id: Option<String>,
         proposal_id: Option<String>,
@@ -931,6 +431,7 @@ mod tests {
     use coevo_core::opc::{WorkOrder, WorkOrderStatus};
     use coevo_store::migrate::run_migrations;
     use coevo_store::pool::create_test_pool;
+    use sqlx::Row;
     use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
     use coevo_store::repos_opc::skill_repo::SkillRepo;
     use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
@@ -939,6 +440,7 @@ mod tests {
         let now = chrono::Utc::now().timestamp_millis() as u64;
         WorkOrder {
             work_order_id: work_order_id.to_string(),
+            conversation_id: None,
             contract_hash: "a".repeat(64),
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
@@ -983,6 +485,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
+        let sessions = sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        let runs = sqlx::query("SELECT COUNT(*) as count FROM worker_runs WHERE work_order_id=?")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        assert_eq!(sessions, 0);
+        assert_eq!(runs, 0);
     }
 
     #[tokio::test]
@@ -1009,5 +525,125 @@ mod tests {
         .expect_err("yellow should require approval before provider resolution");
 
         assert!(err.to_string().contains("Yellow approval required"));
+        let sessions = sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        let runs = sqlx::query("SELECT COUNT(*) as count FROM worker_runs WHERE work_order_id=?")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        assert_eq!(sessions, 0);
+        assert_eq!(runs, 0);
+    }
+
+    async fn configure_active_openai_compatible(pool: &sqlx::SqlitePool) {
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            .bind("desktop-test")
+            .bind("OpenAICompatible")
+            .bind("https://api.openai.com/v1")
+            .bind("sk-test")
+            .bind("sk-t****test")
+            .bind("gpt-4o")
+            .bind("gpt-4o-mini")
+            .bind("o3-mini")
+            .bind("gpt-4o")
+            .bind(16384)
+            .bind(0.2)
+            .bind(30000)
+            .bind(5.0)
+            .bind(1)
+            .bind(now)
+            .bind(now)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn green_work_order_creates_run_and_key_steps() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+        SkillRepo::seed_default(&pool).await.unwrap();
+        let wo = test_work_order("wo-green-key-steps", "green");
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let result = WorkerHarness::run_work_order(
+            &pool,
+            &wo.work_order_id,
+            WorkerHarnessOptions {
+                approval_receipt: None,
+                max_runtime_ms: None,
+                deterministic_mode: true,
+                preferred_tool_ids: vec![],
+                allow_mock_model_routing: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(result.status.as_str(), "Completed" | "Failed"));
+        let runs = sqlx::query("SELECT COUNT(*) as count FROM worker_runs WHERE work_order_id=?")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        assert_eq!(runs, 1);
+        let steps = sqlx::query("SELECT step_type FROM worker_steps WHERE run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?)")
+            .bind(&wo.work_order_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("step_type"))
+            .collect::<Vec<_>>();
+        assert!(steps.iter().any(|s| s == "BuildContext"));
+        assert!(steps.iter().any(|s| s == "LoadMemory"));
+        assert!(steps.iter().any(|s| s == "SelectTool"));
+        assert!(steps.iter().any(|s| s == "WriteMemory"));
+    }
+
+    #[tokio::test]
+    async fn agent_sub_harness_uses_authorization_actions_to_block_read_tool() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        configure_active_openai_compatible(&pool).await;
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+        SkillRepo::seed_default(&pool).await.unwrap();
+        let mut wo = test_work_order("wo-green-restricted-read", "green");
+        wo.mission_intent = "Analyze README.md".to_string();
+        wo.allowed_actions = vec!["read".to_string()];
+        wo.restricted_actions = vec!["read".to_string(), "ReadFile".to_string()];
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let _ = WorkerHarness::run_work_order(
+            &pool,
+            &wo.work_order_id,
+            WorkerHarnessOptions {
+                approval_receipt: None,
+                max_runtime_ms: None,
+                deterministic_mode: true,
+                preferred_tool_ids: vec![],
+                allow_mock_model_routing: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let file_tool_calls = sqlx::query("SELECT COUNT(*) as count FROM worker_tool_calls WHERE tool_id='file-readonly' AND run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?)")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        assert_eq!(file_tool_calls, 0);
     }
 }

@@ -7,11 +7,13 @@ This document lists the current Alpha foundation and the remaining items before 
 ## Current Capabilities
 
 - MissionChat -> MCL compile -> PCDT route -> WorkOrder -> governed execution.
+- MissionChat conversations persist as local threads/messages and link generated WorkOrders back to their originating conversation.
 - Contract anchors are persisted by `/mcl/compile`; plan anchors are persisted by `/router/route`.
 - WorkOrder governance fields are server-authoritative at create time; legacy client-supplied governance fields remain only for backward-compatible request shape and are ignored by the server classifier.
 - Model Gateway supports OpenAI-compatible provider configuration. Mock remains developer and CI infrastructure only.
 - Windows Alpha credential vault: new non-empty API-key writes store the secret in the native credential store and keep only a `keyring:` reference in SQLite.
 - API keys are masked in responses and must not be logged.
+- WorkerHarness owns the Product Harness authority envelope, while Agent Sub-Harness owns behavior-preserving agent runtime work inside that envelope.
 - WorkerHarness records queue, sessions, runs, steps, events, tool calls, memory evidence, and audit export.
 - Scoped `FileReadonlyTool` supports Green read/analyze execution under the local workspace.
 - SkillRuntime, ToolPolicy, ToolRegistry.
