@@ -18,8 +18,8 @@ export default function TextField({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`w-full min-w-0 px-3 py-1.5 rounded-md border text-xs focus:outline-none focus:ring-2 focus:ring-indigo-200 ${monospace ? "font-mono" : ""}`}
-      style={{ borderColor: "var(--border-accent)", background: "#fff", color: "var(--text-primary)" }}
+      className={`w-full min-w-0 px-3 py-1.5 rounded-md border text-xs focus:outline-none ${monospace ? "font-mono" : ""}`}
+      style={{ borderColor: "var(--border-accent)", background: "var(--bg-card)", color: "var(--text-primary)" }}
     />
   );
 }

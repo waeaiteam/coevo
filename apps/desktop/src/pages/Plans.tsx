@@ -1,13 +1,27 @@
+import { t, useLanguage } from "../settings/i18n";
+import Icon from "../components/Icon";
+
 export default function Plans() {
+  useLanguage();
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <span className="text-lg" style={{ color: "var(--blue)" }}>↗</span>
-        <h2 className="text-lg font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>Execution Plans</h2>
-      </div>
-      <div className="card">
-        <div className="text-sm py-6 text-center" style={{ color: "var(--text-muted)" }}>
-          Route a compiled contract to generate execution plans
+    <div className="product-page">
+      <header className="product-header">
+        <div className="min-w-0">
+          <div className="product-kicker">{t("plans.title")}</div>
+          <h1 className="product-title">{t("plans.title")}</h1>
+        </div>
+      </header>
+      <section className="feature-hero">
+        <div className="feature-hero-icon"><Icon name="calendar" /></div>
+        <div>
+          <h2>{t("plans.title")}</h2>
+          <p>{t("plans.empty")}</p>
+        </div>
+      </section>
+      <div className="product-panel">
+        <div className="empty-state">
+          <div className="empty-state-icon"><Icon name="calendar" /></div>
+          <div>{t("plans.empty")}</div>
         </div>
       </div>
     </div>

@@ -4,15 +4,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import CommandPalette from "../components/CommandPalette";
 import { ThemeProvider } from "../hooks/useTheme";
+import { setLanguage } from "../settings/i18n";
 
 describe("CommandPalette", () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
+    setLanguage("en");
   });
 
-  it("opens with ctrl+k and supports pinyin-initial page search", () => {
+  it("opens with ctrl+k and keeps advanced pages discoverable", () => {
+    setLanguage("en");
     render(
       <MemoryRouter>
         <ThemeProvider>
@@ -22,16 +25,23 @@ describe("CommandPalette", () => {
     );
 
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    expect(screen.getByRole("dialog", { name: "命令面板" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText("搜索页面或输入拼音首字母..."), {
-      target: { value: "gjsz" },
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "contracts" },
     });
 
-    expect(screen.getByRole("button", { name: /高级设置/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Contracts\b/i })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "company memory" },
+    });
+
+    expect(screen.getByRole("button", { name: /Company Memory/i })).toBeInTheDocument();
   });
 
   it("uses the theme context to switch data-theme", () => {
+    setLanguage("en");
     render(
       <MemoryRouter>
         <ThemeProvider>
@@ -41,10 +51,10 @@ describe("CommandPalette", () => {
     );
 
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    fireEvent.change(screen.getByPlaceholderText("搜索页面或输入拼音首字母..."), {
-      target: { value: "ss" },
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "dark" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /深色主题/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Dark theme/i }));
 
     expect(localStorage.getItem("coevo-theme-mode")).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");

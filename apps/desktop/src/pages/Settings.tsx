@@ -11,7 +11,7 @@ import ToggleField from "../components/ToggleField";
 import { ensureWorkspaceDefaults } from "../api/bootstrap";
 import { discoverModels, getApiBase, testModelConnection, updateModelConfig } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
-import { saveSettingsSnapshot, useSettings } from "../hooks/useSettings";
+import { SettingsProvider, useSettings } from "../hooks/useSettings";
 import { setLanguage, t, useLanguage } from "../settings/i18n";
 import { chooseModelRoles, isKnownProvider, presetFor, providerOptions, type DiscoveredModel } from "../settings/modelPresets";
 import { markModelProviderConfigured } from "../settings/onboarding";
@@ -35,10 +35,12 @@ const panels: Record<string, React.FC> = {
 
 export default function Settings() {
   return (
-    <Routes>
-      <Route index element={<Navigate to="general" replace />} />
-      {CATEGORIES.map((cat) => <Route key={cat} path={cat} element={<SettingsCategory cat={cat} />} />)}
-    </Routes>
+    <SettingsProvider>
+      <Routes>
+        <Route index element={<Navigate to="general" replace />} />
+        {CATEGORIES.map((cat) => <Route key={cat} path={cat} element={<SettingsCategory cat={cat} />} />)}
+      </Routes>
+    </SettingsProvider>
   );
 }
 
@@ -76,7 +78,7 @@ function AppearancePanel() {
 }
 
 function ModelProviderPanel() {
-  const { settings, update } = useSettings();
+  const { settings, update, replaceAndMarkSaved } = useSettings();
   const navigate = useNavigate();
   const m = settings.model_provider;
   const [testResult, setTestResult] = useState<"idle" | "ok" | "fail">("idle");
@@ -130,17 +132,18 @@ function ModelProviderPanel() {
       } catch {}
       const roles = chooseModelRoles(discovered, preset);
       const finalPatch = { default_model: roles.default_model, fast_model: roles.fast_model, reasoning_model: roles.reasoning_model, structured_output_model: roles.structured_output_model, max_tokens: roles.max_tokens };
-      update("model_provider", finalPatch);
+      const persistedSettings = { ...settings, model_provider: { ...settings.model_provider, ...finalPatch, api_key: "" } };
       await updateModelConfig(configFromCurrent(finalPatch));
       try {
         await ensureWorkspaceDefaults();
       } catch (e: unknown) {
         throw new Error(`Workspace bootstrap failed: ${e instanceof Error ? e.message : String(e)}`);
       }
-      saveSettingsSnapshot({ ...settings, model_provider: { ...settings.model_provider, ...finalPatch } });
+      replaceAndMarkSaved(persistedSettings);
       markModelProviderConfigured();
+      const finalModel = finalPatch.default_model || m.default_model || "";
       setTestResult("ok");
-      setTestMsg(`${r.model || "ok"} | ${r.latency_ms || ""}ms`);
+      setTestMsg(finalModel ? `${finalModel} | ${r.latency_ms || ""}ms` : t("settings.saved_connected_ready"));
     } catch (e: unknown) {
       setTestResult("fail");
       setTestMsg(e instanceof Error ? e.message : String(e));
@@ -175,13 +178,135 @@ function ModelProviderPanel() {
   );
 }
 
-function AgentRuntimePanel() { return <SettingsSection title={t("settings.agent_runtime")}><div /></SettingsSection>; }
-function GovernancePanel() { return <SettingsSection title={t("settings.governance")}><div /></SettingsSection>; }
-function RiskGatePanel() { return <SettingsSection title={t("settings.risk_gate")}><div /></SettingsSection>; }
-function CognitiveCustomsPanel() { return <SettingsSection title={t("settings.cognitive_customs")}><div /></SettingsSection>; }
+function AgentRuntimePanel() {
+  const { settings, update } = useSettings();
+  const a = settings.agent_runtime;
+  return (
+    <SettingsSection title={t("settings.agent_runtime")} desc={t("settings.agent_runtime_desc")}>
+      <SettingRow label={t("settings.max_agents_per_task")} desc={t("settings.max_agents_per_task_desc")}>
+        <NumberField value={a.max_agents_per_task} min={1} max={20} step={1} onChange={(v) => update("agent_runtime", { max_agents_per_task: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.allow_task_agent_instance")} desc={t("settings.allow_task_agent_instance_desc")}>
+        <ToggleField checked={a.allow_task_agent_instance} onChange={(v) => update("agent_runtime", { allow_task_agent_instance: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.allow_ephemeral_sub_agent")} desc={t("settings.allow_ephemeral_sub_agent_desc")}>
+        <ToggleField checked={a.allow_ephemeral_sub_agent} onChange={(v) => update("agent_runtime", { allow_ephemeral_sub_agent: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.default_tool_scope")}>
+        <TextField monospace value={a.default_tool_scope} onChange={(v) => update("agent_runtime", { default_tool_scope: v })} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
+function GovernancePanel() {
+  const { settings, update } = useSettings();
+  const g = settings.governance;
+  return (
+    <SettingsSection title={t("settings.governance")} desc={t("settings.governance_desc")}>
+      <SettingRow label={t("settings.auto_confirm_green_track")} desc={t("settings.auto_confirm_green_track_desc")}>
+        <ToggleField checked={g.auto_confirm_green_track} onChange={(v) => update("governance", { auto_confirm_green_track: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.yellow_approval_mode")}>
+        <SelectField value={g.yellow_approval_mode} options={[{ value: "negative_consent", label: t("settings.negative_consent") }, { value: "explicit_approval", label: t("settings.explicit_approval") }]} onChange={(v) => update("governance", { yellow_approval_mode: v as never })} />
+      </SettingRow>
+      <SettingRow label={t("settings.negative_consent_timeout")}>
+        <NumberField value={g.negative_consent_timeout_seconds} min={30} max={86400} step={30} onChange={(v) => update("governance", { negative_consent_timeout_seconds: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.responsibility_anchor_required")}>
+        <ToggleField checked={g.responsibility_anchor_required} onChange={(v) => update("governance", { responsibility_anchor_required: v })} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
+function RiskGatePanel() {
+  const { settings, update } = useSettings();
+  const r = settings.risk_gate;
+  return (
+    <SettingsSection title={t("settings.risk_gate")} desc={t("settings.risk_gate_desc")}>
+      <SettingRow label={t("settings.green_threshold")}>
+        <NumberField value={r.green_threshold} min={0} max={1} step={0.05} onChange={(v) => update("risk_gate", { green_threshold: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.yellow_threshold")}>
+        <NumberField value={r.yellow_threshold} min={0} max={1} step={0.05} onChange={(v) => update("risk_gate", { yellow_threshold: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.red_threshold")}>
+        <NumberField value={r.red_threshold} min={0} max={1} step={0.05} onChange={(v) => update("risk_gate", { red_threshold: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.emergency_lease_enabled")}>
+        <ToggleField checked={r.emergency_lease_enabled} onChange={(v) => update("risk_gate", { emergency_lease_enabled: v })} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+
+function CognitiveCustomsPanel() {
+  const { settings, update } = useSettings();
+  const c = settings.cognitive_customs;
+  return (
+    <SettingsSection title={t("settings.cognitive_customs")} desc={t("settings.cognitive_customs_desc")}>
+      <SettingRow label={t("settings.default_fact_ttl")}>
+        <NumberField value={c.default_fact_ttl_seconds} min={60} max={31536000} step={60} onChange={(v) => update("cognitive_customs", { default_fact_ttl_seconds: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.require_provenance_for_fact")}>
+        <ToggleField checked={c.require_provenance_for_fact} onChange={(v) => update("cognitive_customs", { require_provenance_for_fact: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.allow_hypothesis_auto_promotion")}>
+        <ToggleField checked={c.allow_hypothesis_auto_promotion} onChange={(v) => update("cognitive_customs", { allow_hypothesis_auto_promotion: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.replay_mode_blocks_fact_write")}>
+        <ToggleField checked={c.replay_mode_blocks_fact_write} onChange={(v) => update("cognitive_customs", { replay_mode_blocks_fact_write: v })} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
 function PolicyEnginePanel() { const { settings, update } = useSettings(); const p = settings.policy_engine; const selectedPolicyEngine: PolicyEngineType = p.policy_engine === "custom" ? "custom" : "opa"; return <SettingsSection title={t("settings.policy_engine")}><SettingRow label={t("settings.policy_engine_choice")}><SelectField value={selectedPolicyEngine} options={[{ value: "opa", label: "OPA" }, { value: "custom", label: t("settings.policy_custom") }]} onChange={(v) => update("policy_engine", { policy_engine: v as PolicyEngineType })} /></SettingRow></SettingsSection>; }
-function PrivacyPanel() { return <SettingsSection title={t("settings.privacy")}><div /></SettingsSection>; }
-function DeveloperPanel() { return <SettingsSection title={t("settings.developer")}><SettingRow label={t("settings.reset_local_ui")}><button className="px-3 py-1.5 text-xs rounded-md border">{t("settings.reset_button")}</button></SettingRow></SettingsSection>; }
+function PrivacyPanel() {
+  const { settings, update } = useSettings();
+  const p = settings.privacy;
+  return (
+    <SettingsSection title={t("settings.privacy")} desc={t("settings.privacy_desc")}>
+      <SettingRow label={t("settings.log_retention_days")}>
+        <NumberField value={p.log_retention_days} min={1} max={3650} step={1} onChange={(v) => update("privacy", { log_retention_days: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.store_full_prompts")}>
+        <ToggleField checked={p.store_full_prompts} onChange={(v) => update("privacy", { store_full_prompts: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.store_model_outputs")}>
+        <ToggleField checked={p.store_model_outputs} onChange={(v) => update("privacy", { store_model_outputs: v })} />
+      </SettingRow>
+      <SettingRow label={t("settings.pii_redaction_enabled")}>
+        <ToggleField checked={p.pii_redaction_enabled} onChange={(v) => update("privacy", { pii_redaction_enabled: v })} />
+      </SettingRow>
+    </SettingsSection>
+  );
+}
+function DeveloperPanel() {
+  const { settings, update } = useSettings();
+  const d = settings.developer;
+  const [resetDone, setResetDone] = useState(false);
+  function resetLocalUiState() {
+    const apiBase = localStorage.getItem("coevo-api-base");
+    ["coevo-settings", "coevo-theme", "coevo-font-size", "coevo-density"].forEach((key) => localStorage.removeItem(key));
+    if (apiBase) localStorage.setItem("coevo-api-base", apiBase);
+    setResetDone(true);
+  }
+  return (
+    <SettingsSection title={t("settings.developer")} desc={t("settings.developer_desc")}>
+      <SettingRow label={t("settings.api_base")}><TextField monospace value={d.api_base_url} onChange={(v) => update("developer", { api_base_url: v })} /></SettingRow>
+      <SettingRow label={t("settings.openapi_url")}><TextField monospace value={d.openapi_url} onChange={(v) => update("developer", { openapi_url: v })} /></SettingRow>
+      <SettingRow label={t("settings.debug_logs_enabled")}><ToggleField checked={d.debug_logs_enabled} onChange={(v) => update("developer", { debug_logs_enabled: v })} /></SettingRow>
+      <SettingRow label={t("settings.show_raw_json_panels")}><ToggleField checked={d.show_raw_json_panels} onChange={(v) => update("developer", { show_raw_json_panels: v })} /></SettingRow>
+      <SettingRow label={t("settings.reset_local_ui")}>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={resetLocalUiState} className="px-3 py-1.5 text-xs rounded-md border">{t("settings.reset_button")}</button>
+          {resetDone && <span className="text-xs" style={{ color: "var(--green)" }}>{t("settings.local_ui_reset_done")}</span>}
+        </div>
+      </SettingRow>
+    </SettingsSection>
+  );
+}
 
 function DataManagementPanel() {
   useLanguage();

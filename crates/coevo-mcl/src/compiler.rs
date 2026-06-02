@@ -114,8 +114,8 @@ impl MCLCompiler {
         }
 
         // ---- Phase 4: Hash the contract ----
-        let contract_hash =
-            hash_contract(&contract).map_err(|e| CompileError::SerializationError(e.to_string()))?;
+        let contract_hash = hash_contract(&contract)
+            .map_err(|e| CompileError::SerializationError(e.to_string()))?;
 
         Ok(CompileResult {
             contract,

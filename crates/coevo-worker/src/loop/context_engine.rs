@@ -266,7 +266,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(first.prefix_fingerprint, second.prefix_fingerprint);
-        assert_ne!(first.volatile_suffix[0].content, second.volatile_suffix[0].content);
+        assert_ne!(
+            first.volatile_suffix[0].content,
+            second.volatile_suffix[0].content
+        );
     }
 
     #[tokio::test]
@@ -281,7 +284,10 @@ mod tests {
 
         assert!(!compacted.provenance.is_empty());
         assert_eq!(compacted.dropped_message_count, 1);
-        assert!(compacted.summary.content.contains("Compacted governed history"));
+        assert!(compacted
+            .summary
+            .content
+            .contains("Compacted governed history"));
     }
 
     #[tokio::test]
@@ -319,7 +325,10 @@ mod tests {
 
         assert_eq!(before.stable_prefix.len(), after.stable_prefix.len());
         assert_eq!(before.stable_prefix[0].role, after.stable_prefix[0].role);
-        assert_eq!(before.stable_prefix[0].content, after.stable_prefix[0].content);
+        assert_eq!(
+            before.stable_prefix[0].content,
+            after.stable_prefix[0].content
+        );
         assert_eq!(before.prefix_fingerprint, after.prefix_fingerprint);
     }
 }

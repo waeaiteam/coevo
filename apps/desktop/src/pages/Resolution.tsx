@@ -1,20 +1,40 @@
+import { t, useLanguage } from "../settings/i18n";
+import Icon from "../components/Icon";
+
 export default function Resolution() {
+  useLanguage();
+  const fields = [
+    "decision_id",
+    "mcl_reference",
+    "proposer_agent",
+    "critic_objections",
+    "rejected_alternatives",
+    "responsibility_anchor",
+    "risk_accepted",
+  ];
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <span className="text-lg" style={{ color: "#ec4899" }}>⚖</span>
-        <h2 className="text-lg font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>Resolution Engine</h2>
-      </div>
-      <div className="card">
-        <div className="text-xs space-y-3">
-          <div className="text-sm font-semibold" style={{ color: "#ec4899" }}>ADR-A Records</div>
-          <div className="grid grid-cols-2 gap-2">
-            {["decision_id", "mcl_reference", "proposer_agent", "critic_objections", "rejected_alternatives", "responsibility_anchor", "risk_accepted"].map((f) => (
-              <div key={f} className="p-2 rounded font-mono text-xs" style={{ background: "var(--bg-primary)", color: "var(--text-muted)", border: "1px solid var(--border-subtle)" }}>
-                {f}
-              </div>
-            ))}
-          </div>
+    <div className="product-page">
+      <header className="product-header">
+        <div className="min-w-0">
+          <div className="product-kicker">{t("resolution.title")}</div>
+          <h1 className="product-title">{t("resolution.title")}</h1>
+        </div>
+      </header>
+      <section className="feature-hero">
+        <div className="feature-hero-icon"><Icon name="git-branch" /></div>
+        <div>
+          <h2>{t("resolution.title")}</h2>
+          <p>{t("resolution.records")}</p>
+        </div>
+      </section>
+      <div className="product-panel">
+        <div className="product-panel-heading">
+          <h2>{t("resolution.records")}</h2>
+        </div>
+        <div className="chip-row">
+          {fields.map((field) => (
+            <span key={field} className="mono-chip">{field}</span>
+          ))}
         </div>
       </div>
     </div>

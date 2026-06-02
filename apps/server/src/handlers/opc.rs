@@ -11,8 +11,8 @@ use coevo_evolution::{
 };
 use coevo_executors::adapters::*;
 use coevo_executors::traits::*;
-use coevo_store::repos_opc::*;
 use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
+use coevo_store::repos_opc::*;
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
 use serde::Deserialize;
 use sqlx::Row;
@@ -72,6 +72,19 @@ macro_rules! ok {
 }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
 
+fn memory_scope_query_to_db(scope: Option<&str>) -> Option<&'static str> {
+    match scope?.trim() {
+        "User" | "user" => Some("User"),
+        "Company" | "company" => Some("Company"),
+        "Agent" | "agent" => Some("Agent"),
+        "Task" | "task" => Some("Task"),
+        "Skill" | "skill" => Some("Skill"),
+        "Executor" | "executor" => Some("Executor"),
+        "Audit" | "audit" => Some("Audit"),
+        _ => None,
+    }
+}
+
 fn track_risk(track: &str) -> f64 {
     match track {
         "green" => 0.3,
@@ -124,7 +137,11 @@ fn default_governance_proposal(req: &CreateWORequest) -> GovernanceProposal {
 }
 
 fn choose_agent_for_track(employees: &[AgentEmployee], track: &str) -> Option<String> {
-    let risk = if track == "red" { track_risk("yellow") } else { track_risk(track) };
+    let risk = if track == "red" {
+        track_risk("yellow")
+    } else {
+        track_risk(track)
+    };
     let qualified = |employee: &&AgentEmployee| {
         employee.lifecycle_status == LifecycleStatus::Active
             && employee.risk_ceiling >= risk
@@ -158,14 +175,19 @@ fn resolve_governance_verdict(
         .as_ref()
         .filter(|id| !id.trim().is_empty() && id.as_str() != "auto");
     let requested_agent_is_active = requested_agent.and_then(|id| {
-        employees
-            .iter()
-            .find(|employee| employee.agent_id == *id && employee.lifecycle_status == LifecycleStatus::Active)
+        employees.iter().find(|employee| {
+            employee.agent_id == *id && employee.lifecycle_status == LifecycleStatus::Active
+        })
     });
     let resolved_agent_id = requested_agent_is_active
         .map(|employee| employee.agent_id.clone())
         .or_else(|| choose_agent_for_track(employees, track_decision.track))
-        .or_else(|| client_selected_agents.first().filter(|id| !id.is_empty()).cloned());
+        .or_else(|| {
+            client_selected_agents
+                .first()
+                .filter(|id| !id.is_empty())
+                .cloned()
+        });
     let blocked = track_decision.track == "red";
 
     GovernanceVerdict {
@@ -211,10 +233,32 @@ const YELLOW_TRIGGERS: [&str; 10] = [
     "modify",
 ];
 
+fn is_trigger_boundary(ch: Option<char>) -> bool {
+    match ch {
+        None => true,
+        Some(c) => !c.is_ascii_alphanumeric(),
+    }
+}
+
+fn contains_governance_trigger(intent: &str, trigger: &str) -> bool {
+    let mut search_start = 0;
+    while let Some(relative_start) = intent[search_start..].find(trigger) {
+        let start = search_start + relative_start;
+        let end = start + trigger.len();
+        let before = intent[..start].chars().next_back();
+        let after = intent[end..].chars().next();
+        if is_trigger_boundary(before) && is_trigger_boundary(after) {
+            return true;
+        }
+        search_start = end;
+    }
+    false
+}
+
 fn classify_mission_track(intent: &str) -> TrackDecision {
     let lower = intent.to_lowercase();
     for trigger in RED_TRIGGERS {
-        if lower.contains(trigger) {
+        if contains_governance_trigger(&lower, trigger) {
             return TrackDecision {
                 track: "red",
                 risk_summary: format!(
@@ -233,7 +277,7 @@ fn classify_mission_track(intent: &str) -> TrackDecision {
         }
     }
     for trigger in YELLOW_TRIGGERS {
-        if lower.contains(trigger) {
+        if contains_governance_trigger(&lower, trigger) {
             return TrackDecision {
                 track: "yellow",
                 risk_summary: format!(
@@ -251,7 +295,9 @@ fn classify_mission_track(intent: &str) -> TrackDecision {
     }
     TrackDecision {
         track: "green",
-        risk_summary: "Server RiskGate: low-risk read/analyze intent. Green Track auto-execution is allowed.".to_string(),
+        risk_summary:
+            "Server RiskGate: low-risk read/analyze intent. Green Track auto-execution is allowed."
+                .to_string(),
         allowed_actions: vec!["read".to_string(), "analyze".to_string()],
         restricted_actions: vec![
             "delete".to_string(),
@@ -329,13 +375,13 @@ pub async fn list_memory(
     State(s): State<AppState>,
     Query(q): Query<MemoryQuery>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    let scope = memory_scope_query_to_db(q.scope.as_deref());
     let res = if let Some(ref query) = q.q {
-        memory_repo::MemoryRepo::search(&s.pool, query, q.scope.as_deref(), q.owner_id.as_deref())
-            .await
+        memory_repo::MemoryRepo::search(&s.pool, query, scope, q.owner_id.as_deref()).await
     } else {
         memory_repo::MemoryRepo::list(
             &s.pool,
-            q.scope.as_deref(),
+            scope,
             q.owner_id.as_deref(),
             q.include_revoked.unwrap_or(false),
         )
@@ -719,6 +765,7 @@ pub async fn execute_work_order(
             if msg.contains("MODEL_PROVIDER_NOT_CONFIGURED") {
                 return err!(StatusCode::CONFLICT, msg);
             }
+            let _ = work_order_repo::WorkOrderRepo::update_status(&s.pool, &id, "Failed").await;
             return err!(StatusCode::INTERNAL_SERVER_ERROR, msg);
         }
     };
@@ -819,7 +866,10 @@ pub async fn decide_work_order_approval(
                 "message":"Approval denied; task execution was not resumed."
             }))
         }
-        _ => err!(StatusCode::BAD_REQUEST, "decision must be approve or reject"),
+        _ => err!(
+            StatusCode::BAD_REQUEST,
+            "decision must be approve or reject"
+        ),
     }
 }
 
@@ -1142,11 +1192,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn create_yellow_work_order(
-        state: AppState,
-        work_order_id: &str,
-        contract_hash: &str,
-    ) {
+    async fn create_yellow_work_order(state: AppState, work_order_id: &str, contract_hash: &str) {
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
             conversation_id: None,
@@ -1195,9 +1241,34 @@ mod tests {
             ("production database rollback", "red", "high-risk trigger"),
             ("critical P1 emergency", "red", "high-risk trigger"),
             ("customer data delete request", "red", "high-risk trigger"),
-            ("draft a changelog and send it internally", "yellow", "moderate-risk trigger"),
-            ("update staging release notes", "yellow", "moderate-risk trigger"),
+            (
+                "draft a changelog and send it internally",
+                "yellow",
+                "moderate-risk trigger",
+            ),
+            (
+                "update staging release notes",
+                "yellow",
+                "moderate-risk trigger",
+            ),
             ("read metrics and analyze logs", "green", "Green Track"),
+            (
+                "produce a concise checklist for tomorrow",
+                "green",
+                "Green Track",
+            ),
+            ("review product positioning notes", "green", "Green Track"),
+            (
+                "summarize international market standards",
+                "green",
+                "Green Track",
+            ),
+            ("review api1 integration notes", "green", "Green Track"),
+            (
+                "step1 progress update summary",
+                "yellow",
+                "moderate-risk trigger",
+            ),
         ];
 
         for (intent, expected_track, summary_fragment) in cases {
@@ -1208,14 +1279,102 @@ mod tests {
 
         let priority = classify_mission_track("send a production notification");
         assert_eq!(priority.track, "red");
-        assert!(priority.restricted_actions.contains(&"production".to_string()));
+        assert!(priority
+            .restricted_actions
+            .contains(&"production".to_string()));
+    }
+
+    #[test]
+    fn memory_record_json_contract_accepts_snake_case_and_rejects_pascal_case() {
+        let payload = serde_json::json!({
+            "memory_id": "mem-contract-ok",
+            "scope": "company",
+            "owner_id": "default-opc",
+            "title": "Operating Principles",
+            "content": "Company rules",
+            "tags": ["company-foundation"],
+            "source": "first-run",
+            "provenance": "first-run:default-opc:company-foundation",
+            "confidence": 0.9,
+            "ttl_seconds": 2592000,
+            "created_at_ms": 1,
+            "updated_at_ms": 1,
+            "access_policy": "opc-local",
+            "status": "active",
+            "cognitive_layer": "Suggestion",
+            "linked_contract_hash": null,
+            "linked_plan_hash": null,
+            "linked_adr_id": null
+        });
+
+        let parsed: MemoryRecord = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(parsed.scope, MemoryScope::Company);
+        assert_eq!(parsed.status, MemoryStatus::Active);
+
+        let mut pascal_scope = payload.clone();
+        pascal_scope["scope"] = serde_json::json!("Company");
+        assert!(serde_json::from_value::<MemoryRecord>(pascal_scope).is_err());
+
+        let mut pascal_status = payload;
+        pascal_status["status"] = serde_json::json!("Active");
+        assert!(serde_json::from_value::<MemoryRecord>(pascal_status).is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_scope_query_accepts_snake_case_after_snake_case_create_payload() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool);
+        let memory = MemoryRecord {
+            memory_id: "mem-snake-query".to_string(),
+            scope: MemoryScope::Company,
+            owner_id: "default-opc".to_string(),
+            title: "Operating Principles".to_string(),
+            content: "Company rules".to_string(),
+            tags: vec!["company-foundation".to_string()],
+            source: "first-run".to_string(),
+            provenance: "first-run:default-opc:company-foundation".to_string(),
+            confidence: 0.9,
+            ttl_seconds: 2592000,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            access_policy: "opc-local".to_string(),
+            status: MemoryStatus::Active,
+            cognitive_layer: coevo_core::cognitive::CognitiveLayer::Suggestion,
+            linked_contract_hash: None,
+            linked_plan_hash: None,
+            linked_adr_id: None,
+        };
+
+        let (create_status, Json(create_body)) =
+            create_memory(State(state.clone()), Json(memory)).await;
+        assert_eq!(create_status, StatusCode::OK, "{create_body:?}");
+
+        let (list_status, Json(list_body)) = list_memory(
+            State(state),
+            Query(MemoryQuery {
+                scope: Some("company".to_string()),
+                owner_id: Some("default-opc".to_string()),
+                include_revoked: None,
+                q: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(list_status, StatusCode::OK, "{list_body:?}");
+        assert_eq!(list_body.as_array().unwrap().len(), 1);
+        assert_eq!(list_body[0]["memory_id"], "mem-snake-query");
+        assert_eq!(list_body[0]["scope"], "company");
+        assert_eq!(list_body[0]["status"], "active");
     }
 
     #[tokio::test]
     async fn red_execute_returns_alpha_block_without_worker_audit_rows() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-red-alpha-block";
@@ -1294,14 +1453,18 @@ mod tests {
             .unwrap();
         assert_eq!(stored.track, "red");
         assert!(stored.restricted_actions.contains(&"delete".to_string()));
-        assert!(stored.restricted_actions.contains(&"production".to_string()));
+        assert!(stored
+            .restricted_actions
+            .contains(&"production".to_string()));
     }
 
     #[tokio::test]
     async fn governance_verdict_downgrades_requested_tier_on_server() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-verdict-downgrade";
 
@@ -1326,12 +1489,21 @@ mod tests {
         let (status, Json(body)) = create_work_order(State(state), Json(create)).await;
 
         assert_eq!(status, StatusCode::OK, "{body:?}");
-        assert_eq!(body["governance_proposal"]["autonomy_ceiling"], "full_access");
+        assert_eq!(
+            body["governance_proposal"]["autonomy_ceiling"],
+            "full_access"
+        );
         assert_eq!(body["governance_verdict"]["effective_track"], "green");
-        assert_eq!(body["governance_verdict"]["requested_ceiling"], "full_access");
+        assert_eq!(
+            body["governance_verdict"]["requested_ceiling"],
+            "full_access"
+        );
         assert_eq!(body["governance_verdict"]["effective_tier"], "read_only");
         assert_eq!(body["governance_verdict"]["downgraded"], true);
-        assert_eq!(body["governance_verdict"]["resolved_agent_id"], "agent-risk-01");
+        assert_eq!(
+            body["governance_verdict"]["resolved_agent_id"],
+            "agent-risk-01"
+        );
         let stored = work_order_repo::WorkOrderRepo::get(&pool, work_order_id)
             .await
             .unwrap()
@@ -1348,7 +1520,9 @@ mod tests {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-green-file-readonly";
@@ -1408,7 +1582,9 @@ mod tests {
     async fn green_execute_requires_active_model_provider_config() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-green-provider-required";
@@ -1426,7 +1602,8 @@ mod tests {
             required_skills: vec!["skill-mission-draft".to_string()],
             governance_proposal: None,
         };
-        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        let (create_status, Json(created)) =
+            create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
 
         let (status, Json(body)) = execute_work_order(
@@ -1455,13 +1632,20 @@ mod tests {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-green-active-model-routing";
-        let root = std::env::temp_dir().join(format!("coevo-active-model-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-active-model-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("mission-notes.md"), "active model routing evidence").unwrap();
+        std::fs::write(
+            root.join("mission-notes.md"),
+            "active model routing evidence",
+        )
+        .unwrap();
         std::env::set_var("COEVO_WORKSPACE_DIR", &root);
 
         let create = CreateWORequest {
@@ -1477,7 +1661,8 @@ mod tests {
             required_skills: vec!["skill-mission-draft".to_string()],
             governance_proposal: None,
         };
-        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        let (create_status, Json(created)) =
+            create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
 
         let (status, Json(body)) = execute_work_order(
@@ -1519,11 +1704,14 @@ mod tests {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-audit-export";
-        let root = std::env::temp_dir().join(format!("coevo-audit-export-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-audit-export-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("mission-notes.md"), "audit export evidence").unwrap();
         std::env::set_var("COEVO_WORKSPACE_DIR", &root);
@@ -1569,13 +1757,21 @@ mod tests {
         assert!(export["worker_runs"].as_array().unwrap().len() >= 1);
         assert!(export["worker_steps"].as_array().unwrap().len() >= 1);
         assert!(export["worker_events"].as_array().unwrap().len() >= 1);
-        assert!(export["tool_calls"].as_array().unwrap().iter().any(|tc| tc["tool_id"] == "file-readonly"));
-        assert!(export["memory_records"].as_array().unwrap().iter().any(|m| {
-            m["provenance"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("worker-run-")
-        }));
+        assert!(export["tool_calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tc| tc["tool_id"] == "file-readonly"));
+        assert!(export["memory_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| {
+                m["provenance"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("worker-run-")
+            }));
     }
 
     async fn insert_contract(pool: &sqlx::SqlitePool, hash: &str) {
@@ -1628,7 +1824,9 @@ mod tests {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-yellow-approval";
@@ -1648,7 +1846,8 @@ mod tests {
             required_skills: vec!["skill-mission-draft".to_string()],
             governance_proposal: None,
         };
-        let (create_status, Json(created)) = create_work_order(State(state.clone()), Json(create)).await;
+        let (create_status, Json(created)) =
+            create_work_order(State(state.clone()), Json(create)).await;
         assert_eq!(create_status, StatusCode::OK);
         assert_eq!(created["track"], "yellow");
 
@@ -1666,7 +1865,10 @@ mod tests {
         assert_eq!(wait_status, StatusCode::OK);
         assert_eq!(wait_body["status"], "WaitingApproval");
         let approval_id = wait_body["approval_id"].as_str().unwrap();
-        let approval = ApprovalRepo::find_by_id(&pool, approval_id).await.unwrap().unwrap();
+        let approval = ApprovalRepo::find_by_id(&pool, approval_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(approval.status, "pending");
         assert_eq!(approval.contract_hash, contract_hash);
 
@@ -1682,10 +1884,15 @@ mod tests {
         )
         .await;
         assert_eq!(blocked_status, StatusCode::FORBIDDEN);
-        assert!(blocked_body["error"].as_str().unwrap_or_default().contains("APPROVAL_RECEIPT_NOT_APPROVED"));
+        assert!(blocked_body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_NOT_APPROVED"));
         assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
 
-        ApprovalRepo::approve(&pool, approval_id, "default-founder").await.unwrap();
+        ApprovalRepo::approve(&pool, approval_id, "default-founder")
+            .await
+            .unwrap();
         let (execute_status, Json(execute_body)) = execute_work_order(
             State(state),
             Path(work_order_id.to_string()),
@@ -1707,7 +1914,9 @@ mod tests {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-yellow-approval-endpoint";
@@ -1751,7 +1960,9 @@ mod tests {
     async fn yellow_execute_rejects_arbitrary_identity_string_as_approval_receipt() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let work_order_id = "wo-yellow-no-freeform-proof";
@@ -1800,7 +2011,9 @@ mod tests {
     async fn yellow_execute_rejects_expired_denied_or_wrong_action_receipts() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         let state = AppState::new(pool.clone());
         let contract_hash = "e".repeat(64);
@@ -1903,6 +2116,9 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("APPROVAL_RECEIPT_ACTION_MISMATCH"));
-        assert_eq!(count_rows(&pool, "worker_sessions", action_mismatch_wo).await, 0);
+        assert_eq!(
+            count_rows(&pool, "worker_sessions", action_mismatch_wo).await,
+            0
+        );
     }
 }

@@ -42,7 +42,10 @@ export function getTenantId(): string {
 }
 
 export function getOpcId(): string {
-  return ensureUuid(OPC_ID_KEY);
+  const existing = read(OPC_ID_KEY);
+  if (existing) return existing;
+  write(OPC_ID_KEY, "default-opc");
+  return "default-opc";
 }
 
 export function getUserId(): string {

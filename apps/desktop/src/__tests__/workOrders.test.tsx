@@ -113,10 +113,10 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
 
     await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-green", {}));
-    expect(await screen.findByText("WorkerHarness Completed execution.")).toBeInTheDocument();
+    expect(await screen.findByText("Task completed and recorded in local timeline and memory.")).toBeInTheDocument();
     expect(screen.getByText(/Memory/)).toHaveTextContent("tm-1");
     await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-green"));
-    expect(screen.getByText("LifecycleEnd")).toBeInTheDocument();
+    expect(screen.getByText("Processing completed")).toBeInTheDocument();
   });
 
   it("submits Yellow work for approval instead of implying direct execution", async () => {
@@ -130,10 +130,10 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Submit for Approval" }));
 
     await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-yellow", {}));
-    expect(screen.getByText(/WaitingApproval/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting confirmation/)).toBeInTheDocument();
   });
 
-  it("explains that Red work has no execution timeline in Alpha", async () => {
+  it("explains that blocked work has no execution timeline", async () => {
     api.listWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red" }),
     ]);
@@ -143,7 +143,7 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
 
     await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-red"));
-    expect(screen.getByText(/No execution timeline will be produced/)).toBeInTheDocument();
+    expect(screen.getByText(/no execution timeline will be produced/)).toBeInTheDocument();
   });
 
   it("renders timeline loading errors", async () => {
@@ -159,7 +159,7 @@ describe("WorkOrders", () => {
     await waitFor(() => expect(screen.getByText(/Timeline error: timeline unavailable/)).toBeInTheDocument());
   });
 
-  it("exports a WorkOrder audit package from the audit export endpoint", async () => {
+  it("exports an audit package from the audit export endpoint", async () => {
     api.listWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green" }),
     ]);
@@ -204,31 +204,121 @@ describe("WorkOrders", () => {
     expect(feedbackInput).toHaveValue("");
   });
 
-  it("presents a founder-readable Task Center with selected task details, approval, timeline, and audit actions", async () => {
+  it("presents a founder-readable Task Center with selected task details, next action, timeline, and audit actions", async () => {
     api.listWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze onboarding feedback", track: "green", status: "Completed" }),
       workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft customer notification", track: "yellow", status: "WaitingApproval" }),
       workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red", status: "Planned" }),
     ]);
-    api.getWorkOrderTimeline.mockResolvedValue([{ type: "ApprovalRequested", title: "Human approval requested" }]);
+    api.getWorkOrderTimeline.mockResolvedValue([{ type: "ApprovalRequested", label: "Human approval requested" }]);
 
     render(<WorkOrders />);
 
     expect(await screen.findByText("Task Center")).toBeInTheDocument();
-    expect(screen.getByText("3 total tasks")).toBeInTheDocument();
-    expect(screen.getByText("1 waiting approval")).toBeInTheDocument();
+    expect(screen.getByText("3 all tasks")).toBeInTheDocument();
+    expect(screen.getByText("1 needs your confirmation")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Draft customer notification/i }));
 
     expect(screen.getByText("Selected Task Details")).toBeInTheDocument();
-    expect(screen.getByText("Approval & Audit")).toBeInTheDocument();
-    expect(screen.getByText("Yellow approval required")).toBeInTheDocument();
-    expect(screen.getByText("Assigned AI Employees")).toBeInTheDocument();
+    expect(screen.getAllByText("Next action").length).toBeGreaterThan(0);
+    expect(screen.getByText("Confirmation required")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for your confirmation")).toBeInTheDocument();
+    expect(screen.getAllByText("Assigned AI Employees").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Submit for Approval" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export Audit" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "View Timeline" }));
     await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-yellow"));
     expect(screen.getAllByText("Task Timeline").length).toBeGreaterThan(0);
-    expect(screen.getByText("ApprovalRequested")).toBeInTheDocument();
+    expect(screen.getByText("Human approval requested")).toBeInTheDocument();
+  });
+
+  it("shows failed timeline events as founder-readable attention items", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Failed" }),
+    ]);
+    api.getWorkOrderTimeline.mockResolvedValue([
+      {
+        type: "LifecycleError",
+        title: "LifecycleError",
+        details: {
+          event_id: "evt-1",
+          payload_json: JSON.stringify({ status: "Failed", error: "Internal error: missing field `input`" }),
+        },
+      },
+    ]);
+
+    render(<WorkOrders />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
+
+    expect(await screen.findByText("Previous run needed attention")).toBeInTheDocument();
+    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    expect(screen.queryByText("LifecycleError")).not.toBeInTheDocument();
+  });
+
+  it("shows friendly execute errors and avoids raw `ok` output", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green" }),
+    ]);
+    api.executeWorkOrder.mockRejectedValue(new Error("ok"));
+
+    render(<WorkOrders />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    expect(await screen.findByText(/Model returned an invalid response/)).toBeInTheDocument();
+    expect(screen.getByText(/Execution failed: Failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Error: ok$/)).not.toBeInTheDocument();
+  });
+
+  it("hides raw technical fields by default and keeps them under advanced details", async () => {
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Planned" }),
+    ]);
+
+    render(<WorkOrders />);
+
+    expect(await screen.findByText("Task Center")).toBeInTheDocument();
+    expect(screen.getByText("Advanced settings")).toBeInTheDocument();
+    expect(screen.queryByText(/^green$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Planned$/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Advanced settings"));
+    expect(await screen.findByText("Internal task ID")).toBeInTheDocument();
+    expect(screen.getByText("wo-green")).toBeInTheDocument();
+    expect(screen.getAllByText("agent-founder-01").length).toBeGreaterThan(0);
+  });
+
+  it("marks task as failed and offers a non-Red retry after execution error", async () => {
+    api.listWorkOrders
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Planned" }),
+      ])
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Failed" }),
+      ]);
+    api.executeWorkOrder.mockRejectedValue(new Error("MODEL_ROUTE_UNAVAILABLE: deepseek route failed"));
+
+    render(<WorkOrders />);
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    await waitFor(() => expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0));
+    expect(screen.getByText("Model execution is unavailable right now. Please check model settings and try again.")).toBeInTheDocument();
+    expect(screen.queryByText(/MODEL_ROUTE_UNAVAILABLE/)).not.toBeInTheDocument();
+    await waitFor(() => expect(api.listWorkOrders).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
+    const runAgainButton = screen.getByRole("button", { name: "Run again" });
+
+    api.executeWorkOrder.mockResolvedValue({
+      ok: true,
+      status: "Completed",
+      summary: "Recovered on retry.",
+    });
+    api.listWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Completed" }),
+    ]);
+    fireEvent.click(runAgainButton);
+
+    await waitFor(() => expect(api.executeWorkOrder).toHaveBeenLastCalledWith("wo-green", { rerun: true }));
   });
 });

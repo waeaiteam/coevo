@@ -346,7 +346,8 @@ mod tests {
             input: serde_json::json!({}),
             rationale: "external boundary".to_string(),
         };
-        let outcome = GovernGate::adjudicate_readonly(&proposal, &auth("yellow", None), &[external_tool()]);
+        let outcome =
+            GovernGate::adjudicate_readonly(&proposal, &auth("yellow", None), &[external_tool()]);
 
         assert!(matches!(outcome, GateOutcome::NeedApproval { .. }));
     }
@@ -358,7 +359,8 @@ mod tests {
             task: serde_json::json!({}),
             rationale: "try executor".to_string(),
         };
-        let outcome = GovernGate::adjudicate_readonly(&proposal, &auth("red", None), &[external_tool()]);
+        let outcome =
+            GovernGate::adjudicate_readonly(&proposal, &auth("red", None), &[external_tool()]);
 
         assert!(matches!(outcome, GateOutcome::Deny { .. }));
     }
@@ -372,9 +374,11 @@ mod tests {
         };
         let auth = auth("green", Some("receipt".to_string()));
         let gate = GovernGate::new(
-            RiskGate::new(Box::new(MockPolicyEngine::default().with_forbidden_actions(vec![
-                "urn:coevo:action:external-read:call_tool".to_string(),
-            ]))),
+            RiskGate::new(Box::new(
+                MockPolicyEngine::default().with_forbidden_actions(vec![
+                    "urn:coevo:action:external-read:call_tool".to_string(),
+                ]),
+            )),
             risk_contract_from_authorization(&auth),
         );
         let outcome = gate.adjudicate(&proposal, &auth, &[external_tool()]).await;

@@ -15,21 +15,34 @@ impl FailureAnalyzer {
     ) -> FailureAnalysis {
         let lower = error_message.to_lowercase();
 
-        let category = if lower.contains("not found") || lower.contains("missing") || lower.contains("no tool") {
+        let category = if lower.contains("not found")
+            || lower.contains("missing")
+            || lower.contains("no tool")
+        {
             FailureCategory::MissingCapability
         } else if lower.contains("tool") || lower.contains("wrong") || lower.contains("misuse") {
             FailureCategory::WrongToolUse
-        } else if lower.contains("prompt") || lower.contains("procedure") || lower.contains("step") {
+        } else if lower.contains("prompt") || lower.contains("procedure") || lower.contains("step")
+        {
             FailureCategory::BadPromptProcedure
-        } else if lower.contains("evidence") || lower.contains("insufficient") || lower.contains("provenance") {
+        } else if lower.contains("evidence")
+            || lower.contains("insufficient")
+            || lower.contains("provenance")
+        {
             FailureCategory::InsufficientEvidence
         } else if lower.contains("policy") || lower.contains("violation") || was_risk_denied {
             FailureCategory::PolicyViolation
         } else if lower.contains("stale") || lower.contains("expired") || lower.contains("memory") {
             FailureCategory::MemoryStale
-        } else if lower.contains("executor") || lower.contains("external") || lower.contains("adapter") {
+        } else if lower.contains("executor")
+            || lower.contains("external")
+            || lower.contains("adapter")
+        {
             FailureCategory::ExternalExecutorFailure
-        } else if lower.contains("hallucinat") || lower.contains("confident") || lower.contains("fake") {
+        } else if lower.contains("hallucinat")
+            || lower.contains("confident")
+            || lower.contains("fake")
+        {
             FailureCategory::HallucinatedFact
         } else if lower.contains("overconfident") || lower.contains("bypass") {
             FailureCategory::OverConfidentDecision
@@ -48,7 +61,8 @@ impl FailureAnalyzer {
             } else {
                 None
             },
-            required_memory_update: category == FailureCategory::MemoryStale || category == FailureCategory::UserPreferenceMismatch,
+            required_memory_update: category == FailureCategory::MemoryStale
+                || category == FailureCategory::UserPreferenceMismatch,
             required_policy_update: category == FailureCategory::PolicyViolation,
         }
     }

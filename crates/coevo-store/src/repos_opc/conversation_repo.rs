@@ -149,7 +149,9 @@ mod tests {
             updated_at_ms: now,
         };
 
-        ConversationRepo::create_thread(&pool, &thread).await.unwrap();
+        ConversationRepo::create_thread(&pool, &thread)
+            .await
+            .unwrap();
         ConversationRepo::append_message(
             &pool,
             &ConversationMessage {
@@ -169,8 +171,7 @@ mod tests {
                 message_id: "msg-2".to_string(),
                 conversation_id: thread.conversation_id.clone(),
                 role: "assistant".to_string(),
-                content: "Created a task card and kept it linked to this conversation."
-                    .to_string(),
+                content: "Created a task card and kept it linked to this conversation.".to_string(),
                 linked_work_order_id: Some("wo-customer-feedback".to_string()),
                 created_at_ms: now + 1,
             },

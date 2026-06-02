@@ -24,14 +24,21 @@ impl SkillVerifier {
         // Guard 2: Skill cannot add forbidden behaviors
         for test in &proposal.generated_tests {
             for forbidden in &test.forbidden_behaviors {
-                if forbidden.contains("fact") || forbidden.contains("decision") || forbidden.contains("bypass") {
+                if forbidden.contains("fact")
+                    || forbidden.contains("decision")
+                    || forbidden.contains("bypass")
+                {
                     failures.push(format!("Skill attempts forbidden behavior: {}", forbidden));
                 }
             }
         }
 
         // Guard 3: Skill cannot bypass RiskGate
-        if proposal.proposed_changes.to_lowercase().contains("bypass risk") {
+        if proposal
+            .proposed_changes
+            .to_lowercase()
+            .contains("bypass risk")
+        {
             failures.push("Skill attempts to bypass RiskGate — rejected".to_string());
         }
 

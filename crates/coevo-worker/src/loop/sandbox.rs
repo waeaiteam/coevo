@@ -230,14 +230,16 @@ mod tests {
 
     #[test]
     fn explicit_full_access_tier_opens_network_only_when_server_verdict_allows_it() {
-        let profile = SandboxProfile::from_tier(SandboxTier::FullAccess, Some(PathBuf::from("workspace")));
+        let profile =
+            SandboxProfile::from_tier(SandboxTier::FullAccess, Some(PathBuf::from("workspace")));
         assert_eq!(profile.tier, SandboxTier::FullAccess);
         assert_eq!(profile.network, NetworkPolicy::Open);
     }
 
     #[test]
     fn readonly_blocks_write_at_os_layer() {
-        let root = std::env::temp_dir().join(format!("coevo-readonly-sandbox-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-readonly-sandbox-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let protected = root.join("protected.txt");
         std::fs::write(&protected, "original").unwrap();

@@ -4,16 +4,16 @@
   "version": "1.0.0",
   "identifier": "dev.coevo.desktop",
   "build": {
-    "beforeDevCommand": "npm run build:sidecar && npm run dev",
+    "beforeDevCommand": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs && node scripts/with-artifacts.mjs vite",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build:sidecar && npm run build",
-    "frontendDist": "../dist"
+    "beforeBuildCommand": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs && node scripts/with-artifacts.mjs tsc && node scripts/with-artifacts.mjs vite build",
+    "frontendDist": "D:\\\u7f16\u8bd1\u4ea7\u7269\\coevo\\desktop-dist"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "coevo Control Plane",
+        "title": "coevo Workspace",
         "width": 1280,
         "height": 860,
         "resizable": true,
@@ -27,7 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/coevo-server"],
+    "externalBin": ["D:\\\u7f16\u8bd1\u4ea7\u7269\\coevo\\sidecars\\coevo-server"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

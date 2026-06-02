@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { GovernanceProvider } from "../hooks/useGovernance";
 import MissionChat from "../pages/MissionChat";
+import { setLanguage } from "../settings/i18n";
 
 const api = vi.hoisted(() => ({
   compileContract: vi.fn(),
@@ -11,6 +12,7 @@ const api = vi.hoisted(() => ({
   createWorkOrder: vi.fn(),
   listConversations: vi.fn(),
   createConversation: vi.fn(),
+  getCompanyProfile: vi.fn(),
   listConversationMessages: vi.fn(),
   appendConversationMessage: vi.fn(),
   modelChat: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock("../api/client", () => ({
   createWorkOrder: api.createWorkOrder,
   listConversations: api.listConversations,
   createConversation: api.createConversation,
+  getCompanyProfile: api.getCompanyProfile,
   listConversationMessages: api.listConversationMessages,
   appendConversationMessage: api.appendConversationMessage,
   modelChat: api.modelChat,
@@ -45,9 +48,16 @@ function renderMissionChat() {
   );
 }
 
+function missionStateKey() {
+  const opcId = localStorage.getItem("coevo-opc-id") || "default-opc";
+  const userId = localStorage.getItem("coevo-user-id") || "default-user";
+  return `coevo-missionchat-state:${opcId}:${userId}`;
+}
+
 describe("MissionChat WorkOrder creation", () => {
   beforeEach(() => {
     localStorage.clear();
+    setLanguage("zh");
     api.compileContract.mockResolvedValue({
       contract: { mission: "Analyze the README" },
       contract_hash: "a".repeat(64),
@@ -78,6 +88,7 @@ describe("MissionChat WorkOrder creation", () => {
       conversation_id: "conv-mission-1",
       title: "Analyze the README",
     });
+    api.getCompanyProfile.mockResolvedValue({ active_projects: ["Launch Project"] });
     api.listConversationMessages.mockResolvedValue([]);
     api.appendConversationMessage.mockResolvedValue({ ok: true });
     api.modelChat.mockResolvedValue({
@@ -98,6 +109,7 @@ describe("MissionChat WorkOrder creation", () => {
 
   afterEach(() => {
     cleanup();
+    delete (window as unknown as Record<string, unknown>).__TAURI__;
     vi.restoreAllMocks();
   });
 
@@ -166,7 +178,7 @@ describe("MissionChat WorkOrder creation", () => {
     );
     expect(screen.getByText(/This is a read-only analysis mission/i)).toBeInTheDocument();
     expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument();
-    expect(screen.getByText("治理裁定")).toBeInTheDocument();
+    expect(screen.getByText("安全状态")).toBeInTheDocument();
   });
 
   it("keeps frontend intent inference as preview and lets the server resolve assignment", async () => {
@@ -244,6 +256,75 @@ describe("MissionChat WorkOrder creation", () => {
     expect(payload).not.toHaveProperty("risk_summary");
   });
 
+  it("adds attachment and project folder metadata to task context without governance fields", async () => {
+    renderMissionChat();
+
+    const attachmentInput = document.querySelector('input[type="file"]:not([webkitdirectory])') as HTMLInputElement;
+    const folderInput = document.querySelector('input[webkitdirectory]') as HTMLInputElement;
+    expect(attachmentInput).toBeTruthy();
+    expect(folderInput).toBeTruthy();
+
+    const attachment = new File(["hello"], "客户反馈.txt", { type: "text/plain" });
+    Object.defineProperty(attachmentInput, "files", {
+      configurable: true,
+      value: [attachment],
+    });
+    fireEvent.change(attachmentInput);
+
+    const folderFile = new File(["notes"], "brief.md", { type: "text/markdown" }) as File & { webkitRelativePath?: string };
+    Object.defineProperty(folderFile, "webkitRelativePath", { value: "客户项目/brief.md" });
+    Object.defineProperty(folderInput, "files", {
+      configurable: true,
+      value: [folderFile],
+    });
+    fireEvent.change(folderInput);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "整理这些资料并生成行动清单" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
+
+    const payload = api.createWorkOrder.mock.calls[0][0];
+    expect(payload.mission_intent).toContain("整理这些资料并生成行动清单");
+    expect(payload.mission_intent).toContain("客户反馈.txt");
+    expect(payload.mission_intent).toContain("客户项目");
+    expect(payload).not.toHaveProperty("track");
+    expect(payload).not.toHaveProperty("allowed_actions");
+    expect(payload).not.toHaveProperty("restricted_actions");
+    expect(payload).not.toHaveProperty("risk_summary");
+    const snapshot = JSON.parse(localStorage.getItem(missionStateKey()) || "{}");
+    const joined = JSON.stringify(snapshot);
+    expect(joined).not.toContain("hello");
+    expect(joined).not.toContain("notes");
+  });
+
+  it("uses the desktop folder picker when Tauri provides one", async () => {
+    Object.defineProperty(window, "__TAURI__", {
+      configurable: true,
+      value: {
+        core: {
+          invoke: vi.fn().mockResolvedValue("D:\\workspace\\客户项目"),
+        },
+      },
+    });
+
+    renderMissionChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择项目文件夹" }));
+    expect(await screen.findByText(/D:\\workspace\\客户项目/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "阅读项目文件并总结下一步" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
+    expect((window as unknown as { __TAURI__: { core: { invoke: unknown } } }).__TAURI__.core.invoke).toHaveBeenCalledWith("choose_project_folder");
+    expect(api.createWorkOrder.mock.calls[0][0].mission_intent).toContain("D:\\workspace\\客户项目");
+  });
+
   it("uses the server-authoritative verdict returned by task creation", async () => {
     api.createWorkOrder.mockResolvedValue({
       ok: true,
@@ -282,6 +363,58 @@ describe("MissionChat WorkOrder creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
-    expect(screen.getByText(/模型摘要暂不可用/)).toBeInTheDocument();
+    expect(screen.getByText(/任务已创建，但模型摘要暂时不可用/)).toBeInTheDocument();
+  });
+
+  it("keeps mission messages visible after navigating away and back", async () => {
+    localStorage.setItem("coevo-user-id", "user-local-123");
+    localStorage.setItem("coevo-opc-id", "opc-local-456");
+    const { unmount } = render(
+      <MemoryRouter>
+        <GovernanceProvider>
+          <MissionChat />
+        </GovernanceProvider>
+      </MemoryRouter>
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Analyze the README and summarize risks" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/Analyze the README and summarize risks/)).toBeInTheDocument();
+    unmount();
+
+    renderMissionChat();
+    expect(await screen.findByText(/Analyze the README and summarize risks/)).toBeInTheDocument();
+    expect(screen.getByText(/任务已创建，正在准备给你确认的执行方案。/)).toBeInTheDocument();
+  });
+
+  it("shows clear message when model is unavailable and task creation fails", async () => {
+    api.modelChat.mockRejectedValue(new Error("model gateway unavailable"));
+    api.createWorkOrder.mockRejectedValue(new Error("gateway timeout"));
+    renderMissionChat();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Analyze the README and summarize risks" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText(/模型不可用且任务未创建/)).toBeInTheDocument();
+  });
+
+  it("renders the chat composer in English with attachment and project folder entry points", async () => {
+    setLanguage("en");
+
+    renderMissionChat();
+
+    expect(screen.getByRole("heading", { name: "What should your AI employees help with today?" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Example: organize this week's customer leads and create a follow-up list")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add attachment" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose project folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.getByText("Task options")).toBeInTheDocument();
+    expect(screen.getByLabelText("Autonomy")).toBeInTheDocument();
+    expect(screen.getByLabelText("Assign employee")).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("agent-founder-01")).toBeInTheDocument());
+    expect(document.body.textContent).not.toMatch(/[一-龥]/);
   });
 });

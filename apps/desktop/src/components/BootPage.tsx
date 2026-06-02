@@ -1,21 +1,28 @@
-import { useState, useEffect } from "react";
-import { setApiBase } from "../api/client";
+import { useState, useEffect, useRef } from "react";
+import { getApiBase, setApiBase } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
+import { t, useLanguage } from "../settings/i18n";
 
 interface BootStatus { label: string; done: boolean; error?: string }
 
 export default function BootPage({ onReady }: { onReady: () => void }) {
+  useLanguage();
   const [stages, setStages] = useState<BootStatus[]>([
-    { label: "准备本地工作区", done: false },
-    { label: "启动本地 AI 员工服务", done: false },
-    { label: "检查本地数据", done: false },
-    { label: "更新工作区结构", done: false },
-    { label: "连接安全守护", done: false },
-    { label: "载入 AI 员工", done: false },
+    { label: t("boot.stage_workspace"), done: false },
+    { label: t("boot.stage_service"), done: false },
+    { label: t("boot.stage_data"), done: false },
+    { label: t("boot.stage_schema"), done: false },
+    { label: t("boot.stage_guard"), done: false },
+    { label: t("boot.stage_employees"), done: false },
   ]);
   const [error, setError] = useState("");
+  const bootStarted = useRef(false);
 
-  useEffect(() => { boot(); }, []);
+  useEffect(() => {
+    if (bootStarted.current) return;
+    bootStarted.current = true;
+    boot();
+  }, []);
 
   async function boot() {
     try {
@@ -25,12 +32,12 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       let apiBase = "";
       if (invoke) {
         try { apiBase = await invoke("launch_server"); } catch (e: unknown) {
-          setError(`启动本地服务失败：${e instanceof Error ? e.message : String(e)}`); return;
+          setError(`${t("boot.err_launch")}${e instanceof Error ? e.message : String(e)}`); return;
         }
-        if (!apiBase) { setError("本地服务没有返回连接地址"); return; }
+        if (!apiBase) { setError(t("boot.err_no_address")); return; }
       } else {
         // Web dev mode: try existing server
-        apiBase = "http://127.0.0.1:8717";
+        apiBase = getApiBase();
       }
       setApiBase(apiBase);
 
@@ -39,7 +46,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
       for (let i = 0; i < 20; i++) {
         try { const r = await fetch(`${apiBase}/health`); if (r.ok) { healthy = true; break; } } catch { await sleep(500); }
       }
-      if (!healthy) { setStage(1, "本地服务暂时没有响应，请查看日志。"); setError("本地服务暂时没有响应，请查看日志。"); return; }
+      if (!healthy) { setStage(1, t("boot.err_no_response")); setError(t("boot.err_no_response")); return; }
       setStage(2); setStage(3); setStage(4); setStage(5);
       setTimeout(onReady, 600);
     } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
@@ -52,17 +59,17 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   async function openLogs() {
     const invoke = getTauriInvoke();
     if (invoke) { try { await invoke("open_logs_dir"); return; } catch {} }
-    alert("日志位置：~/.coevo/logs");
+    alert(t("boot.logs_location"));
   }
 
   if (error) return (
     <div className="boot-screen">
       <div className="boot-mark boot-mark-error">!</div>
-      <div className="boot-title">coevo 启动失败</div>
+      <div className="boot-title">{t("boot.failed")}</div>
       <div className="boot-error">{error}</div>
       <div className="boot-actions">
-        <button onClick={() => { setError(""); boot(); }} className="boot-button">重试</button>
-        <button onClick={openLogs} className="boot-button boot-button-secondary">打开日志</button>
+        <button onClick={() => { setError(""); boot(); }} className="boot-button">{t("boot.retry")}</button>
+        <button onClick={openLogs} className="boot-button boot-button-secondary">{t("boot.open_logs")}</button>
       </div>
     </div>
   );
@@ -70,7 +77,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   return (
     <div className="boot-screen">
       <div className="boot-mark">c</div>
-      <div className="boot-title">coevo 正在准备</div>
+      <div className="boot-title">{t("boot.preparing")}</div>
       <div className="boot-list">
         {stages.map((s, i) => (
           <div key={i} className="boot-row">

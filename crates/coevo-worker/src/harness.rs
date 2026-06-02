@@ -4,9 +4,7 @@ use crate::queue::WorkerQueueService;
 use crate::r#loop::{SandboxProfile, SandboxTier};
 use coevo_core::opc::{AutonomyCeiling, ModelPreference};
 use coevo_models::gateway::select_gateway;
-use coevo_models::router::{
-    default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel,
-};
+use coevo_models::router::{default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel};
 use coevo_models::types::{ModelProviderConfig, ModelProviderKind};
 use coevo_store::repos::worker_run_repo::{WorkerEventRepo, WorkerRunRepo, WorkerStepRepo};
 use coevo_store::repos::{agent_worker_repo::AgentWorkerRepo, model_config_repo::ModelConfigRepo};
@@ -136,9 +134,20 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
             600,
         ),
     ];
-    let mut out = vec![];
+    let mut out: Vec<ModelProfile> = vec![];
     for (model_id, display_name, capabilities, supports_json, supports_tools, latency) in profiles {
-        if model_id.trim().is_empty() || out.iter().any(|p: &ModelProfile| p.model_id == model_id) {
+        if model_id.trim().is_empty() {
+            continue;
+        }
+        if let Some(existing) = out.iter_mut().find(|p| p.model_id == model_id) {
+            for capability in capabilities {
+                if !existing.capabilities.contains(&capability) {
+                    existing.capabilities.push(capability);
+                }
+            }
+            existing.supports_json = existing.supports_json || supports_json;
+            existing.supports_tools = existing.supports_tools || supports_tools;
+            existing.avg_latency_ms = existing.avg_latency_ms.min(latency);
             continue;
         }
         out.push(ModelProfile {
@@ -155,6 +164,12 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
             privacy_level,
             enabled: true,
         });
+    }
+    for profile in &mut out {
+        profile
+            .capabilities
+            .sort_by_key(|capability| format!("{capability:?}"));
+        profile.capabilities.dedup();
     }
     out
 }
@@ -177,6 +192,65 @@ fn model_preference_to_role(preference: ModelPreference) -> &'static str {
 
 pub struct WorkerHarness;
 impl WorkerHarness {
+    async fn finalize_run_failure(
+        pool: &SqlitePool,
+        worker_id: &str,
+        session_id: &str,
+        run_id: &str,
+        err: &WorkerError,
+    ) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let safe_error = err.to_string();
+        let payload = serde_json::json!({
+            "status": "Failed",
+            "error": safe_error,
+        });
+        sqlx::query(
+            "UPDATE worker_runs SET status='Failed', errors_json=?, ended_at_ms=? WHERE run_id=?",
+        )
+        .bind(
+            serde_json::to_string(&serde_json::json!([safe_error]))
+                .unwrap_or_else(|_| "[]".to_string()),
+        )
+        .bind(now)
+        .bind(run_id)
+        .execute(pool)
+        .await
+        .ok();
+        WorkerEventRepo::append(
+            pool,
+            run_id,
+            "LifecycleError",
+            &serde_json::to_string(&payload)
+                .unwrap_or_else(|_| "{\"status\":\"Failed\"}".to_string()),
+        )
+        .await
+        .ok();
+        WorkerEventRepo::append(
+            pool,
+            run_id,
+            "LifecycleEnd",
+            &serde_json::to_string(&serde_json::json!({"status":"Failed"}))
+                .unwrap_or_else(|_| "{\"status\":\"Failed\"}".to_string()),
+        )
+        .await
+        .ok();
+        sqlx::query(
+            "UPDATE worker_sessions SET status='Failed',updated_at_ms=? WHERE session_id=?",
+        )
+        .bind(now)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .ok();
+        AgentWorkerRepo::set_status(pool, worker_id, "Failed")
+            .await
+            .ok();
+        WorkerQueueService::release(pool, session_id, run_id)
+            .await
+            .ok();
+    }
+
     pub async fn run_work_order(
         pool: &SqlitePool,
         work_order_id: &str,
@@ -333,7 +407,9 @@ impl WorkerHarness {
             .governance_verdict
             .as_ref()
             .map(|verdict| sandbox_tier_from_ceiling(verdict.effective_tier))
-            .unwrap_or_else(|| SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()).tier);
+            .unwrap_or_else(|| {
+                SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()).tier
+            });
         let model_preference = wo
             .governance_proposal
             .as_ref()
@@ -350,7 +426,10 @@ impl WorkerHarness {
             approval_receipt: options.approval_receipt.clone(),
             contract_hash: wo.contract_hash.clone(),
             plan_hash: wo.plan_hash.clone(),
-            sandbox_profile: SandboxProfile::from_tier(effective_tier, std::env::current_dir().ok()),
+            sandbox_profile: SandboxProfile::from_tier(
+                effective_tier,
+                std::env::current_dir().ok(),
+            ),
             model_preference,
         };
         let sub_result = AgentSubHarness::execute(
@@ -363,7 +442,14 @@ impl WorkerHarness {
             &provider_config,
             &[],
         )
-        .await?;
+        .await;
+        let sub_result = match sub_result {
+            Ok(result) => result,
+            Err(err) => {
+                Self::finalize_run_failure(pool, &worker_id, &session_id, &run_id, &err).await;
+                return Err(err);
+            }
+        };
 
         WorkerRunRepo::set_status(pool, &run_id, &sub_result.final_status)
             .await
@@ -470,12 +556,13 @@ impl WorkerHarness {
 mod tests {
     use super::*;
     use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use coevo_models::router::{ModelCapability, ModelRouter, ModelRoutingRequest, PrivacyLevel};
     use coevo_store::migrate::run_migrations;
     use coevo_store::pool::create_test_pool;
-    use sqlx::Row;
     use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
     use coevo_store::repos_opc::skill_repo::SkillRepo;
     use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
+    use sqlx::Row;
 
     fn test_work_order(work_order_id: &str, track: &str) -> WorkOrder {
         let now = chrono::Utc::now().timestamp_millis() as u64;
@@ -528,12 +615,13 @@ mod tests {
         assert!(err
             .to_string()
             .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
-        let sessions = sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
-            .bind(&wo.work_order_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get::<i64, _>("count");
+        let sessions =
+            sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
+                .bind(&wo.work_order_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get::<i64, _>("count");
         let runs = sqlx::query("SELECT COUNT(*) as count FROM worker_runs WHERE work_order_id=?")
             .bind(&wo.work_order_id)
             .fetch_one(&pool)
@@ -568,12 +656,13 @@ mod tests {
         .expect_err("yellow should require approval before provider resolution");
 
         assert!(err.to_string().contains("Yellow approval required"));
-        let sessions = sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
-            .bind(&wo.work_order_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .get::<i64, _>("count");
+        let sessions =
+            sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
+                .bind(&wo.work_order_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get::<i64, _>("count");
         let runs = sqlx::query("SELECT COUNT(*) as count FROM worker_runs WHERE work_order_id=?")
             .bind(&wo.work_order_id)
             .fetch_one(&pool)
@@ -599,6 +688,82 @@ mod tests {
             .bind(16384)
             .bind(0.2)
             .bind(30000)
+            .bind(5.0)
+            .bind(1)
+            .bind(now)
+            .bind(now)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn merged_profiles_keep_reasoning_when_model_ids_are_identical() {
+        let config = ModelProviderConfig {
+            provider_id: "desktop".to_string(),
+            kind: ModelProviderKind::DeepSeek,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            default_model: "deepseek-v4-flash".to_string(),
+            fast_model: "deepseek-v4-flash".to_string(),
+            reasoning_model: "deepseek-v4-flash".to_string(),
+            structured_output_model: "deepseek-v4-flash".to_string(),
+            max_tokens: 8192,
+            temperature: 0.2,
+            timeout_ms: 30000,
+            max_cost_per_task_usd: 5.0,
+        };
+        let profiles = model_profiles_from_config(&config);
+        assert_eq!(profiles.len(), 1);
+        let selected = &profiles[0];
+        assert_eq!(selected.model_id, "deepseek-v4-flash");
+        assert!(selected
+            .capabilities
+            .contains(&ModelCapability::DeepReasoning));
+        assert!(selected
+            .capabilities
+            .contains(&ModelCapability::StructuredJSON));
+        assert!(selected
+            .capabilities
+            .contains(&ModelCapability::ToolPlanning));
+
+        let request = ModelRoutingRequest {
+            work_order_id: "wo-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            worker_step_type: "ModelCall".to_string(),
+            intent: "analyze risk and plan tools".to_string(),
+            required_capabilities: vec![
+                ModelCapability::DeepReasoning,
+                ModelCapability::StructuredJSON,
+                ModelCapability::ToolPlanning,
+            ],
+            track: "green".to_string(),
+            risk_score: 0.3,
+            max_latency_ms: Some(10_000),
+            max_cost_usd: None,
+            privacy_boundary: PrivacyLevel::PublicApi,
+            preferred_model_id: Some("deepseek-v4-flash".to_string()),
+        };
+        let routed = ModelRouter::route(&request, &profiles, None).expect("route should resolve");
+        assert_ne!(routed.selected_model_id, "unavailable");
+        assert_eq!(routed.selected_model_id, "deepseek-v4-flash");
+    }
+
+    async fn configure_broken_openai_compatible(pool: &sqlx::SqlitePool) {
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO model_provider_configs (provider_id,kind,base_url,api_key_ciphertext,api_key_masked,default_model,fast_model,reasoning_model,structured_output_model,max_tokens,temperature,timeout_ms,max_cost_per_task_usd,is_active,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            .bind("desktop-broken")
+            .bind("OpenAICompatible")
+            .bind("http://127.0.0.1:9/v1")
+            .bind("sk-broken")
+            .bind("sk-b****oken")
+            .bind("deepseek-chat")
+            .bind("deepseek-chat")
+            .bind("deepseek-chat")
+            .bind("deepseek-chat")
+            .bind(8192)
+            .bind(0.2)
+            .bind(1000)
             .bind(5.0)
             .bind(1)
             .bind(now)
@@ -688,5 +853,67 @@ mod tests {
             .unwrap()
             .get::<i64, _>("count");
         assert_eq!(file_tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn failed_sub_harness_marks_run_session_failed_and_releases_queue() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        configure_broken_openai_compatible(&pool).await;
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+        SkillRepo::seed_default(&pool).await.unwrap();
+        let wo = test_work_order("wo-green-failure-cleanup", "green");
+        WorkOrderRepo::create(&pool, &wo).await.unwrap();
+
+        let err = WorkerHarness::run_work_order(
+            &pool,
+            &wo.work_order_id,
+            WorkerHarnessOptions {
+                approval_receipt: None,
+                max_runtime_ms: None,
+                deterministic_mode: true,
+                preferred_tool_ids: vec![],
+                allow_mock_model_routing: false,
+            },
+        )
+        .await
+        .expect_err("broken provider should fail");
+        assert!(!err.to_string().is_empty());
+
+        let run_status =
+            sqlx::query("SELECT status FROM worker_runs WHERE work_order_id=? LIMIT 1")
+                .bind(&wo.work_order_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get::<String, _>("status");
+        assert_eq!(run_status, "Failed");
+
+        let session_status = sqlx::query("SELECT status FROM worker_sessions WHERE work_order_id=? ORDER BY created_at_ms DESC LIMIT 1")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<String, _>("status");
+        assert_eq!(session_status, "Failed");
+
+        let lifecycle_error_count = sqlx::query("SELECT COUNT(*) as count FROM worker_events WHERE run_id IN (SELECT run_id FROM worker_runs WHERE work_order_id=?) AND event_type='LifecycleError'")
+            .bind(&wo.work_order_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        assert!(lifecycle_error_count >= 1);
+
+        let lane =
+            sqlx::query("SELECT status, active_run_id FROM worker_queue_lanes WHERE session_id=?")
+                .bind(format!("session-{}", &wo.work_order_id))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let lane_status = lane.get::<String, _>("status");
+        let active_run: Option<String> = lane.get("active_run_id");
+        assert_eq!(lane_status, "Idle");
+        assert!(active_run.is_none());
     }
 }

@@ -35,7 +35,7 @@ export default function MissionDraftCard({ draft, loading, onExecute, onPlanOnly
     <div className="flex justify-start">
       <div
         className="w-full max-w-2xl rounded-xl border p-5 space-y-4"
-        style={{ background: "#fff", borderColor: s.border, borderLeftWidth: 4 }}
+        style={{ background: "var(--bg-card)", borderColor: s.border, borderLeftWidth: 4 }}
       >
         {/* Header */}
         <div className="flex items-center justify-between">

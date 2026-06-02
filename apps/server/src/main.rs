@@ -8,8 +8,9 @@ use std::time::{Duration, SystemTime};
 use coevo_server::config::ServerConfig;
 use coevo_server::router::build_router;
 use coevo_server::state::AppState;
-use coevo_store::migrate::run_migrations;
-use coevo_store::pool::create_pool;
+use coevo_store::migrate::{
+    create_pool_and_run_migrations_with_recovery, MigrationRecoveryOutcome,
+};
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -23,21 +24,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::from_env();
     start_parent_watchdog();
 
+    let backup_root = coevo_recovery_backup_root();
+    let (pool, migration_outcome) =
+        create_pool_and_run_migrations_with_recovery(&config.database_url, &backup_root).await?;
+    tracing::info!("Database connected: {}", config.database_url);
+    match migration_outcome {
+        MigrationRecoveryOutcome::Applied => tracing::info!("Migrations applied"),
+        MigrationRecoveryOutcome::Recovered {
+            version,
+            backup_dir,
+        } => tracing::warn!(
+            "Migration version mismatch at version {}; backed up old database to {} and recreated a clean local database",
+            version,
+            backup_dir.display()
+        ),
+    }
+
     // Handle --migrate flag
     if env::args().any(|a| a == "--migrate") {
-        let pool = create_pool(&config.database_url).await?;
-        run_migrations(&pool).await?;
         tracing::info!("Migrations complete");
         return Ok(());
     }
-
-    // Create database pool
-    let pool = create_pool(&config.database_url).await?;
-    tracing::info!("Database connected: {}", config.database_url);
-
-    // Run migrations
-    run_migrations(&pool).await?;
-    tracing::info!("Migrations applied");
 
     // Build state
     let state = AppState::new(pool);
@@ -59,6 +66,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn coevo_recovery_backup_root() -> PathBuf {
+    let home = env::var("COEVO_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| env::var("USERPROFILE").map(|h| PathBuf::from(h).join(".coevo")))
+        .or_else(|_| env::var("HOME").map(|h| PathBuf::from(h).join(".coevo")))
+        .unwrap_or_else(|_| PathBuf::from(".coevo"));
+    home.join("backups").join("migration-recovery")
 }
 
 fn start_parent_watchdog() {

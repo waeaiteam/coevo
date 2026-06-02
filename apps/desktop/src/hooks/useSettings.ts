@@ -1,8 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { CoevoSettings } from "../settings/types";
 import { defaults } from "../settings/defaults";
 
 const STORAGE_KEY = "coevo-settings";
+
+type SettingsState = {
+  settings: CoevoSettings;
+  update: <K extends keyof CoevoSettings>(section: K, patch: Partial<CoevoSettings[K]>) => void;
+  dirty: boolean;
+  saved: boolean;
+  saveNow: () => void;
+  replaceAndMarkSaved: (nextSettings: CoevoSettings) => void;
+  reset: () => void;
+};
+
+const SettingsContext = createContext<SettingsState | null>(null);
 
 function mergeSettings(partial: Partial<CoevoSettings>): CoevoSettings {
   return {
@@ -51,7 +63,7 @@ export function saveSettingsSnapshot(s: CoevoSettings) {
   applyTheme(s);
 }
 
-export function useSettings() {
+function useSettingsController(): SettingsState {
   const [settings, setSettings] = useState<CoevoSettings>(loadSettingsSnapshot);
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -81,30 +93,51 @@ export function useSettings() {
     setTimeout(() => setSaved(false), 2000);
   }, [settings]);
 
+  const replaceAndMarkSaved = useCallback((nextSettings: CoevoSettings) => {
+    saveSettingsSnapshot(nextSettings);
+    setSettings(nextSettings);
+    setDirty(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }, []);
+
   const reset = useCallback(() => {
     setSettings({ ...defaults });
     setDirty(true);
     setSaved(false);
   }, []);
 
-  return { settings, update, dirty, saved, saveNow, reset };
+  return { settings, update, dirty, saved, saveNow, replaceAndMarkSaved, reset };
+}
+
+export function SettingsProvider({ children }: { children: ReactNode }) {
+  const value = useSettingsController();
+  return createElement(SettingsContext.Provider, { value }, children);
+}
+
+export function useSettings(): SettingsState {
+  const value = useContext(SettingsContext);
+  if (!value) throw new Error("useSettings must be used within SettingsProvider");
+  return value;
+}
+
+function resolveSystemTheme(): "light" | "dark" {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 function applyTheme(s: CoevoSettings) {
   const root = document.documentElement;
+  // Drive light/dark through the single source of truth: the data-theme attribute,
+  // which globals.css keys all of its color tokens off of. Never inline hardcoded
+  // hex values here — that previously fought with the palette in globals.css.
   const theme = s.appearance.theme;
-  if (theme === "dark") {
-    root.style.setProperty("--bg-primary", "#0a0a0f");
-    root.style.setProperty("--bg-card", "#16161f");
-    root.style.setProperty("--text-primary", "#e4e4ed");
-    root.style.colorScheme = "dark";
-  } else if (theme === "light") {
-    root.style.setProperty("--bg-primary", "#fafafa");
-    root.style.setProperty("--bg-card", "#ffffff");
-    root.style.setProperty("--text-primary", "#1a1a2e");
-    root.style.colorScheme = "light";
-  }
+  const resolved = theme === "system" ? resolveSystemTheme() : theme;
+  root.dataset.theme = resolved;
+  root.style.colorScheme = resolved;
 
+  // The following are presentation knobs globals.css does not own; keep applying them.
   const sizes: Record<string, string> = { small: "12px", normal: "14px", large: "16px", "extra-large": "18px" };
   root.style.fontSize = sizes[s.appearance.font_size] || "14px";
 
@@ -116,14 +149,13 @@ function applyTheme(s: CoevoSettings) {
     root.style.setProperty("--row-gap", "8px");
   }
 
-  if (s.appearance.reduce_motion) {
-    root.style.setProperty("--transition-duration", "0s");
-  } else {
-    root.style.setProperty("--transition-duration", "150ms");
-  }
+  root.style.setProperty("--transition-duration", s.appearance.reduce_motion ? "0s" : "150ms");
 
+  // High-contrast is handled by a theme-aware attribute hook in globals.css, so it
+  // stays legible in both light and dark rather than forcing a hardcoded black.
   if (s.appearance.high_contrast) {
-    root.style.setProperty("--text-secondary", "#000000");
-    root.style.setProperty("--text-muted", "#333333");
+    root.dataset.contrast = "high";
+  } else {
+    delete root.dataset.contrast;
   }
 }

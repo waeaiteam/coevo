@@ -12,8 +12,8 @@ export default function ToggleField({
       style={{ background: checked ? "var(--accent)" : "var(--border-accent)" }}
     >
       <span
-        className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-150"
-        style={{ left: checked ? "calc(100% - 17px)" : "2px" }}
+        className="absolute top-0.5 w-4 h-4 rounded-full shadow transition-transform duration-150"
+        style={{ left: checked ? "calc(100% - 17px)" : "2px", background: "var(--cv-surface)" }}
       />
     </button>
   );

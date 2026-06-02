@@ -1,7 +1,7 @@
+pub mod agent_harness;
 pub mod dto;
 pub mod error;
 pub mod event_stream;
-pub mod agent_harness;
 pub mod harness;
 pub mod r#loop;
 pub mod memory_context;

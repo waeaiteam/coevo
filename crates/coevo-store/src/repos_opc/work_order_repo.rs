@@ -100,8 +100,16 @@ impl WorkOrderRepo {
         .bind(serde_json::to_string(&w.allowed_actions).unwrap())
         .bind(serde_json::to_string(&w.restricted_actions).unwrap())
         .bind(&w.risk_summary)
-        .bind(w.governance_proposal.as_ref().map(|value| serde_json::to_string(value).unwrap()))
-        .bind(w.governance_verdict.as_ref().map(|value| serde_json::to_string(value).unwrap()))
+        .bind(
+            w.governance_proposal
+                .as_ref()
+                .map(|value| serde_json::to_string(value).unwrap()),
+        )
+        .bind(
+            w.governance_verdict
+                .as_ref()
+                .map(|value| serde_json::to_string(value).unwrap()),
+        )
         .bind(now)
         .bind(now)
         .execute(pool)
@@ -200,6 +208,9 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(saved.conversation_id.as_deref(), Some("conv-product-feedback"));
+        assert_eq!(
+            saved.conversation_id.as_deref(),
+            Some("conv-product-feedback")
+        );
     }
 }

@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { t, useLanguage } from "../settings/i18n";
+import Icon, { type IconName } from "./Icon";
 
 export interface TimelineEvent {
   id: string;
@@ -13,6 +15,7 @@ export type TimelineSpan = {
   id: string;
   type: string;
   label?: string;
+  subtitle?: string;
   round?: number;
   durationMs?: number;
   tokens?: number;
@@ -41,14 +44,20 @@ type Props = {
   onReject?: (span: TimelineSpan, comment: string) => void;
 };
 
-const spanIcons: Record<string, string> = {
-  ModelCall: "思",
-  CallTool: "工",
-  CallExecutor: "外",
-  BuildContext: "境",
-  SelectTool: "选",
-  ApprovalRequired: "审",
+const spanIcons: Record<string, IconName> = {
+  ModelCall: "brain",
+  CallTool: "wrench",
+  CallExecutor: "external",
+  BuildContext: "layers",
+  SelectTool: "filter",
+  ApprovalRequired: "shield-check",
 };
+
+function normalizeEventLabel(type: string, fallback?: string) {
+  const mapped = t(`timeline.event.${type}`);
+  if (mapped !== `timeline.event.${type}`) return mapped;
+  return fallback || type;
+}
 
 function eventToSpan(event: TimelineEvent): TimelineSpan {
   return {
@@ -83,10 +92,10 @@ function pretty(value: unknown) {
 }
 
 function gateLabel(outcome?: string) {
-  if (outcome === "deny") return "已拒绝";
-  if (outcome === "need_approval") return "待确认";
-  if (outcome === "blocked") return "已拦截";
-  return "已通过";
+  if (outcome === "deny") return t("timeline.gate_deny");
+  if (outcome === "need_approval") return t("timeline.gate_need_approval");
+  if (outcome === "blocked") return t("timeline.gate_blocked");
+  return t("timeline.gate_allow");
 }
 
 function gateClass(outcome?: string) {
@@ -97,21 +106,22 @@ function gateClass(outcome?: string) {
 }
 
 function overlayLabel(value: string) {
-  if (value === "deny") return "Deny";
-  if (value === "need_approval") return "NeedApproval";
-  if (value === "sandbox_blocked") return "沙箱拦截";
-  if (value === "hypothesis_downgraded") return "Hypothesis 降级";
+  if (value === "deny") return t("timeline.overlay_deny");
+  if (value === "need_approval") return t("timeline.overlay_need_approval");
+  if (value === "sandbox_blocked") return t("timeline.overlay_sandbox_blocked");
+  if (value === "hypothesis_downgraded") return t("timeline.overlay_hypothesis_downgraded");
   return value;
 }
 
 export default function GovernanceTimeline({
   spans,
   events = [],
-  title = "执行时间线",
-  emptyText = "任务提交后，这里会显示每一步的判断、用量和结果。",
+  title = t("timeline.execution_title"),
+  emptyText = t("timeline.execution_empty"),
   onApprove,
   onReject,
 }: Props) {
+  useLanguage();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
   const normalized = useMemo(() => spans?.length ? spans : events.map(eventToSpan), [events, spans]);
@@ -120,7 +130,7 @@ export default function GovernanceTimeline({
     <section className="timeline-waterfall" aria-label={title}>
       <div className="timeline-header">
         <div className="text-sm font-bold">{title}</div>
-        <div className="mt-1 text-xs muted">实线来自本地执行，虚线来自外部员工回报。</div>
+        <div className="mt-1 text-xs muted">{t("timeline.execution_legend")}</div>
       </div>
       <div className="timeline-body">
         {normalized.length === 0 && <div className="timeline-empty">{emptyText}</div>}
@@ -138,17 +148,17 @@ export default function GovernanceTimeline({
                 >
                   <span className="span-icon" aria-hidden="true">{spanIcons[span.type] || "•"}</span>
                   <span className="min-w-0">
-                    <span className="span-type block truncate">{span.label || span.type}</span>
-                    <span className="span-meta">round {span.round ?? 0}</span>
+                    <span className="span-type block truncate">{normalizeEventLabel(span.type, span.label || span.type)}</span>
+                    {span.subtitle && <span className="span-meta block truncate">{span.subtitle}</span>}
                   </span>
-                  <span className="span-meta optional">{formatMs(span.durationMs)}</span>
-                  <span className="span-meta optional">{span.tokens ?? 0} 用量</span>
-                  <span className="span-meta optional">{formatCost(span.costUsd)}</span>
                   <span className={`span-badge ${gateClass(outcome)}`}>{gateLabel(outcome)}</span>
-                  <span className="span-meta">{isOpen ? "收起" : "展开"}</span>
+                  <span className="span-meta">{isOpen ? t("timeline.collapse") : t("timeline.expand")}</span>
                 </button>
                 {isOpen && (
                   <div className="span-detail">
+                    <div className="mb-2 text-[11px] muted">
+                      {t("timeline.round")} {span.round ?? 0} · {formatMs(span.durationMs)} · {span.tokens ?? 0} {t("timeline.usage")} · {formatCost(span.costUsd)}
+                    </div>
                     {span.overlays && span.overlays.length > 0 && (
                       <div className="mb-3 flex flex-wrap gap-2">
                         {span.overlays.map((overlay) => (
@@ -157,13 +167,13 @@ export default function GovernanceTimeline({
                       </div>
                     )}
                     <div className="span-grid">
-                      <TimelineField label="思考" value={span.thought} />
-                      <TimelineField label="置信度" value={span.confidence == null ? undefined : `${Math.round(span.confidence * 100)}%`} />
-                      <TimelineField label="提案" value={span.proposal} full />
-                      <TimelineField label="输入" value={span.input} />
-                      <TimelineField label="输出" value={span.output} />
-                      <TimelineField label="用量" value={span.usage} />
-                      <TimelineField label="裁定" value={span.gate} />
+                      <TimelineField label={t("timeline.field_thought")} value={span.thought} />
+                      <TimelineField label={t("timeline.field_confidence")} value={span.confidence == null ? undefined : `${Math.round(span.confidence * 100)}%`} />
+                      <TimelineField label={t("timeline.field_proposal")} value={span.proposal} full />
+                      <TimelineField label={t("timeline.field_input")} value={span.input} />
+                      <TimelineField label={t("timeline.field_output")} value={span.output} />
+                      <TimelineField label={t("timeline.field_usage")} value={span.usage} />
+                      <TimelineField label={t("timeline.field_gate")} value={span.gate} />
                     </div>
                     {isApproval && (
                       <ApprovalCard
@@ -209,18 +219,18 @@ function ApprovalCard({
 }) {
   return (
     <div className="approval-card mt-3">
-      <div className="text-sm font-bold">需要确认</div>
-      <div className="mt-1 text-xs secondary">{span.gate?.reason || "这一步会影响你的数据或工作区，请确认后继续。"}</div>
+      <div className="text-sm font-bold">{t("timeline.approval_title")}</div>
+      <div className="mt-1 text-xs secondary">{span.gate?.reason || t("timeline.approval_desc")}</div>
       <div className="mt-2 font-mono text-[11px] secondary">{span.gate?.action_digest || ""}</div>
       <textarea
         className="composer-textarea mt-3 min-h-[70px] rounded-md border"
-        placeholder="批注意见，可留空"
+        placeholder={t("timeline.approval_comment_placeholder")}
         value={comment}
         onChange={(event) => onComment(event.target.value)}
       />
       <div className="approval-actions">
-        <button type="button" onClick={onApprove}>批准</button>
-        <button type="button" onClick={onReject}>拒绝</button>
+        <button type="button" onClick={onApprove}>{t("timeline.approval_approve")}</button>
+        <button type="button" onClick={onReject}>{t("timeline.approval_reject")}</button>
       </div>
     </div>
   );

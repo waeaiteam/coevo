@@ -1,9 +1,9 @@
 //! Mock External Executor adapters for Hermes, OpenClaw, MCP, 302AI, Browser, LocalProcess.
 //! v1: mock implementations. Real adapters will connect to actual runtimes later.
 
+use crate::traits::*;
 use async_trait::async_trait;
 use coevo_core::opc::*;
-use crate::traits::*;
 
 macro_rules! mock_executor {
     ($name:ident, $source_type:expr, $display_name:expr) => {
@@ -77,10 +77,34 @@ macro_rules! mock_executor {
     };
 }
 
-mock_executor!(MockHermesAdapter, ExecutorSourceType::Hermes, "Hermes Runtime");
-mock_executor!(MockOpenClawAdapter, ExecutorSourceType::OpenClaw, "OpenClaw Runtime");
+mock_executor!(
+    MockHermesAdapter,
+    ExecutorSourceType::Hermes,
+    "Hermes Runtime"
+);
+mock_executor!(
+    MockOpenClawAdapter,
+    ExecutorSourceType::OpenClaw,
+    "OpenClaw Runtime"
+);
 mock_executor!(MockMcpAdapter, ExecutorSourceType::MCP, "MCP Runtime");
-mock_executor!(MockLocal302AIAdapter, ExecutorSourceType::Local302AI, "302AI Runtime");
-mock_executor!(MockBrowserAdapter, ExecutorSourceType::Browser, "Browser Runtime");
-mock_executor!(MockLocalProcessAdapter, ExecutorSourceType::LocalProcess, "Local Process");
-mock_executor!(MockDockerAdapter, ExecutorSourceType::Docker, "Docker Runtime");
+mock_executor!(
+    MockLocal302AIAdapter,
+    ExecutorSourceType::Local302AI,
+    "302AI Runtime"
+);
+mock_executor!(
+    MockBrowserAdapter,
+    ExecutorSourceType::Browser,
+    "Browser Runtime"
+);
+mock_executor!(
+    MockLocalProcessAdapter,
+    ExecutorSourceType::LocalProcess,
+    "Local Process"
+);
+mock_executor!(
+    MockDockerAdapter,
+    ExecutorSourceType::Docker,
+    "Docker Runtime"
+);

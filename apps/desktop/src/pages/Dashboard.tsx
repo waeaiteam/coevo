@@ -1,4 +1,5 @@
 import AdvancedConsole from "../components/AdvancedConsole";
+import Icon from "../components/Icon";
 import OpcOverview from "../components/OpcOverview";
 import RiskApprovalPanel from "../components/RiskApprovalPanel";
 import { t, useLanguage } from "../settings/i18n";
@@ -7,13 +8,16 @@ export default function Dashboard() {
   useLanguage();
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-            {t("nav.opc")}
+    <div className="product-page">
+      <div className="product-header">
+        <div className="feature-hero">
+          <div className="feature-hero-icon">
+            <Icon name="gauge" />
           </div>
-          <h1 className="mt-1 text-xl font-bold">{t("opc.identity")}</h1>
+          <div>
+            <div className="product-kicker">{t("nav.opc")}</div>
+            <h2>{t("opc.identity")}</h2>
+          </div>
         </div>
         <RiskApprovalPanel />
       </div>

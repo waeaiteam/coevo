@@ -170,7 +170,9 @@ mod tests {
         let state = AppState::new(pool.clone());
         let contract = contract();
         let contract_hash = hash_contract(&contract).unwrap();
-        ContractRepo::insert(&pool, &contract, &contract_hash).await.unwrap();
+        ContractRepo::insert(&pool, &contract, &contract_hash)
+            .await
+            .unwrap();
 
         let Json(response) = route_plan(
             State(state),
@@ -217,7 +219,9 @@ mod tests {
         let state = AppState::new(pool.clone());
         let contract_a = contract();
         let contract_hash = hash_contract(&contract_a).unwrap();
-        ContractRepo::insert(&pool, &contract_a, &contract_hash).await.unwrap();
+        ContractRepo::insert(&pool, &contract_a, &contract_hash)
+            .await
+            .unwrap();
         let mut contract_b = contract();
         contract_b.goal_tree.root.description = "different route request".to_string();
 

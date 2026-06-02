@@ -102,13 +102,24 @@ pub struct AssetRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssetType {
-    Repository, Document, Website, Dataset, CredentialRef,
-    BrandAsset, CustomerLead, Report, Other,
+    Repository,
+    Document,
+    Website,
+    Dataset,
+    CredentialRef,
+    BrandAsset,
+    CustomerLead,
+    Report,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AssetStatus { Active, Archived, Revoked }
+pub enum AssetStatus {
+    Active,
+    Archived,
+    Revoked,
+}
 
 // ---- Memory Record ----
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,12 +147,22 @@ pub struct MemoryRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
-    User, Company, Agent, Task, Skill, Executor, Audit,
+    User,
+    Company,
+    Agent,
+    Task,
+    Skill,
+    Executor,
+    Audit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MemoryStatus { Active, Stale, Revoked }
+pub enum MemoryStatus {
+    Active,
+    Stale,
+    Revoked,
+}
 
 // ---- Agent Employee ----
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,8 +189,18 @@ pub struct AgentEmployee {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Department {
-    FounderOffice, Product, Engineering, Research, Growth,
-    Finance, Legal, SRE, Design, Content, Governance, Custom,
+    FounderOffice,
+    Product,
+    Engineering,
+    Research,
+    Growth,
+    Finance,
+    Legal,
+    SRE,
+    Design,
+    Content,
+    Governance,
+    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,7 +226,12 @@ pub struct PermissionBoundary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LifecycleStatus { Draft, Active, Suspended, Retired }
+pub enum LifecycleStatus {
+    Draft,
+    Active,
+    Suspended,
+    Retired,
+}
 
 // ---- Model Provider Profile ----
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,16 +324,33 @@ pub struct ExternalExecutorPassport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutorSourceType {
-    Hermes, OpenClaw, MCP, Local302AI, LocalProcess, Browser, Docker, Custom,
+    Hermes,
+    OpenClaw,
+    MCP,
+    Local302AI,
+    LocalProcess,
+    Browser,
+    Docker,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SandboxLevel { None, Process, Container, VM, Remote }
+pub enum SandboxLevel {
+    None,
+    Process,
+    Container,
+    VM,
+    Remote,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ExecutorStatus { Draft, Registered, Disabled }
+pub enum ExecutorStatus {
+    Draft,
+    Registered,
+    Disabled,
+}
 
 // ---- Work Order ----
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,5 +378,12 @@ pub struct WorkOrder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkOrderStatus {
-    Draft, Planned, Running, WaitingApproval, Completed, Failed, Cancelled, Blocked,
+    Draft,
+    Planned,
+    Running,
+    WaitingApproval,
+    Completed,
+    Failed,
+    Cancelled,
+    Blocked,
 }

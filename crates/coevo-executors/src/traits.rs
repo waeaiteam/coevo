@@ -42,8 +42,11 @@ pub trait ExternalExecutorAdapter: Send + Sync {
 
     async fn dry_run(&self, work_order: &WorkOrder) -> Result<DryRunResult, ExecutorError>;
 
-    async fn execute(&self, work_order: &WorkOrder, lease: Option<&coevo_core::lease::EmergencyLease>)
-        -> Result<ExecutorResult, ExecutorError>;
+    async fn execute(
+        &self,
+        work_order: &WorkOrder,
+        lease: Option<&coevo_core::lease::EmergencyLease>,
+    ) -> Result<ExecutorResult, ExecutorError>;
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutorError>;
 

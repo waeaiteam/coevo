@@ -17,7 +17,10 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
         }
         SqliteConnectOptions::new().filename(path)
     };
-    let opts = opts.create_if_missing(true).foreign_keys(true).journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+    let opts = opts
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
 
     SqlitePoolOptions::new()
         .max_connections(5)
@@ -37,16 +40,26 @@ mod tests {
     async fn test_raw_path_with_spaces() {
         let tmp = std::env::temp_dir().join("coevo test raw.db");
         let _ = std::fs::remove_file(&tmp);
-        let pool = create_pool(&tmp.to_string_lossy()).await.expect("raw path with space");
-        sqlx::query("CREATE TABLE IF NOT EXISTS test_raw (id INTEGER)").execute(&pool).await.unwrap();
+        let pool = create_pool(&tmp.to_string_lossy())
+            .await
+            .expect("raw path with space");
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_raw (id INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
         let _ = std::fs::remove_file(&tmp);
     }
     #[tokio::test]
     async fn test_raw_path_with_chinese() {
         let tmp = std::env::temp_dir().join("coevo测试中文.db");
         let _ = std::fs::remove_file(&tmp);
-        let pool = create_pool(&tmp.to_string_lossy()).await.expect("raw path with Chinese chars");
-        sqlx::query("CREATE TABLE IF NOT EXISTS test_cn (id INTEGER)").execute(&pool).await.unwrap();
+        let pool = create_pool(&tmp.to_string_lossy())
+            .await
+            .expect("raw path with Chinese chars");
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_cn (id INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
         let _ = std::fs::remove_file(&tmp);
     }
     #[tokio::test]
@@ -55,7 +68,10 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
         let path = tmp.to_string_lossy().replace('/', "\\");
         let pool = create_pool(&path).await.expect("raw path with backslash");
-        sqlx::query("CREATE TABLE IF NOT EXISTS test_bs (id INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_bs (id INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
         let _ = std::fs::remove_file(&tmp);
     }
     #[tokio::test]

@@ -1,7 +1,7 @@
-use sqlx::SqlitePool;
-use crate::types::*;
 use crate::error::WorkerError;
-use coevo_store::repos_opc::{memory_repo, agent_memory_repo};
+use crate::types::*;
+use coevo_store::repos_opc::{agent_memory_repo, memory_repo};
+use sqlx::SqlitePool;
 
 pub struct MemoryContextBuilder;
 impl MemoryContextBuilder {
@@ -26,45 +26,74 @@ impl MemoryContextBuilder {
         let mut company_profile = None;
 
         // User Profile
-        if let Ok(Some(up)) = coevo_store::repos_opc::user_profile_repo::UserProfileRepo::get(pool, user_id).await {
+        if let Ok(Some(up)) =
+            coevo_store::repos_opc::user_profile_repo::UserProfileRepo::get(pool, user_id).await
+        {
             user_profile = Some(serde_json::to_value(up).unwrap_or_default());
         }
         // Company Profile
-        if let Ok(Some(cp)) = coevo_store::repos_opc::opc_profile_repo::OPCProfileRepo::get(pool, opc_id).await {
+        if let Ok(Some(cp)) =
+            coevo_store::repos_opc::opc_profile_repo::OPCProfileRepo::get(pool, opc_id).await
+        {
             company_profile = Some(serde_json::to_value(cp).unwrap_or_default());
         }
 
         // Company Memory
         if let Ok(all) = memory_repo::MemoryRepo::list(pool, Some("Company"), None, true).await {
             for r in all {
-                if used >= budget { break; }
-                if r.status == coevo_core::opc::MemoryStatus::Revoked { excluded_revoked += 1; continue; }
-                if r.cognitive_layer == coevo_core::cognitive::CognitiveLayer::Fact && r.provenance.is_empty() { excluded_fact_no_prov += 1; continue; }
+                if used >= budget {
+                    break;
+                }
+                if r.status == coevo_core::opc::MemoryStatus::Revoked {
+                    excluded_revoked += 1;
+                    continue;
+                }
+                if r.cognitive_layer == coevo_core::cognitive::CognitiveLayer::Fact
+                    && r.provenance.is_empty()
+                {
+                    excluded_fact_no_prov += 1;
+                    continue;
+                }
                 let s = serde_json::to_string(&r).unwrap_or_default();
                 used += s.len();
-                if r.status == coevo_core::opc::MemoryStatus::Stale { stale_ids.push(r.memory_id.clone()); }
+                if r.status == coevo_core::opc::MemoryStatus::Stale {
+                    stale_ids.push(r.memory_id.clone());
+                }
                 company.push(serde_json::to_value(r).unwrap_or_default());
             }
         }
         // Agent Memory
         if let Ok(Some(am)) = agent_memory_repo::AgentMemoryRepo::get(pool, agent_id).await {
             let s = serde_json::to_string(&am).unwrap_or_default();
-            if used + s.len() < budget { used += s.len(); agent_mem.push(serde_json::to_value(am).unwrap_or_default()); }
+            if used + s.len() < budget {
+                used += s.len();
+                agent_mem.push(serde_json::to_value(am).unwrap_or_default());
+            }
         }
         // Task memory — linked to this WorkOrder
         if let Ok(task_all) = memory_repo::MemoryRepo::list(pool, Some("Task"), None, false).await {
             for r in task_all {
-                if used >= budget { break; }
-                if r.linked_contract_hash.as_deref() != Some(contract_hash) && r.linked_plan_hash.as_deref() != Some(plan_hash) { continue; }
+                if used >= budget {
+                    break;
+                }
+                if r.linked_contract_hash.as_deref() != Some(contract_hash)
+                    && r.linked_plan_hash.as_deref() != Some(plan_hash)
+                {
+                    continue;
+                }
                 let s = serde_json::to_string(&r).unwrap_or_default();
                 used += s.len();
                 task.push(serde_json::to_value(r).unwrap_or_default());
             }
         }
 
-        Ok(MemoryContext{
+        Ok(MemoryContext {
             user_profile,
-            company_profile: if let Some(cp) = company_profile { vec![cp] } else { vec![] },
+            company_profile: if let Some(cp) = company_profile {
+                vec![cp]
+            } else {
+                vec![]
+            },
             company_memory: company,
             agent_memory: agent_mem,
             task_memory: task,

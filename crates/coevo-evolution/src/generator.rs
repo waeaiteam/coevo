@@ -14,8 +14,12 @@ impl SkillGenerator {
     ) -> SkillEvolutionProposal {
         let proposal_type = match analysis.category {
             FailureCategory::MissingCapability => EvolutionProposalType::CreateNewSkill,
-            FailureCategory::BadPromptProcedure | FailureCategory::WrongToolUse => EvolutionProposalType::PatchSkill,
-            FailureCategory::MemoryStale | FailureCategory::PolicyViolation => EvolutionProposalType::PatchSkill,
+            FailureCategory::BadPromptProcedure | FailureCategory::WrongToolUse => {
+                EvolutionProposalType::PatchSkill
+            }
+            FailureCategory::MemoryStale | FailureCategory::PolicyViolation => {
+                EvolutionProposalType::PatchSkill
+            }
             _ => EvolutionProposalType::PatchSkill,
         };
 

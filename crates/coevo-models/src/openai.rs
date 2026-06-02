@@ -3,6 +3,7 @@
 use crate::gateway::ModelGateway;
 use crate::types::*;
 use async_trait::async_trait;
+use reqwest::StatusCode;
 
 pub struct OpenAICompatibleGateway;
 
@@ -16,6 +17,7 @@ impl ModelGateway for OpenAICompatibleGateway {
             return Err(ModelError::MissingApiKey);
         }
         let client = reqwest::Client::new();
+        let start = std::time::Instant::now();
         let resp = client
             .get(format!("{}/models", config.base_url.trim_end_matches('/')))
             .header("Authorization", format!("Bearer {}", config.api_key))
@@ -23,6 +25,7 @@ impl ModelGateway for OpenAICompatibleGateway {
             .send()
             .await
             .map_err(|e| ModelError::ProviderUnreachable(e.to_string()))?;
+        let latency = start.elapsed().as_millis() as u64;
         if !resp.status().is_success() {
             return Err(ModelError::ProviderUnreachable(format!(
                 "HTTP {}",
@@ -33,10 +36,10 @@ impl ModelGateway for OpenAICompatibleGateway {
             content: "OK".into(),
             json: None,
             usage: ModelUsage::default(),
-            latency_ms: 1,
+            latency_ms: latency,
             model: config.default_model.clone(),
             finish_reason: "stop".into(),
-            provider_kind: ModelProviderKind::OpenAICompatible,
+            provider_kind: config.kind,
         })
     }
 
@@ -110,14 +113,17 @@ impl ModelGateway for OpenAICompatibleGateway {
             .await
             .map_err(|e| ModelError::ProviderUnreachable(e.to_string()))?;
         let latency = start.elapsed().as_millis() as u64;
-        let json: serde_json::Value = resp
-            .json()
+        let status = resp.status();
+        let body = resp
+            .text()
             .await
             .map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        if !status.is_success() {
+            return Err(provider_http_error(status, &body));
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
+        let content = extract_choice_content(&json, false)?;
         Ok(ModelResponse {
             content,
             json: Some(json.clone()),
@@ -128,7 +134,7 @@ impl ModelGateway for OpenAICompatibleGateway {
                 .as_str()
                 .unwrap_or("stop")
                 .into(),
-            provider_kind: ModelProviderKind::OpenAICompatible,
+            provider_kind: request.config.kind,
         })
     }
 
@@ -146,7 +152,7 @@ impl ModelGateway for OpenAICompatibleGateway {
                 latency_ms: 1,
                 model: request.model.clone(),
                 finish_reason: "stop".into(),
-                provider_kind: ModelProviderKind::OpenAICompatible,
+                provider_kind: request.config.kind,
             });
         }
         if request.config.api_key.is_empty() {
@@ -177,14 +183,17 @@ impl ModelGateway for OpenAICompatibleGateway {
             .await
             .map_err(|e| ModelError::ProviderUnreachable(e.to_string()))?;
         let latency = start.elapsed().as_millis() as u64;
-        let json: serde_json::Value = resp
-            .json()
+        let status = resp.status();
+        let body = resp
+            .text()
             .await
             .map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
-        let content = json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        if !status.is_success() {
+            return Err(provider_http_error(status, &body));
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| ModelError::InvalidResponse(e.to_string()))?;
+        let content = extract_choice_content(&json, true)?;
         let parsed: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| ModelError::JsonSchemaViolation(e.to_string()))?;
         Ok(ModelResponse {
@@ -197,9 +206,73 @@ impl ModelGateway for OpenAICompatibleGateway {
                 .as_str()
                 .unwrap_or("stop")
                 .into(),
-            provider_kind: ModelProviderKind::OpenAICompatible,
+            provider_kind: request.config.kind,
         })
     }
+}
+
+fn provider_http_error(status: StatusCode, body: &str) -> ModelError {
+    let detail = extract_provider_error_message(body);
+    ModelError::ProviderUnreachable(format!("HTTP {}: {}", status.as_u16(), detail))
+}
+
+fn extract_provider_error_message(body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    if let Some(message) = parsed
+        .as_ref()
+        .and_then(|json| json.get("error"))
+        .and_then(|error| {
+            error
+                .get("message")
+                .or_else(|| error.get("msg"))
+                .or_else(|| error.get("detail"))
+        })
+        .and_then(|value| value.as_str())
+    {
+        return message.trim().to_string();
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        "empty response body".to_string()
+    } else {
+        trimmed.chars().take(240).collect()
+    }
+}
+
+fn extract_choice_content(
+    json: &serde_json::Value,
+    structured: bool,
+) -> Result<String, ModelError> {
+    let Some(choice) = json.get("choices").and_then(|choices| choices.get(0)) else {
+        return Err(ModelError::InvalidResponse(
+            "Provider response has no choices".to_string(),
+        ));
+    };
+    let content = choice
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(str::trim)
+        .unwrap_or("");
+    if content.is_empty() {
+        let reason = choice
+            .get("finish_reason")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let error = if structured {
+            ModelError::JsonSchemaViolation(format!(
+                "Provider returned empty structured content (finish_reason: {})",
+                reason
+            ))
+        } else {
+            ModelError::InvalidResponse(format!(
+                "Provider returned empty completion content (finish_reason: {})",
+                reason
+            ))
+        };
+        return Err(error);
+    }
+    Ok(content.to_string())
 }
 
 fn deterministic_agent_reasoning_json(request: &ModelRequest) -> serde_json::Value {
@@ -304,5 +377,86 @@ fn enrich_model(id: &str) -> DiscoveredModel {
         supports_reasoning: lower.starts_with('o')
             || lower.contains("reason")
             || lower.contains("thinking"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_error_extracts_json_message() {
+        let body = r#"{"error":{"message":"Invalid API key"}}"#;
+        let err = provider_http_error(StatusCode::UNAUTHORIZED, body);
+        assert_eq!(
+            err.to_string(),
+            "Provider unreachable: HTTP 401: Invalid API key"
+        );
+    }
+
+    #[test]
+    fn extract_choice_content_rejects_empty_structured_content() {
+        let json = serde_json::json!({
+            "choices": [{ "message": { "content": "" }, "finish_reason": "stop" }]
+        });
+        let err = extract_choice_content(&json, true).expect_err("expected structured error");
+        assert!(
+            err.to_string().contains("empty structured content"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn extract_choice_content_rejects_missing_choices() {
+        let json = serde_json::json!({ "id": "abc" });
+        let err = extract_choice_content(&json, false).expect_err("expected invalid response");
+        assert!(err.to_string().contains("no choices"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_preserves_provider_kind_and_measures_latency() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0_u8; 1024];
+            let _ = socket.read(&mut buf).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let response = concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "content-type: application/json\r\n",
+                "content-length: 11\r\n",
+                "connection: close\r\n",
+                "\r\n",
+                "{\"data\":[]}"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let config = ModelProviderConfig {
+            provider_id: "desktop".into(),
+            kind: ModelProviderKind::DeepSeek,
+            base_url: format!("http://{}/v1", addr),
+            api_key: "sk-test".into(),
+            default_model: "deepseek-chat".into(),
+            fast_model: "deepseek-chat".into(),
+            reasoning_model: "deepseek-reasoner".into(),
+            structured_output_model: "deepseek-chat".into(),
+            max_tokens: 8192,
+            temperature: 0.7,
+            timeout_ms: 1000,
+            max_cost_per_task_usd: 5.0,
+        };
+
+        let response = OpenAICompatibleGateway
+            .test_connection(&config)
+            .await
+            .expect("connection should succeed");
+        server.await.unwrap();
+
+        assert_eq!(response.provider_kind, ModelProviderKind::DeepSeek);
+        assert!(response.latency_ms >= 20, "latency was {}", response.latency_ms);
     }
 }

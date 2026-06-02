@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { defaults } from "../settings/defaults";
 import { loadSettingsSnapshot, saveSettingsSnapshot } from "../hooks/useSettings";
-import { setLanguage, t } from "../settings/i18n";
+import { chooseModelRoles, presetFor } from "../settings/modelPresets";
+import { t, setLanguage } from "../settings/i18n";
 
 describe("Settings", () => {
   beforeEach(() => {
@@ -113,5 +114,23 @@ describe("Settings", () => {
 
     setLanguage("zh");
     expect(t("first_run.bootstrap_failed")).toBe("公司基础上下文尚未就绪。请先修复初始化错误后再继续。");
+  });
+
+  it("uses discovered model context tokens when output token metadata is absent", () => {
+    const roles = chooseModelRoles(
+      [{ id: "deepseek-chat", display_name: "deepseek-chat", max_context_tokens: 64000 }],
+      presetFor("deepseek"),
+    );
+
+    expect(roles.default_model).toBe("deepseek-chat");
+    expect(roles.max_tokens).toBe(64000);
+  });
+
+  it("has localized save success message for provider configuration", () => {
+    setLanguage("en");
+    expect(t("settings.saved_connected_ready")).toContain("Saved DeepSeek");
+
+    setLanguage("zh");
+    expect(t("settings.saved_connected_ready")).toContain("已保存 DeepSeek");
   });
 });

@@ -8,6 +8,14 @@ export function isModelProviderConfigured(): boolean {
   }
 }
 
+export function clearModelProviderConfigured(): void {
+  try {
+    localStorage.removeItem(MODEL_PROVIDER_CONFIGURED_KEY);
+  } catch {
+    /* localStorage may be unavailable in restricted contexts */
+  }
+}
+
 export function markModelProviderConfigured(): void {
   try {
     localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");

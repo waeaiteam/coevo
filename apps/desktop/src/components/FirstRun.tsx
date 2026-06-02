@@ -10,7 +10,7 @@ import {
   updateUserProfile,
 } from "../api/client";
 import { createLocalOpc, type LocalIdentity } from "../settings/identity";
-import { setLanguage, t, useLanguage } from "../settings/i18n";
+import { getLanguage, setLanguage, t, useLanguage } from "../settings/i18n";
 
 type WizardStep = "identity" | "foundation" | "handoff";
 type AlphaPosture = "conservative" | "balanced" | "exploratory";
@@ -27,7 +27,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
   const [identity, setIdentity] = useState<LocalIdentity | null>(null);
   const [opcName, setOpcName] = useState("My OPC");
   const [ownerName, setOwnerName] = useState("Founder");
-  const [language, setLocalLanguage] = useState<"en" | "zh">("en");
+  const [language, setLocalLanguage] = useState<"en" | "zh">(() => getLanguage());
   const [companyMission, setCompanyMission] = useState("");
   const [companyDomain, setCompanyDomain] = useState("");
   const [operatingPrinciples, setOperatingPrinciples] = useState("");
@@ -131,7 +131,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
       });
       await createMemory({
         memory_id: uuid(),
-        scope: "Company",
+        scope: "company",
         owner_id: current.opcId,
         title: "Operating Principles",
         content: [mission, domain, ...finalPrinciples].filter(Boolean).join("\n"),
@@ -143,7 +143,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
         created_at_ms: now,
         updated_at_ms: now,
         access_policy: "opc-local",
-        status: "Active",
+        status: "active",
         cognitive_layer: "Suggestion",
         linked_contract_hash: null,
         linked_plan_hash: null,
@@ -176,7 +176,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
           </p>
           <div className="mt-8 grid max-w-2xl gap-3 sm:grid-cols-3">
             {[t("first_run.step_identity"), t("first_run.step_foundation"), t("first_run.step_provider")].map((label, i) => (
-              <div key={label} className="rounded-lg border bg-white p-3 text-xs" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
+              <div key={label} className="rounded-lg border p-3 text-xs" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
                 <div className="mb-1 font-mono" style={{ color: "var(--accent)" }}>0{i + 1}</div>
                 {label}
               </div>
@@ -184,7 +184,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
           </div>
         </section>
 
-        <section className="rounded-xl border bg-white p-5 shadow-sm" style={{ borderColor: "var(--border-subtle)" }}>
+        <section className="rounded-xl border p-5 shadow-sm" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
           {step === "identity" && (
             <div className="space-y-4">
               <div>

@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { proposeFact } from "../api/client";
+import Icon from "../components/Icon";
+import { t, useLanguage } from "../settings/i18n";
 
 export default function Customs() {
+  useLanguage();
   const [key, setKey] = useState("");
   const [layer, setLayer] = useState("Hypothesis");
-  const [result, setResult] = useState<Record<string,unknown> | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handlePropose() {
     if (!key.trim()) return;
     setLoading(true);
     try {
-      const res = await proposeFact({
+      const response = await proposeFact({
         target_key: key,
         expected_version: 0,
         proposed_value: { data: "example" },
@@ -27,32 +30,36 @@ export default function Customs() {
         },
         dependency_entry_ids: [],
       });
-      setResult(res);
+      setResult(response);
     } catch (e: unknown) {
-      setResult({ error: e instanceof Error ? e.message : String(e) } as Record<string,unknown>);
+      setResult({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <span className="text-lg" style={{ color: "#8b5cf6" }}>◎</span>
-        <h2 className="text-lg font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>Cognitive Customs</h2>
+    <div className="product-page">
+      <div className="feature-hero">
+        <div className="feature-hero-icon">
+          <Icon name="badge-check" />
+        </div>
+        <div>
+          <h2>{t("customs.title")}</h2>
+        </div>
       </div>
       <div className="card flex gap-3">
         <input
           className="flex-1 p-2 rounded-md text-sm font-mono border focus:outline-none focus:ring-1"
-          placeholder="Blackboard key"
+          placeholder={t("customs.key_placeholder")}
           value={key}
-          onChange={(e) => setKey(e.target.value)}
+          onChange={(event) => setKey(event.target.value)}
           style={{ background: "var(--bg-primary)", color: "var(--text-primary)", borderColor: "var(--border-accent)" }}
         />
         <select
           className="p-2 rounded-md text-sm border focus:outline-none"
           value={layer}
-          onChange={(e) => setLayer(e.target.value)}
+          onChange={(event) => setLayer(event.target.value)}
           style={{ background: "var(--bg-primary)", color: "var(--text-primary)", borderColor: "var(--border-accent)" }}
         >
           <option>Hypothesis</option>
@@ -64,9 +71,9 @@ export default function Customs() {
           onClick={handlePropose}
           disabled={loading}
           className="px-4 py-2 text-xs font-semibold rounded-md transition-all duration-150 disabled:opacity-30"
-          style={{ background: "#8b5cf6", color: "#fff" }}
+          style={{ background: "var(--accent)", color: "#fff" }}
         >
-          {loading ? "···" : "Propose"}
+          {loading ? t("customs.proposing") : t("customs.propose")}
         </button>
       </div>
       {result && (

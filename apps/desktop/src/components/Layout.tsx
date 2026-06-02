@@ -6,7 +6,7 @@ import { ThemeProvider } from "../hooks/useTheme";
 
 export default function Layout() {
   const loc = useLocation();
-  const isHome = loc.pathname === "/";
+  const isHome = loc.pathname === "/" || loc.pathname === "/mission" || loc.pathname.startsWith("/conversations/");
 
   return (
     <ThemeProvider>

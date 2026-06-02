@@ -4,8 +4,8 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use coevo_store::repos_opc::{memory_repo, work_order_repo};
 use coevo_store::repos::worker_session_repo::WorkerSessionRepo;
+use coevo_store::repos_opc::{memory_repo, work_order_repo};
 use sqlx::{Column, Row};
 
 macro_rules! ok {
@@ -201,7 +201,8 @@ pub async fn work_order_audit_export(
         .await
         .map(|items| serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([])))
         .unwrap_or_else(|_| serde_json::json!([]));
-    let (timeline_status, Json(timeline_items)) = timeline(State(s.clone()), Path(id.clone())).await;
+    let (timeline_status, Json(timeline_items)) =
+        timeline(State(s.clone()), Path(id.clone())).await;
     let timeline_items = if timeline_status == StatusCode::OK {
         timeline_items
     } else {
@@ -239,6 +240,61 @@ pub async fn list_worker_sessions(
         .unwrap_or_default();
     ok!(serde_json::json!(to_json(&rows)))
 }
+
+pub async fn global_timeline(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let orders = match work_order_repo::WorkOrderRepo::list(&s.pool).await {
+        Ok(items) => items,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for order in orders {
+        items.push(serde_json::json!({
+            "time_ms": order.created_at_ms as i64,
+            "type": "WorkOrderCreated",
+            "title": "Task created",
+            "work_order_id": order.work_order_id,
+            "track": order.track,
+            "status": order.status,
+            "mission_intent": order.mission_intent,
+            "details": {
+                "work_order_id": order.work_order_id,
+                "track": order.track,
+                "status": order.status,
+                "risk_summary": order.risk_summary,
+            }
+        }));
+        if let Ok(sessions) =
+            WorkerSessionRepo::list_by_work_order(&s.pool, &order.work_order_id).await
+        {
+            for session in sessions {
+                let session_id: String = session.get("session_id");
+                let status: String = session.get("status");
+                let created_at_ms: i64 = session.get("created_at_ms");
+                items.push(serde_json::json!({
+                    "time_ms": created_at_ms,
+                    "type": "WorkerSessionCreated",
+                    "title": "Task run started",
+                    "work_order_id": order.work_order_id,
+                    "track": order.track,
+                    "status": status,
+                    "mission_intent": order.mission_intent,
+                    "details": {
+                        "session_id": session_id,
+                        "worker_id": session.get::<String, _>("worker_id"),
+                        "agent_id": session.get::<String, _>("agent_id"),
+                    }
+                }));
+            }
+        }
+    }
+    items.sort_by(|a, b| {
+        b["time_ms"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["time_ms"].as_i64().unwrap_or(0))
+    });
+    ok!(serde_json::json!(items))
+}
 pub async fn get_worker_session(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -271,4 +327,73 @@ pub async fn get_session_events(
         .await
         .unwrap_or_default();
     ok!(serde_json::json!(to_json(&rows)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use coevo_store::{
+        migrate::run_migrations, pool::create_test_pool,
+        repos::worker_session_repo::WorkerSessionRepo, repos_opc::work_order_repo::WorkOrderRepo,
+    };
+
+    #[tokio::test]
+    async fn global_timeline_merges_tasks_and_worker_sessions() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let work_order = WorkOrder {
+            work_order_id: "wo-global-timeline".to_string(),
+            conversation_id: Some("conv-global".to_string()),
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "user-1".to_string(),
+            opc_id: "opc-1".to_string(),
+            mission_intent: "Summarize local notes".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Completed,
+            allowed_actions: vec!["read".to_string(), "analyze".to_string()],
+            restricted_actions: vec!["delete".to_string()],
+            risk_summary: "Green task".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+        sqlx::query(
+            "UPDATE work_orders SET created_at_ms=1, updated_at_ms=1 WHERE work_order_id=?",
+        )
+        .bind("wo-global-timeline")
+        .execute(&pool)
+        .await
+        .unwrap();
+        WorkerSessionRepo::create(
+            &pool,
+            "session-global-timeline",
+            "wo-global-timeline",
+            "agent-founder-01",
+            "worker-agent-founder-01",
+            "Completed",
+            "[]",
+            "[]",
+            "[]",
+            2,
+        )
+        .await
+        .unwrap();
+
+        let (status, Json(body)) = global_timeline(State(AppState::new(pool))).await;
+        assert_eq!(status, StatusCode::OK);
+        let items = body.as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "WorkerSessionCreated");
+        assert_eq!(items[0]["work_order_id"], "wo-global-timeline");
+        assert_eq!(items[1]["type"], "WorkOrderCreated");
+        assert_eq!(items[1]["mission_intent"], "Summarize local notes");
+    }
 }

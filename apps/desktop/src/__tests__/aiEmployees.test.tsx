@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AIEmployees from "../pages/AIEmployees";
+import { setLanguage } from "../settings/i18n";
 
 const api = vi.hoisted(() => ({
   getAgentMemory: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("../api/client", () => ({
 
 describe("AI Employee passports", () => {
   beforeEach(() => {
+    setLanguage("en");
     api.listEmployees.mockResolvedValue([
       {
         agent_id: "agent-founder-01",
@@ -75,6 +77,11 @@ describe("AI Employee passports", () => {
     expect(screen.getByText("Capabilities")).toBeInTheDocument();
     expect(screen.getByText("analysis")).toBeInTheDocument();
     expect(screen.getByText("no production write")).toBeInTheDocument();
+    expect(screen.getAllByText(/Role: Founder Office/).length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain("Role: FounderOffice");
+    expect(screen.getByText("Default view")).toBeInTheDocument();
+    expect(screen.getByText("Advanced identity details")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Advanced identity details"));
     expect(screen.getByText("Permission Boundary")).toBeInTheDocument();
     expect(screen.getByText("Max risk 0.3")).toBeInTheDocument();
     expect(screen.getByText("Network blocked")).toBeInTheDocument();
@@ -101,5 +108,34 @@ describe("AI Employee passports", () => {
     await waitFor(() => expect(api.seedEmployees).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Inserted: 1, Total: 1")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /Founder Chief of Staff/i })).toBeInTheDocument();
+  });
+
+  it("shows a neutral empty state when an employee has no memory yet", async () => {
+    const notFound = Object.assign(new Error("not found"), { status: 404 });
+    api.getAgentMemory.mockRejectedValue(notFound);
+
+    render(<AIEmployees />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Founder Chief of Staff/i }));
+
+    expect(await screen.findByText("No agent memory recorded yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/Memory unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it("localizes passport and memory labels in Chinese mode", async () => {
+    setLanguage("zh");
+    render(<AIEmployees />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Founder Chief of Staff/i }));
+
+    expect(await screen.findByText("AI 员工护照")).toBeInTheDocument();
+    expect(screen.getByText("护照 ID")).toBeInTheDocument();
+    expect(screen.getByText("能力")).toBeInTheDocument();
+    expect(screen.getByText("安全边界: 0.3")).toBeInTheDocument();
+    expect(screen.getByText("网络 已阻断")).toBeInTheDocument();
+    expect(screen.getByText("工作偏好")).toBeInTheDocument();
+    expect(screen.getAllByText("近期任务").length).toBeGreaterThan(0);
+
+    expect(document.body.textContent).not.toMatch(/Passport ID|Capabilities|Network blocked|Working preference|Recent tasks/);
   });
 });

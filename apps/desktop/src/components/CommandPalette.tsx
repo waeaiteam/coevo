@@ -1,28 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme, type ThemeMode } from "../hooks/useTheme";
+import { t, useLanguage } from "../settings/i18n";
+import Icon, { type IconName } from "./Icon";
 
 type Command = {
   id: string;
   label: string;
   hint: string;
   initials: string;
+  icon: IconName;
   run: () => void;
 };
 
 const pages = [
-  { id: "workbench", label: "工作台", hint: "输入任务", path: "/", initials: "gzt" },
-  { id: "employees", label: "AI 员工", hint: "查看团队", path: "/employees", initials: "aiyg" },
-  { id: "tasks", label: "任务", hint: "查看任务", path: "/work-orders", initials: "rw" },
-  { id: "clients", label: "客户", hint: "客户与记忆", path: "/memory", initials: "kh" },
-  { id: "files", label: "文件", hint: "合同与文件", path: "/contracts", initials: "wj" },
-  { id: "outcomes", label: "成果", hint: "方案与交付", path: "/plans", initials: "cg" },
-  { id: "dashboard", label: "运营概览", hint: "本地状态", path: "/dashboard", initials: "yygl" },
-  { id: "skills", label: "员工能力", hint: "技能管理", path: "/skills", initials: "ygnl" },
-  { id: "audit", label: "活动记录", hint: "审计导出", path: "/audit", initials: "hdjl" },
-  { id: "settings", label: "高级设置", hint: "模型与本地数据", path: "/settings/general", initials: "gjsz" },
-  { id: "model", label: "模型设置", hint: "连接模型", path: "/settings/model_provider", initials: "mxsz" },
-  { id: "storage", label: "本地数据", hint: "管理数据", path: "/settings/data", initials: "bdsj" },
+  { id: "new-chat", labelKey: "nav.new_chat", hintKey: "cmd.new_task_hint", path: "/", initials: "new chat new task xt xr xrw", icon: "plus" as IconName },
+  { id: "company", labelKey: "nav.my_company", hintKey: "cmd.my_company_hint", path: "/company", initials: "company opc wdgs wdopc", icon: "building" as IconName },
+  { id: "projects", labelKey: "nav.projects", hintKey: "cmd.projects_hint", path: "/projects", initials: "projects xm", icon: "folder-tree" as IconName },
+  { id: "tasks", labelKey: "nav.tasks", hintKey: "cmd.tasks_hint", path: "/work-orders", initials: "tasks rw gd workorders", icon: "list-checks" as IconName },
+  { id: "timeline", labelKey: "nav.timeline", hintKey: "cmd.timeline_hint", path: "/timeline", initials: "timeline sjx audit sj", icon: "history" as IconName },
+  { id: "settings", labelKey: "nav.settings", hintKey: "cmd.settings_hint", path: "/settings/general", initials: "settings sz", icon: "settings" as IconName },
+  { id: "dashboard", labelKey: "nav.advanced", hintKey: "cmd.dashboard_hint", path: "/dashboard", initials: "dashboard opc gzt advanced", icon: "gauge" as IconName },
+  { id: "founder", labelKey: "adv.founder_profile", hintKey: "adv.founder_profile_desc", path: "/founder", initials: "founder cshr", icon: "user" as IconName },
+  { id: "memory", labelKey: "adv.company_memory", hintKey: "adv.company_memory_desc", path: "/memory", initials: "company memory gsjy", icon: "database" as IconName },
+  { id: "skills", labelKey: "adv.skills", hintKey: "adv.skills_desc", path: "/skills", initials: "skills jn", icon: "puzzle" as IconName },
+  { id: "executors", labelKey: "adv.external_executors", hintKey: "adv.external_executors_desc", path: "/executors", initials: "executors zxq", icon: "external" as IconName },
+  { id: "contracts", labelKey: "adv.contracts", hintKey: "adv.contracts_desc", path: "/contracts", initials: "contracts hy", icon: "file-text" as IconName },
+  { id: "plans", labelKey: "adv.plans", hintKey: "adv.plans_desc", path: "/plans", initials: "plans jh", icon: "calendar" as IconName },
+  { id: "customs", labelKey: "adv.cognitive_customs", hintKey: "adv.cognitive_customs_desc", path: "/customs", initials: "customs rg", icon: "badge-check" as IconName },
+  { id: "risk", labelKey: "adv.risk_gate", hintKey: "adv.risk_gate_desc", path: "/risk", initials: "risk gate fx", icon: "shield-check" as IconName },
+  { id: "resolution", labelKey: "adv.resolution", hintKey: "adv.resolution_desc", path: "/resolution", initials: "resolution jj", icon: "git-branch" as IconName },
+  { id: "audit", labelKey: "nav.audit", hintKey: "cmd.audit_hint", path: "/audit", initials: "audit sj hd", icon: "clipboard" as IconName },
+  { id: "model", labelKey: "settings.model_provider", hintKey: "cmd.model_hint", path: "/settings/model_provider", initials: "model mx llm", icon: "brain" as IconName },
+  { id: "data", labelKey: "settings.data_management", hintKey: "adv.data_management_desc", path: "/settings/data_management", initials: "data sj", icon: "database" as IconName },
 ];
 
 function matches(command: Command, query: string) {
@@ -32,6 +42,7 @@ function matches(command: Command, query: string) {
 }
 
 export default function CommandPalette() {
+  const language = useLanguage();
   const navigate = useNavigate();
   const { setMode } = useTheme();
   const [open, setOpen] = useState(false);
@@ -40,22 +51,27 @@ export default function CommandPalette() {
 
   const commands = useMemo<Command[]>(() => {
     const navCommands = pages.map((page) => ({
-      ...page,
+      id: page.id,
+      label: t(page.labelKey),
+      hint: t(page.hintKey),
+      initials: page.initials,
+      icon: page.icon,
       run: () => navigate(page.path),
     }));
     const themeCommands = ([
-      ["theme-system", "跟随系统", "明暗主题", "xt", "system"],
-      ["theme-light", "浅色主题", "明亮模式", "qs", "light"],
-      ["theme-dark", "深色主题", "夜间模式", "ss", "dark"],
-    ] as const).map(([id, label, hint, initials, mode]) => ({
+      ["theme-system", "cmd.theme_system", "cmd.theme_system_hint", "system xt", "system", "monitor"],
+      ["theme-light", "cmd.theme_light", "cmd.theme_light_hint", "light qs", "light", "sun"],
+      ["theme-dark", "cmd.theme_dark", "cmd.theme_dark_hint", "dark ss", "dark", "moon"],
+    ] as const).map(([id, labelKey, hintKey, initials, mode, icon]) => ({
       id,
-      label,
-      hint,
+      label: t(labelKey),
+      hint: t(hintKey),
       initials,
+      icon: icon as IconName,
       run: () => setMode(mode as ThemeMode),
     }));
     return [...navCommands, ...themeCommands];
-  }, [navigate, setMode]);
+  }, [navigate, setMode, language]);
 
   const filtered = commands.filter((command) => matches(command, query));
 
@@ -87,12 +103,12 @@ export default function CommandPalette() {
   }
 
   return (
-    <div className="command-overlay" role="dialog" aria-modal="true" aria-label="命令面板" onMouseDown={() => setOpen(false)}>
+    <div className="command-overlay" role="dialog" aria-modal="true" aria-label={t("cmd.palette")} onMouseDown={() => setOpen(false)}>
       <div className="command-panel" onMouseDown={(event) => event.stopPropagation()}>
         <input
           autoFocus
           className="command-input"
-          placeholder="搜索页面或输入拼音首字母..."
+          placeholder={t("cmd.search_placeholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -119,14 +135,14 @@ export default function CommandPalette() {
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => run(command)}
             >
-              <span className="span-icon" aria-hidden="true">⌘</span>
+              <span className="span-icon" aria-hidden="true"><Icon name={command.icon} /></span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-semibold">{command.label}</span>
                 <span className="block truncate text-xs muted">{command.hint}</span>
               </span>
             </button>
           ))}
-          {filtered.length === 0 && <div className="timeline-empty">没有匹配结果</div>}
+          {filtered.length === 0 && <div className="timeline-empty">{t("cmd.no_results")}</div>}
         </div>
       </div>
     </div>

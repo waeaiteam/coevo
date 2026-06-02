@@ -9,7 +9,7 @@ export default function GovernancePanel() {
   const hasData = isReview || state.phase === "executing" || isDone;
 
   return (
-    <aside className="w-72 border-l overflow-y-auto p-4 space-y-4" style={{ background: "#fff", borderColor: "var(--border-subtle)" }}>
+    <aside className="w-72 border-l overflow-y-auto p-4 space-y-4" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
       <div className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
         Governance Status
       </div>
@@ -87,7 +87,7 @@ export default function GovernancePanel() {
             coevo never creates unconstrained agents. Task Agent Instances are short-lived. Ephemeral Sub-Agents: Hypothesis/Suggestion only.
           </div>
           {isReview && (
-            <div className="card" style={{ background: "var(--accent-dim)", borderColor: "rgba(99,102,241,0.2)" }}>
+            <div className="card" style={{ background: "var(--accent-dim)", borderColor: "var(--border-accent)" }}>
               <div className="text-xs leading-relaxed" style={{ color: "var(--accent)" }}>
                 Awaiting user confirmation.<br />
                 No execution has been performed yet.

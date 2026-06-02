@@ -188,7 +188,7 @@ fn validate_config_request(
     } else {
         existing_key.to_string()
     };
-    if kind == ModelProviderKind::OpenAICompatible {
+    if kind != ModelProviderKind::Mock {
         if base_url.is_empty() {
             return Err((
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -225,6 +225,15 @@ fn validate_config_request(
                 format!("INVALID_COST: {}", max_cost_per_task_usd),
             ));
         }
+    }
+    if matches!(
+        kind,
+        ModelProviderKind::OpenAICompatible
+            | ModelProviderKind::OpenAI
+            | ModelProviderKind::Anthropic
+            | ModelProviderKind::Gemini
+            | ModelProviderKind::DeepSeek
+    ) {
         if api_key.is_empty() {
             return Err((
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -533,5 +542,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn cloud_provider_candidate_requires_api_key_before_network_call() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool);
+
+        let candidate = PutConfigRequest {
+            provider_id: "desktop".to_string(),
+            kind: "DeepSeek".to_string(),
+            base_url: Some("https://api.deepseek.com/v1".to_string()),
+            api_key: Some(String::new()),
+            clear_api_key: None,
+            default_model: Some("deepseek-chat".to_string()),
+            fast_model: Some("deepseek-chat".to_string()),
+            reasoning_model: Some("deepseek-reasoner".to_string()),
+            structured_output_model: Some("deepseek-chat".to_string()),
+            max_tokens: Some(8192),
+            temperature: Some(0.7),
+            timeout_ms: Some(30000),
+            max_cost_per_task_usd: Some(5.0),
+        };
+
+        let (status, Json(body)) = test_connection(
+            State(state),
+            Json(TestConfigRequest {
+                config: Some(candidate),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"], "MISSING_API_KEY");
+    }
+
+    #[tokio::test]
+    async fn real_provider_candidate_requires_base_url_before_network_call() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool);
+
+        let candidate = PutConfigRequest {
+            provider_id: "desktop".to_string(),
+            kind: "DeepSeek".to_string(),
+            base_url: Some(String::new()),
+            api_key: Some("sk-test".to_string()),
+            clear_api_key: None,
+            default_model: Some("deepseek-chat".to_string()),
+            fast_model: Some("deepseek-chat".to_string()),
+            reasoning_model: Some("deepseek-reasoner".to_string()),
+            structured_output_model: Some("deepseek-chat".to_string()),
+            max_tokens: Some(8192),
+            temperature: Some(0.7),
+            timeout_ms: Some(30000),
+            max_cost_per_task_usd: Some(5.0),
+        };
+
+        let (status, Json(body)) = test_connection(
+            State(state),
+            Json(TestConfigRequest {
+                config: Some(candidate),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"], "INVALID_BASE_URL");
     }
 }

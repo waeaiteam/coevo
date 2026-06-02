@@ -25,20 +25,20 @@ export default function SettingsLayout({ section, content }: Props) {
     ...COMMON_SECTIONS.map((key) => ({
       key,
       label: t(`settings.${key}`),
-      icon: "C",
+      icon: key === "general" ? "○" : key === "model_provider" ? "◉" : key === "appearance" ? "◐" : "◧",
       group: "common" as const,
     })),
     ...ADVANCED_SECTIONS.map((key) => ({
       key,
       label: t(`settings.${key}`),
-      icon: "A",
+      icon: "◆",
       group: "advanced" as const,
     })),
   ];
 
   return (
     <div className="flex h-full" style={{ background: "var(--bg-primary)" }}>
-      <div className="w-48 border-r flex flex-col" style={{ background: "#fff", borderColor: "var(--border-subtle)" }}>
+      <div className="w-56 border-r flex flex-col" style={{ background: "var(--surface-raised)", borderColor: "var(--border-subtle)" }}>
         <div className="p-3">
           <SettingsSearch value={search} onChange={setSearch} />
         </div>

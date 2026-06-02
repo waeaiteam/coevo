@@ -3,7 +3,25 @@ import { getTenantId } from "../settings/identity";
 
 export type { HealthResponse, ContractResponse } from "../types";
 
-export function getApiBase(): string { try { return localStorage.getItem("coevo-api-base") || "http://127.0.0.1:8717"; } catch { return "http://127.0.0.1:8717"; } }
+const DEFAULT_API_BASE = "http://127.0.0.1:8717";
+
+export function getApiBase(): string {
+  try {
+    const envBase = String(import.meta.env.COEVO_API_BASE || "").trim();
+    if (envBase) return envBase;
+    const saved = localStorage.getItem("coevo-settings");
+    if (saved) {
+      const parsed = JSON.parse(saved) as { developer?: { api_base_url?: unknown } };
+      const savedBase = String(parsed.developer?.api_base_url || "").trim();
+      if (savedBase && savedBase !== DEFAULT_API_BASE) return savedBase;
+    }
+    const runtimeBase = localStorage.getItem("coevo-api-base");
+    if (runtimeBase) return runtimeBase;
+  } catch {
+    /* use default */
+  }
+  return DEFAULT_API_BASE;
+}
 export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-base", url); } catch {} }
 
 export function headers(): Record<string, string> {
@@ -141,6 +159,7 @@ export async function decideWorkOrderApproval(id: string, req: { approval_id: st
 export async function cancelWorkOrder(id: string) { return post(`/opc/work-orders/${id}/cancel`, {}); }
 export async function submitWorkOrderFeedback(id: string, feedback: string, agentId?: string) { return post(`/opc/work-orders/${id}/feedback`, { feedback, agent_id: agentId }); }
 export async function getWorkOrderTimeline(id: string): Promise<Record<string,unknown>[]> { return get(`/opc/work-orders/${id}/timeline`); }
+export async function getGlobalTimeline(): Promise<Record<string,unknown>[]> { return get("/opc/timeline"); }
 export async function getWorkOrderAuditExport(id: string): Promise<Record<string,unknown>> { return get(`/opc/work-orders/${id}/audit-export`); }
 export async function listConversations(): Promise<Record<string,unknown>[]> { return get("/opc/conversations"); }
 export async function createConversation(conversation: Record<string,unknown>) { return post("/opc/conversations", conversation); }

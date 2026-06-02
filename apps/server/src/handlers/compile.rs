@@ -94,7 +94,9 @@ mod tests {
     use super::*;
     use crate::state::AppState;
     use axum::extract::State;
-    use coevo_store::{migrate::run_migrations, pool::create_test_pool, repos::contract_repo::ContractRepo};
+    use coevo_store::{
+        migrate::run_migrations, pool::create_test_pool, repos::contract_repo::ContractRepo,
+    };
 
     #[tokio::test]
     async fn compile_contract_persists_contract_anchor() {

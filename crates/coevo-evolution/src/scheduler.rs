@@ -6,7 +6,10 @@ pub struct EvolutionScheduler;
 
 impl EvolutionScheduler {
     /// Determine the next action for an evolution proposal.
-    pub fn schedule(proposal: &SkillEvolutionProposal, eval: &SkillEvalResult) -> EvolutionProposalStatus {
+    pub fn schedule(
+        proposal: &SkillEvolutionProposal,
+        eval: &SkillEvalResult,
+    ) -> EvolutionProposalStatus {
         if !eval.passed {
             return EvolutionProposalStatus::NeedsHumanReview;
         }

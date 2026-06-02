@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import FirstRun from "../components/FirstRun";
 import Settings from "../pages/Settings";
-import { t } from "../settings/i18n";
+import { getLanguage, setLanguage, t } from "../settings/i18n";
 import { MODEL_PROVIDER_CONFIGURED_KEY } from "../settings/onboarding";
 
 const api = vi.hoisted(() => ({
@@ -75,9 +75,39 @@ describe("Desktop onboarding", () => {
 
     expect(screen.queryByText(oldQuickStart)).not.toBeInTheDocument();
     expect(screen.queryByText(oldMockCopy)).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Create your OPC/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Continue to Company Foundation/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Create your AI company/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Continue to company setup/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Configure Model Provider|Enter API Key/i })).not.toBeInTheDocument();
+  });
+
+  it("defaults to Chinese when no stored language and browser locale is zh", async () => {
+    localStorage.removeItem("coevo-lang");
+    vi.stubGlobal("navigator", { language: "zh-CN", languages: ["zh-CN"] });
+    vi.resetModules();
+    const freshI18n = await import("../settings/i18n");
+    expect(freshI18n.t("nav.new_task")).toBe("新任务");
+    setLanguage(getLanguage());
+  });
+
+  it("FirstRun keeps the detected language after entering company setup", async () => {
+    localStorage.removeItem("coevo-lang");
+    vi.stubGlobal("navigator", { language: "zh-CN", languages: ["zh-CN"] });
+    vi.resetModules();
+    const [{ default: FreshFirstRun }, freshI18n] = await Promise.all([
+      import("../components/FirstRun"),
+      import("../settings/i18n"),
+    ]);
+
+    render(
+      <MemoryRouter>
+        <FreshFirstRun onDone={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: freshI18n.t("first_run.continue_foundation") }));
+
+    expect(await screen.findByRole("heading", { name: freshI18n.t("first_run.foundation_title") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: freshI18n.t("first_run.create_and_continue") })).toBeInTheDocument();
   });
 
   it("FirstRun persists company foundation before opening model setup", async () => {
@@ -97,9 +127,9 @@ describe("Desktop onboarding", () => {
     fireEvent.change(screen.getByLabelText(/Owner name/i), {
       target: { value: "Wae" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Continue to Company Foundation/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue to company setup/i }));
 
-    expect(await screen.findByRole("heading", { name: /Company Foundation/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Company setup/i })).toBeInTheDocument();
     await waitFor(() => expect(api.seedEmployees).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(api.seedSkills).toHaveBeenCalledTimes(1));
 
@@ -125,7 +155,7 @@ describe("Desktop onboarding", () => {
     expect(localStorage.getItem("coevo-opc-name")).toBe("WAE AI Team");
     expect(localStorage.getItem("coevo-user-name")).toBe("Wae");
     expect(localStorage.getItem("coevo-tenant-id")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(opcId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(opcId).toBe("default-opc");
     expect(api.updateUserProfile).toHaveBeenCalledWith(expect.objectContaining({
       user_id: "default-founder",
       display_name: "Wae",
@@ -142,11 +172,12 @@ describe("Desktop onboarding", () => {
       policy_profile: "alpha-conservative",
     }));
     expect(api.createMemory).toHaveBeenCalledWith(expect.objectContaining({
-      scope: "Company",
+      scope: "company",
       owner_id: opcId,
       title: "Operating Principles",
       source: "first-run",
       provenance: `first-run:${opcId}:company-foundation`,
+      status: "active",
       cognitive_layer: "Suggestion",
     }));
 
@@ -167,7 +198,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Continue to Company Foundation/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue to company setup/i }));
     fireEvent.click(await screen.findByRole("button", { name: /Create OPC and continue/i }));
 
     await waitFor(() => expect(api.createMemory).toHaveBeenCalledTimes(1));
@@ -187,7 +218,7 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Continue to Company Foundation/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Continue to company setup/i }));
     expect(await screen.findByText(/seed employees failed/i)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Model Provider handoff/i })).not.toBeInTheDocument();
     const createButton = screen.getByRole("button", { name: /Create OPC and continue/i });
@@ -351,6 +382,38 @@ describe("Desktop onboarding", () => {
     await waitFor(() => expect(api.updateModelConfig).toHaveBeenCalledTimes(1));
     expect(JSON.stringify(localStorage)).not.toContain("sk-live-secret");
     expect(localStorage.getItem("coevo-settings") || "").not.toContain("sk-live-secret");
+  });
+
+  it("clears the API key field and SaveBar after a successful provider save", async () => {
+    api.updateModelConfig.mockResolvedValue({});
+    api.testModelConnection.mockResolvedValue({
+      model: "gpt-4o",
+      latency_ms: 12,
+      provider_kind: "OpenAI",
+    });
+    api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
+    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
+    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
+
+    render(
+      <MemoryRouter initialEntries={["/settings/model_provider"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/API Key/i), { target: { value: "sk-live-secret" } });
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument());
+    expect(screen.getByLabelText(/API Key/i)).toHaveValue("");
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    expect(api.updateModelConfig).toHaveBeenCalledWith(expect.objectContaining({
+      api_key: "sk-live-secret",
+    }));
   });
 
   it("does not mark the model provider configured when workspace bootstrap fails", async () => {

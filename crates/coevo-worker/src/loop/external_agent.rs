@@ -96,7 +96,9 @@ impl ExternalAgentBoundary {
                 reason: "Network egress blocked by sandbox profile".to_string(),
             },
             NetworkPolicy::Proxied { allowed_endpoints } => {
-                let allowed = allowed_endpoints.iter().any(|allowed| endpoint.starts_with(allowed));
+                let allowed = allowed_endpoints
+                    .iter()
+                    .any(|allowed| endpoint.starts_with(allowed));
                 EgressAttempt {
                     endpoint: endpoint.to_string(),
                     allowed,
@@ -181,13 +183,8 @@ mod tests {
 
         let auth = auth(vec!["file-readonly".to_string()]);
         let gate = GovernGate::default_for_authorization(&auth);
-        let decision = ExternalAgentBoundary::adjudicate_return_flow(
-            result,
-            &auth,
-            &[tool],
-            &gate,
-        )
-        .await;
+        let decision =
+            ExternalAgentBoundary::adjudicate_return_flow(result, &auth, &[tool], &gate).await;
 
         assert!(matches!(
             decision.side_effects[0].outcome,

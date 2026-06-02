@@ -1,8 +1,9 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, testModelConnection } from "../api/client";
+import { getApiBase, getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, testModelConnection } from "../api/client";
 
 describe("API Client", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     localStorage.clear();
   });
 
@@ -26,6 +27,33 @@ describe("API Client", () => {
     });
     const result = await getHealth();
     expect(result.status).toBe("ok");
+  });
+
+  it("getApiBase falls back to saved Developer API Base when runtime base is absent", () => {
+    localStorage.setItem("coevo-settings", JSON.stringify({
+      developer: { api_base_url: "http://127.0.0.1:8727" },
+    }));
+
+    expect(getApiBase()).toBe("http://127.0.0.1:8727");
+  });
+
+  it("getApiBase lets an explicit Developer API Base override the default web runtime base", () => {
+    localStorage.setItem("coevo-api-base", "http://127.0.0.1:8717");
+    localStorage.setItem("coevo-settings", JSON.stringify({
+      developer: { api_base_url: "http://127.0.0.1:8727" },
+    }));
+
+    expect(getApiBase()).toBe("http://127.0.0.1:8727");
+  });
+
+  it("getApiBase lets the build-time environment API Base drive isolated web dev runs", () => {
+    vi.stubEnv("COEVO_API_BASE", "http://127.0.0.1:8729");
+    localStorage.setItem("coevo-api-base", "http://127.0.0.1:8717");
+    localStorage.setItem("coevo-settings", JSON.stringify({
+      developer: { api_base_url: "http://127.0.0.1:8727" },
+    }));
+
+    expect(getApiBase()).toBe("http://127.0.0.1:8729");
   });
 
   it("post throws ApiError on 400", async () => {

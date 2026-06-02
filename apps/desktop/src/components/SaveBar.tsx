@@ -14,7 +14,7 @@ export default function SaveBar({
   if (!dirty && !saved) return null;
 
   return (
-    <div className="flex items-center justify-between gap-3 border-t px-6 py-3" style={{ background: "#fff", borderColor: "var(--border-subtle)" }}>
+    <div className="flex items-center justify-between gap-3 border-t px-6 py-3" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
       <div className="text-xs" style={{ color: saved ? "var(--green)" : "var(--yellow)" }}>
         {saved ? t("settings.saved") : t("settings.unsaved")}
       </div>

@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   createWorkOrder: vi.fn(),
   listConversations: vi.fn(),
   createConversation: vi.fn(),
+  getCompanyProfile: vi.fn(),
   listConversationMessages: vi.fn(),
   appendConversationMessage: vi.fn(),
   modelChat: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("../api/client", () => ({
   createWorkOrder: api.createWorkOrder,
   listConversations: api.listConversations,
   createConversation: api.createConversation,
+  getCompanyProfile: api.getCompanyProfile,
   listConversationMessages: api.listConversationMessages,
   appendConversationMessage: api.appendConversationMessage,
   modelChat: api.modelChat,
@@ -87,6 +89,7 @@ describe("customer-facing desktop workbench", () => {
       conversation_id: "conv-customer-1",
       title: "整理本周客户线索",
     });
+    api.getCompanyProfile.mockResolvedValue({ active_projects: ["客户项目"] });
     api.listConversationMessages.mockResolvedValue([]);
     api.appendConversationMessage.mockResolvedValue({ ok: true });
     api.modelChat.mockResolvedValue({
@@ -109,7 +112,7 @@ describe("customer-facing desktop workbench", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows a polished public workbench without internal governance terminology", () => {
+  it("shows a polished public workbench without internal governance terminology", async () => {
     renderWorkbench();
 
     expect(screen.getByRole("heading", { name: "今天让 AI 员工帮你做什么？" })).toBeInTheDocument();
@@ -119,8 +122,9 @@ describe("customer-facing desktop workbench", () => {
     expect(screen.getByLabelText("指派员工")).toBeInTheDocument();
     expect(screen.getByLabelText("模型")).toBeInTheDocument();
     expect(screen.getByText("今日进展")).toBeInTheDocument();
-    expect(screen.getByText("交付物")).toBeInTheDocument();
-    expect(screen.getByText("数据保存在本机")).toBeInTheDocument();
+    expect(screen.getByText("我的公司")).toBeInTheDocument();
+    expect(screen.getByText("项目")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("agent-founder-01")).toBeInTheDocument());
     expect(document.body.textContent).not.toMatch(INTERNAL_TERMS);
   });
 
@@ -142,12 +146,13 @@ describe("customer-facing desktop workbench", () => {
     });
     expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument();
     expect(screen.getByText(/我会先整理客户线索/)).toBeInTheDocument();
-    expect(screen.getByText("治理裁定")).toBeInTheDocument();
+    expect(screen.getByText("安全状态")).toBeInTheDocument();
+    expect(screen.getByText("打开任务")).toBeInTheDocument();
     expect(screen.getByText("执行时间线")).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(INTERNAL_TERMS);
   });
 
-  it("uses public navigation labels and keeps advanced controls behind settings", () => {
+  it("uses public navigation labels and keeps advanced controls behind settings", async () => {
     render(
       <MemoryRouter>
         <GovernanceProvider>
@@ -156,12 +161,12 @@ describe("customer-facing desktop workbench", () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole("link", { name: /工作台/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /AI 员工/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /任务/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /客户/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /文件/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /成果/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /高级设置/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "新对话" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "我的公司" })).toHaveAttribute("href", "/company");
+    expect(screen.getByRole("link", { name: "项目" })).toHaveAttribute("href", "/projects");
+    expect(screen.getByRole("link", { name: "任务" })).toHaveAttribute("href", "/work-orders");
+    expect(screen.getByRole("link", { name: "时间线" })).toHaveAttribute("href", "/timeline");
+    expect(screen.getByRole("link", { name: "设置" })).toHaveAttribute("href", "/settings/general");
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
   });
 });

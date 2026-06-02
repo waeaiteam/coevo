@@ -6,10 +6,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::ShellExt;
 
 static API_BASE: Mutex<String> = Mutex::new(String::new());
 static SIDECAR: Mutex<Option<tauri_plugin_shell::process::CommandChild>> = Mutex::new(None);
+static LAUNCH_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
 
 fn coevo_home() -> PathBuf {
     if let Ok(h) = std::env::var("COEVO_HOME") {
@@ -107,6 +109,7 @@ fn get_api_base() -> String {
 
 #[tauri::command]
 async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
+    let _launch_guard = LAUNCH_LOCK.lock().await;
     {
         let api = API_BASE.lock().unwrap();
         if !api.is_empty() {
@@ -284,16 +287,28 @@ fn open_coevo_dir() -> Result<String, String> {
     Ok(home.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("Choose project folder")
+        .blocking_pick_folder();
+    Ok(selected.map(|path| path.to_string()))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_coevo_home,
             get_api_base,
             launch_server,
             stop_server,
             open_logs_dir,
-            open_coevo_dir
+            open_coevo_dir,
+            choose_project_folder
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

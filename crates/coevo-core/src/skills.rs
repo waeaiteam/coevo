@@ -38,7 +38,13 @@ pub struct AgentSkillPackage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillStatus {
-    Draft, Proposed, Verified, Approved, Active, Deprecated, Revoked,
+    Draft,
+    Proposed,
+    Verified,
+    Approved,
+    Active,
+    Deprecated,
+    Revoked,
 }
 
 // ---- Skill Test Case ----
@@ -89,20 +95,33 @@ pub struct SkillEvolutionProposal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionSourceType {
-    Failure, RepeatedSuccess, UserFeedback, AgentReflection,
-    CriticObjection, ADRFeedback,
+    Failure,
+    RepeatedSuccess,
+    UserFeedback,
+    AgentReflection,
+    CriticObjection,
+    ADRFeedback,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionProposalType {
-    CreateNewSkill, PatchSkill, DeprecateSkill, SplitSkill, MergeSkills,
+    CreateNewSkill,
+    PatchSkill,
+    DeprecateSkill,
+    SplitSkill,
+    MergeSkills,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionProposalStatus {
-    Draft, UnderVerification, NeedsHumanReview, Approved, Rejected, Applied,
+    Draft,
+    UnderVerification,
+    NeedsHumanReview,
+    Approved,
+    Rejected,
+    Applied,
 }
 
 // ---- Skill Version Record ----
@@ -146,8 +165,14 @@ pub struct FailureAnalysis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureCategory {
-    MissingCapability, WrongToolUse, BadPromptProcedure,
-    InsufficientEvidence, PolicyViolation, MemoryStale,
-    ExternalExecutorFailure, HallucinatedFact,
-    OverConfidentDecision, UserPreferenceMismatch,
+    MissingCapability,
+    WrongToolUse,
+    BadPromptProcedure,
+    InsufficientEvidence,
+    PolicyViolation,
+    MemoryStale,
+    ExternalExecutorFailure,
+    HallucinatedFact,
+    OverConfidentDecision,
+    UserPreferenceMismatch,
 }

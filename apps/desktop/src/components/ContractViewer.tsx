@@ -4,14 +4,21 @@ export default function ContractViewer({ result }: { result: ContractResponse })
   const c = result.contract as Record<string, unknown>;
 
   return (
-    <div className="bg-white rounded border p-4 space-y-3">
+    <div className="card space-y-3">
       <div className="flex justify-between items-center">
         <h3 className="font-bold">Compiled Contract</h3>
-        <span className={`text-xs px-2 py-0.5 rounded ${result.ambiguity_score > 0.5 ? "bg-yellow-200" : "bg-green-200"}`}>
+        <span
+          className="text-xs px-2 py-0.5 rounded"
+          style={
+            result.ambiguity_score > 0.5
+              ? { background: "var(--yellow-dim)", color: "var(--yellow)" }
+              : { background: "var(--green-dim)", color: "var(--green)" }
+          }
+        >
           Ambiguity: {result.ambiguity_score.toFixed(2)}
         </span>
       </div>
-      <div className="text-xs font-mono text-gray-500 break-all">
+      <div className="text-xs font-mono break-all" style={{ color: "var(--text-secondary)" }}>
         Hash: {result.contract_hash}
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -21,13 +28,13 @@ export default function ContractViewer({ result }: { result: ContractResponse })
         <Field label="Risk Score" value={String((c.risk_tolerance_profile as Record<string, unknown>)?.max_risk_score)} />
       </div>
       {result.compile_warnings.length > 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded p-2 text-xs text-yellow-700">
+        <div className="border rounded p-2 text-xs" style={{ background: "var(--yellow-dim)", borderColor: "var(--yellow)", color: "var(--yellow)" }}>
           Warnings: {result.compile_warnings.join(", ")}
         </div>
       )}
       <details className="text-xs">
-        <summary className="cursor-pointer text-gray-500">Full JSON</summary>
-        <pre className="mt-2 bg-gray-100 p-2 rounded overflow-x-auto">
+        <summary className="cursor-pointer" style={{ color: "var(--text-secondary)" }}>Full JSON</summary>
+        <pre className="mt-2 p-2 rounded overflow-x-auto" style={{ background: "var(--surface-raised)" }}>
           {JSON.stringify(c, null, 2)}
         </pre>
       </details>
@@ -38,7 +45,7 @@ export default function ContractViewer({ result }: { result: ContractResponse })
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <span className="text-gray-400">{label}:</span>{" "}
+      <span style={{ color: "var(--text-muted)" }}>{label}:</span>{" "}
       <span className="font-mono">{value || "—"}</span>
     </div>
   );

@@ -4,7 +4,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ModelProviderKind { Mock, OpenAICompatible, OpenAI, Anthropic, Gemini, DeepSeek, Ollama, Local }
+pub enum ModelProviderKind {
+    Mock,
+    OpenAICompatible,
+    OpenAI,
+    Anthropic,
+    Gemini,
+    DeepSeek,
+    Ollama,
+    Local,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelProviderConfig {
@@ -24,18 +33,49 @@ pub struct ModelProviderConfig {
 
 impl ModelProviderConfig {
     pub fn mock() -> Self {
-        Self { provider_id:"mock".into(), kind:ModelProviderKind::Mock, base_url:String::new(), api_key:String::new(), default_model:"mock-model".into(), fast_model:"mock-model".into(), reasoning_model:"mock-model".into(), structured_output_model:"mock-model".into(), max_tokens:4096, temperature:0.7, timeout_ms:30000, max_cost_per_task_usd:0.0 }
+        Self {
+            provider_id: "mock".into(),
+            kind: ModelProviderKind::Mock,
+            base_url: String::new(),
+            api_key: String::new(),
+            default_model: "mock-model".into(),
+            fast_model: "mock-model".into(),
+            reasoning_model: "mock-model".into(),
+            structured_output_model: "mock-model".into(),
+            max_tokens: 4096,
+            temperature: 0.7,
+            timeout_ms: 30000,
+            max_cost_per_task_usd: 0.0,
+        }
     }
     pub fn mask_key(&self) -> String {
-        if self.api_key.len() <= 8 { "****".into() } else { format!("{}****{}", &self.api_key[..4], &self.api_key[self.api_key.len()-4..]) }
+        if self.api_key.len() <= 8 {
+            "****".into()
+        } else {
+            format!(
+                "{}****{}",
+                &self.api_key[..4],
+                &self.api_key[self.api_key.len() - 4..]
+            )
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModelRole { MissionDraft, AgentReasoning, Critic, Synthesizer, SkillGenerator, StructuredOutput }
+pub enum ModelRole {
+    MissionDraft,
+    AgentReasoning,
+    Critic,
+    Synthesizer,
+    SkillGenerator,
+    StructuredOutput,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelMessage { pub role: String, pub content: String }
+pub struct ModelMessage {
+    pub role: String,
+    pub content: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRequest {
@@ -49,7 +89,10 @@ pub struct ModelRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResponseFormat { Text, Json }
+pub enum ResponseFormat {
+    Text,
+    Json,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelResponse {
@@ -63,7 +106,11 @@ pub struct ModelResponse {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ModelUsage { pub prompt_tokens: u64, pub completion_tokens: u64, pub total_tokens: u64 }
+pub struct ModelUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredModel {

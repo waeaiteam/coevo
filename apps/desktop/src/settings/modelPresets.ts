@@ -137,6 +137,6 @@ export function chooseModelRoles(models: DiscoveredModel[], preset: ProviderPres
     fast_model: fastModel,
     reasoning_model: reasoningModel,
     structured_output_model: structuredModel,
-    max_tokens: chosenMeta?.max_output_tokens || preset.maxTokens,
+    max_tokens: chosenMeta?.max_output_tokens || chosenMeta?.max_context_tokens || preset.maxTokens,
   };
 }

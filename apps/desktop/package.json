@@ -4,16 +4,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "dev": "node scripts/with-artifacts.mjs vite",
+    "build": "node scripts/with-artifacts.mjs tsc && node scripts/with-artifacts.mjs vite build",
+    "preview": "node scripts/with-artifacts.mjs vite preview",
+    "tauri": "node scripts/with-artifacts.mjs tauri",
+    "test": "node scripts/with-artifacts.mjs vitest run",
+    "test:watch": "node scripts/with-artifacts.mjs vitest",
     "test:synthetic-opc": "python ../../scripts/synthetic_opc_user_test.py",
-    "build:sidecar": "node scripts/build-sidecar.mjs",
-    "check:tauri": "npm run build:sidecar && cd src-tauri && cargo check",
-    "build:tauri": "npm run build:sidecar && npm run build && npx tauri build"
+    "build:sidecar": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs",
+    "check:tauri": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs && cd src-tauri && node ../scripts/with-artifacts.mjs cargo check",
+    "build:tauri": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs && node scripts/with-artifacts.mjs tsc && node scripts/with-artifacts.mjs vite build && node scripts/with-artifacts.mjs tauri build"
   },
   "dependencies": {
     "react": "^18.3.1",

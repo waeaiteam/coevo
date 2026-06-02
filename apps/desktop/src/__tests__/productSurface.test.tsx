@@ -19,8 +19,12 @@ const api = vi.hoisted(() => ({
   executorHealth: vi.fn(),
   executorDryRun: vi.fn(),
   listWorkOrders: vi.fn(),
+  getGlobalTimeline: vi.fn(),
   listMemory: vi.fn(),
   listConversations: vi.fn(),
+  getCompanyProfile: vi.fn(),
+  getUserProfile: vi.fn(),
+  getModelConfig: vi.fn(),
   discoverModels: vi.fn(),
   testModelConnection: vi.fn(),
   updateModelConfig: vi.fn(),
@@ -39,8 +43,12 @@ vi.mock("../api/client", () => ({
   executorHealth: api.executorHealth,
   executorDryRun: api.executorDryRun,
   listWorkOrders: api.listWorkOrders,
+  getGlobalTimeline: api.getGlobalTimeline,
   listMemory: api.listMemory,
   listConversations: api.listConversations,
+  getCompanyProfile: api.getCompanyProfile,
+  getUserProfile: api.getUserProfile,
+  getModelConfig: api.getModelConfig,
   discoverModels: api.discoverModels,
   testModelConnection: api.testModelConnection,
   updateModelConfig: api.updateModelConfig,
@@ -63,8 +71,12 @@ describe("ordinary user product surface", () => {
     api.getHealth.mockResolvedValue({ status: "ok", version: "1.0.0" });
     api.listExecutors.mockResolvedValue([]);
     api.listWorkOrders.mockResolvedValue([]);
+    api.getGlobalTimeline.mockResolvedValue([]);
     api.listMemory.mockResolvedValue([]);
     api.listConversations.mockResolvedValue([]);
+    api.getCompanyProfile.mockResolvedValue({ active_projects: [] });
+    api.getUserProfile.mockResolvedValue({ active_projects: [] });
+    api.getModelConfig.mockResolvedValue({ kind: "DeepSeek", has_api_key: true });
     api.registerExecutor.mockResolvedValue({ ok: true });
     api.testModelConnection.mockResolvedValue({ model: "gpt-4o", latency_ms: 9, provider_kind: "OpenAI" });
     api.updateModelConfig.mockResolvedValue({ ok: true });
@@ -161,14 +173,18 @@ describe("ordinary user product surface", () => {
     expect(screen.getByText("Company Operating Room")).toBeInTheDocument();
     expect(await screen.findByText("2 active AI employees")).toBeInTheDocument();
     expect(screen.getByText("2 company memories")).toBeInTheDocument();
-    expect(screen.getByText("3 work orders")).toBeInTheDocument();
+    expect(screen.getByText("3 tasks")).toBeInTheDocument();
     expect(screen.getByText("1 conversation")).toBeInTheDocument();
     expect(screen.getByText("Founder Chief of Staff")).toBeInTheDocument();
     expect(screen.getByText("Risk Reviewer")).toBeInTheDocument();
     expect(screen.getByText("Company operating rules")).toBeInTheDocument();
     expect(screen.getByText("Draft customer notification")).toBeInTheDocument();
-    expect(screen.getByText("WaitingApproval")).toBeInTheDocument();
-    expect(screen.getByText("Red blocked")).toBeInTheDocument();
+    expect(screen.getByText("Waiting confirmation")).toBeInTheDocument();
+    expect(screen.getByText("Safety pause active")).toBeInTheDocument();
+    expect(screen.getByText("Needs confirmation")).toBeInTheDocument();
+    expect(screen.getByText("Paused by safety rules")).toBeInTheDocument();
+    expect(screen.getByText("Safety & confirmation")).toBeInTheDocument();
+    expect(screen.getByText("Safety rules")).toBeInTheDocument();
     expect(screen.getByText("Onboarding feedback")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Manage employees/i })).toHaveAttribute("href", "/employees");
     expect(screen.getByRole("link", { name: /Open task center/i })).toHaveAttribute("href", "/work-orders");
@@ -200,19 +216,38 @@ describe("ordinary user product surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
 
+    expect(await screen.findByRole("link", { name: /New Chat/i })).toHaveAttribute("href", "/");
+    expect(screen.getByText("Recent Chats")).toBeInTheDocument();
     const nav = await screen.findByRole("navigation", { name: /Primary/i });
-    expect(within(nav).getByRole("link", { name: /Workbench/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /AI Employees/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /My Company/i })).toHaveAttribute("href", "/company");
+    expect(within(nav).getByRole("link", { name: /Projects/i })).toHaveAttribute("href", "/projects");
     expect(within(nav).getByRole("link", { name: /^Tasks$/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /Clients/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /^Files$/i })).toBeInTheDocument();
-    expect(within(nav).getByRole("link", { name: /^Outcomes$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Advanced Settings/i })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: /Timeline/i })).toHaveAttribute("href", "/timeline");
+    expect(within(nav).getByRole("link", { name: /^Settings$/i })).toHaveAttribute("href", "/settings/general");
 
-    expect(within(nav).queryByRole("link", { name: /New Chat/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /Workbench/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /AI Employees/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /Clients/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /^Files$/i })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: /^Outcomes$/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /^Skills$/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Executors/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Risk Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("routes the Timeline entry to the company timeline page", async () => {
+    localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");
+
+    render(
+      <MemoryRouter initialEntries={["/timeline"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
+
+    expect(await screen.findByRole("heading", { name: /Timeline/i })).toBeInTheDocument();
+    expect(screen.getByText(/Company activity and task history/i)).toBeInTheDocument();
   });
 
   it("Settings Advanced exposes all advanced setting sections", () => {
@@ -226,12 +261,12 @@ describe("ordinary user product surface", () => {
 
     const advanced = screen.getByRole("group", { name: /Advanced/i });
     [
-      "Agent Runtime",
-      "Governance",
-      "Risk Gate",
-      "Cognitive Customs",
-      "Policy Engine",
-      "Privacy",
+      "Runtime controls",
+      "Approval & safety",
+      "Risk rules",
+      "Memory rules",
+      "Policy rules",
+      "Privacy & Data",
       "Developer Mode",
     ].forEach((label) => {
       expect(within(advanced).getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
@@ -249,6 +284,70 @@ describe("ordinary user product surface", () => {
 
     expect(screen.queryByText("Reset Demo Data")).not.toBeInTheDocument();
     expect(screen.getByText("Reset Local UI State")).toBeInTheDocument();
+  });
+
+  it("advanced settings panels expose real controls instead of blank cards", () => {
+    const cases = [
+      ["/settings/agent_runtime", "Maximum AI employees per task"],
+      ["/settings/governance", "Auto-start low-risk work"],
+      ["/settings/risk_gate", "Green threshold"],
+      ["/settings/cognitive_customs", "Default memory TTL"],
+      ["/settings/privacy", "Log retention days"],
+    ];
+
+    for (const [route, label] of cases) {
+      cleanup();
+      render(
+        <MemoryRouter initialEntries={[route]}>
+          <Routes>
+            <Route path="/settings/*" element={<Settings />} />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("Developer Mode reset clears local UI runtime state", () => {
+    localStorage.setItem("coevo-settings", JSON.stringify({ appearance: { theme: "dark" } }));
+    localStorage.setItem("coevo-theme", "dark");
+    localStorage.setItem("coevo-api-base", "http://127.0.0.1:8718");
+
+    render(
+      <MemoryRouter initialEntries={["/settings/developer"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Reset$/ }));
+
+    expect(localStorage.getItem("coevo-settings")).toBeNull();
+    expect(localStorage.getItem("coevo-theme")).toBeNull();
+    expect(localStorage.getItem("coevo-api-base")).toBe("http://127.0.0.1:8718");
+    expect(screen.getByText("Local UI state reset")).toBeInTheDocument();
+  });
+
+  it("Developer Mode saves API Base changes through the visible save bar", () => {
+    render(
+      <MemoryRouter initialEntries={["/settings/developer"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByDisplayValue("http://127.0.0.1:8717"), {
+      target: { value: "http://127.0.0.1:8727" },
+    });
+
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(localStorage.getItem("coevo-api-base")).toBe("http://127.0.0.1:8727");
+    expect(screen.getByText("Saved")).toBeInTheDocument();
   });
 
   it("External Executor registration does not create a mock executor by default", async () => {
@@ -279,9 +378,14 @@ describe("ordinary user product surface", () => {
 
     fireEvent.change(await screen.findByLabelText(/Language/i), { target: { value: "zh" } });
 
-    expect(await screen.findByRole("link", { name: "工作台" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "高级设置" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "新对话" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "我的公司" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "项目" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "任务" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "时间线" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "语言与外观" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "中文" })).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(MOJIBAKE_PATTERN);
   });
 
@@ -298,8 +402,12 @@ describe("ordinary user product surface", () => {
 
     fireEvent.change(await screen.findByLabelText("语言"), { target: { value: "en" } });
 
-    expect(await screen.findByRole("link", { name: /Workbench/ })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Advanced Settings/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /New Chat/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /My Company/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Tasks$/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Timeline/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Settings$/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Language & Appearance/ })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("新对话");
   });

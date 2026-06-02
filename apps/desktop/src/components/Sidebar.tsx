@@ -1,43 +1,161 @@
-import { NavLink } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, NavLink } from "react-router-dom";
+import { listConversations } from "../api/client";
 import { t, useLanguage } from "../settings/i18n";
+import { formatRelativeTime, shortText, stringField, type ProductRow } from "../utils/productSurface";
 
-const primaryLinks = [
-  { to: "/", key: "nav.workbench", icon: "⌂" },
-  { to: "/employees", key: "nav.ai_staff", icon: "人" },
-  { to: "/work-orders", key: "nav.tasks", icon: "✓" },
-  { to: "/memory", key: "nav.clients", icon: "名" },
-  { to: "/contracts", key: "nav.files", icon: "文" },
-  { to: "/plans", key: "nav.outcomes", icon: "果" },
+const ACTIVE_CONVERSATION_KEY = "coevo-active-conversation-id";
+
+type IconName = "new-chat" | "company" | "projects" | "tasks" | "timeline" | "settings" | "advanced";
+
+const primaryLinks: Array<{ to: string; key: string; icon: IconName; end?: boolean }> = [
+  { to: "/company", key: "nav.my_company", icon: "company" },
+  { to: "/projects", key: "nav.projects", icon: "projects" },
+  { to: "/work-orders", key: "nav.tasks", icon: "tasks" },
+  { to: "/timeline", key: "nav.timeline", icon: "timeline" },
+  { to: "/settings/general", key: "nav.settings", icon: "settings" },
 ];
 
-export default function Sidebar() {
-  useLanguage();
+function NavIcon({ name }: { name: IconName }) {
+  const paths: Record<IconName, JSX.Element> = {
+    "new-chat": (
+      <>
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </>
+    ),
+    company: (
+      <>
+        <path d="M4 20V9l8-5 8 5v11" />
+        <path d="M9 20v-6h6v6" />
+      </>
+    ),
+    projects: (
+      <>
+        <path d="M4 6h6l2 2h8v10a2 2 0 0 1-2 2H4z" />
+        <path d="M4 6v12" />
+      </>
+    ),
+    tasks: (
+      <>
+        <path d="M9 11l2 2 4-5" />
+        <path d="M5 6h2" />
+        <path d="M5 12h2" />
+        <path d="M5 18h2" />
+        <path d="M11 18h8" />
+      </>
+    ),
+    timeline: (
+      <>
+        <path d="M12 8v5l3 2" />
+        <path d="M21 12a9 9 0 1 1-3-6.7" />
+        <path d="M21 4v5h-5" />
+      </>
+    ),
+    settings: (
+      <>
+        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+        <path d="M19.4 15a1.8 1.8 0 0 0 .36 2l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05a1.8 1.8 0 0 0-2-.36 1.8 1.8 0 0 0-1 1.63V21a2 2 0 1 1-4 0v-.1a1.8 1.8 0 0 0-1-1.63 1.8 1.8 0 0 0-2 .36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05a1.8 1.8 0 0 0 .36-2 1.8 1.8 0 0 0-1.63-1H3a2 2 0 1 1 0-4h.1a1.8 1.8 0 0 0 1.63-1 1.8 1.8 0 0 0-.36-2l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05a1.8 1.8 0 0 0 2 .36 1.8 1.8 0 0 0 1-1.63V3a2 2 0 1 1 4 0v.1a1.8 1.8 0 0 0 1 1.63 1.8 1.8 0 0 0 2-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 2 1.8 1.8 0 0 0 1.63 1H21a2 2 0 1 1 0 4h-.1a1.8 1.8 0 0 0-1.5 1Z" />
+      </>
+    ),
+    advanced: (
+      <>
+        <path d="M4 7h16" />
+        <path d="M4 12h10" />
+        <path d="M4 17h16" />
+      </>
+    ),
+  };
+
   return (
-    <aside className="sidebar-shell flex min-w-0 flex-col">
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  );
+}
+
+export default function Sidebar() {
+  const language = useLanguage();
+  const [conversations, setConversations] = useState<ProductRow[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    listConversations()
+      .then((rows) => {
+        if (alive) setConversations(Array.isArray(rows) ? rows as ProductRow[] : []);
+      })
+      .catch(() => {
+        if (alive) setConversations([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [language]);
+
+  function rememberConversation(id: string) {
+    try {
+      localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    } catch {
+      // Ignore local persistence failures.
+    }
+  }
+
+  return (
+    <aside className="sidebar-shell product-sidebar flex min-w-0 flex-col">
       <div className="sidebar-brand">
-        <div className="mb-1 flex items-center gap-2">
+        <Link to="/company" className="mb-1 flex items-center gap-2">
           <span className="sidebar-logo">c</span>
           <span className="sidebar-text truncate text-sm font-bold tracking-tight">{t("app.name")}</span>
-        </div>
+        </Link>
         <div className="sidebar-tagline truncate text-xs muted">{t("app.tagline")}</div>
       </div>
+
+      <div className="px-2 py-3">
+        <NavLink to="/" end className={({ isActive }) => `nav-item product-new-chat ${isActive ? "active" : ""}`}>
+          <span className="nav-icon" aria-hidden="true"><NavIcon name="new-chat" /></span>
+          <span className="sidebar-text truncate">{t("nav.new_chat")}</span>
+        </NavLink>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-title sidebar-text">{t("nav.recent_chats")}</div>
+        <div className="sidebar-conversation-list">
+          {conversations.slice(0, 7).map((conversation, index) => {
+            const id = stringField(conversation, "conversation_id") || `conversation-${index}`;
+            return (
+              <Link
+                key={id}
+                to={`/conversations/${encodeURIComponent(id)}`}
+                className="sidebar-conversation"
+                onClick={() => rememberConversation(id)}
+              >
+                <span className="sidebar-text truncate">{shortText(stringField(conversation, "title") || t("chat.untitled"), 34)}</span>
+                <span className="sidebar-text sidebar-conversation-time">{formatRelativeTime(Number(conversation.updated_at_ms || 0))}</span>
+              </Link>
+            );
+          })}
+          {conversations.length === 0 && <div className="sidebar-empty sidebar-text">{t("chat.no_recent")}</div>}
+        </div>
+      </div>
+
       <nav aria-label={t("nav.primary")} className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
         {primaryLinks.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}
-            end={link.to === "/"}
+            end={link.end}
             className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
           >
-            <span className="nav-icon" aria-hidden="true">{link.icon}</span>
+            <span className="nav-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
             <span className="sidebar-text truncate">{t(link.key)}</span>
           </NavLink>
         ))}
       </nav>
-      <div className="sidebar-footer">
-        <NavLink to="/settings/general" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
-          <span className="nav-icon" aria-hidden="true">⌘</span>
-          <span className="sidebar-text truncate">{t("nav.advanced_settings")}</span>
+
+      <div className="sidebar-footer px-2 py-2 text-[11px] leading-5" style={{ color: "var(--text-muted)" }}>
+        <NavLink to="/dashboard" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+          <span className="nav-icon" aria-hidden="true"><NavIcon name="advanced" /></span>
+          <span className="sidebar-text truncate">{t("nav.advanced")}</span>
         </NavLink>
       </div>
     </aside>

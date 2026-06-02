@@ -18,6 +18,34 @@ type RowResult = {
   payload: Record<string, unknown>;
 };
 
+function friendlyStatus(status: string): string {
+  if (status === "Completed") return t("workorders.status_completed");
+  if (status === "Failed") return t("workorders.status_failed");
+  if (status === "WaitingApproval") return t("workorders.status_waiting");
+  if (status === "Running") return t("workorders.status_running");
+  return t("workorders.status_ready");
+}
+
+function summarizeExecutionError(input: unknown): string {
+  const raw = String(input || "").trim();
+  if (!raw) return "Model is unavailable right now. Please check model settings and try again.";
+  if (raw === "ok" || raw === "\"ok\"") return "Model returned an invalid response. Please retry or change model.";
+  if (raw.includes("MODEL_ROUTE_UNAVAILABLE") || raw.includes("Provider unreachable")) {
+    return "Model execution is unavailable right now. Please check model settings and try again.";
+  }
+  if (raw.includes("JSON schema violation") || raw.includes("EOF while parsing")) {
+    return "Model returned an invalid structured response. Please switch model or retry.";
+  }
+  return raw;
+}
+
+function displayAssignee(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === "-") return t("mission.default_employee");
+  if (trimmed.startsWith("agent-")) return t("mission.default_employee");
+  return trimmed;
+}
+
 function parseJson(value: unknown) {
   if (typeof value !== "string" || !value.trim()) return value;
   try {
@@ -34,24 +62,27 @@ function timelineToSpans(items: WorkOrderRecord[]): TimelineSpan[] {
     const output = parseJson(details.output_json);
     const payload = parseJson(details.payload_json) as Record<string, unknown>;
     const outputRecord = output && typeof output === "object" ? output as Record<string, unknown> : {};
+    const eventType = String(item.type || "event");
+    const eventStatus = String(details.status || payload?.status || "");
+    const hasFailure = eventType === "LifecycleError" || eventStatus === "Failed" || Boolean(payload?.error);
     const gate = outputRecord.gate && typeof outputRecord.gate === "object"
       ? outputRecord.gate as TimelineSpan["gate"]
       : payload?.reason
-        ? { outcome: item.type === "ApprovalRequired" ? "need_approval" : item.type === "WorkerBlocked" ? "blocked" : "allow", reason: String(payload.reason), action_digest: String(payload.action_digest || "") }
-        : { outcome: "allow" };
+        ? { outcome: item.type === "ApprovalRequired" ? "need_approval" : item.type === "WorkerBlocked" || hasFailure ? "blocked" : "allow", reason: String(payload.reason), action_digest: String(payload.action_digest || "") }
+        : { outcome: hasFailure ? "blocked" : "allow", reason: hasFailure ? summarizeExecutionError(payload?.error) : undefined };
     const started = Number(details.started_at_ms || item.time_ms || 0);
     const ended = Number(details.ended_at_ms || started);
     return {
-      id: String(details.step_id || details.event_id || `${item.type}-${index}`),
-      type: String(item.type || "event"),
-      label: String(item.type || item.title || "步骤"),
+      id: String(details.step_id || details.event_id || `${eventType}-${index}`),
+      type: eventType,
+      label: String(item.title || item.label || item.message || item.type || "步骤"),
       round: Number((outputRecord.round ?? (payload as Record<string, unknown>)?.round ?? 0) || 0),
       durationMs: Math.max(0, ended - started),
       tokens: Number((outputRecord.usage_total as Record<string, unknown> | undefined)?.total_tokens || (outputRecord.usage as Record<string, unknown> | undefined)?.total_tokens || 0),
       costUsd: Number(outputRecord.cost_total_usd || outputRecord.estimated_cost_usd || 0),
-      trust: String(item.type || "").includes("Executor") ? "external" : "native",
+      trust: eventType.includes("Executor") ? "external" : "native",
       gate,
-      overlays: gate?.outcome === "deny" ? ["deny"] : gate?.outcome === "need_approval" ? ["need_approval"] : gate?.outcome === "blocked" ? ["sandbox_blocked"] : [],
+      overlays: gate?.outcome === "deny" ? ["deny"] : gate?.outcome === "need_approval" ? ["need_approval"] : gate?.outcome === "blocked" && !hasFailure ? ["sandbox_blocked"] : [],
       thought: String(outputRecord.thought || ""),
       proposal: outputRecord.proposal,
       confidence: Number(outputRecord.confidence || 0),
@@ -82,6 +113,16 @@ function statusTone(status: string) {
   if (status === "Completed") return { background: "var(--green-dim)", color: "var(--green)" };
   if (status === "Failed") return { background: "var(--red-dim)", color: "var(--red)" };
   return { background: "var(--yellow-dim)", color: "var(--yellow)" };
+}
+
+function nextActionLabel(status: string, track: string, running: boolean): string {
+  if (running || status === "Running") return t("workorders.next_running");
+  if (track === "red") return t("workorders.next_blocked");
+  if (status === "Completed") return t("workorders.next_view_result");
+  if (status === "Failed") return t("workorders.next_retry");
+  if (status === "WaitingApproval") return t("workorders.next_waiting");
+  if (track === "yellow") return t("workorders.next_submit_approval");
+  return t("workorders.next_execute");
 }
 
 export default function WorkOrders() {
@@ -169,12 +210,18 @@ export default function WorkOrders() {
   async function decideApproval(id: string, decision: "approve" | "reject", comment: string) {
     const approvalId = String(rowResults[id]?.payload?.approval_id || "");
     if (!approvalId) {
-      setResult(`${t("workorders.result_error")}: approval_id missing`);
+      setResult(`${t("workorders.result_error")}: ${t("workorders.approval_missing")}`);
       return;
     }
     try {
       const payload = await decideWorkOrderApproval(id, { approval_id: approvalId, decision, comment });
-      setRowResults((prev) => ({ ...prev, [id]: { label: decision === "approve" ? "批准" : "拒绝", payload: payload as Record<string, unknown> } }));
+      setRowResults((prev) => ({
+        ...prev,
+        [id]: {
+          label: decision === "approve" ? t("workorders.approved") : t("workorders.rejected"),
+          payload: payload as Record<string, unknown>,
+        },
+      }));
       await load();
       await showTimeline(id, selectedTrack);
     } catch (e: unknown) {
@@ -190,19 +237,28 @@ export default function WorkOrders() {
       return next;
     });
     try {
-      const label = track === "yellow" ? t("workorders.submit_approval") : rerun ? t("workorders.run_again") : t("workorders.execute");
+      const label = rerun ? t("workorders.run_again") : track === "yellow" ? t("workorders.submit_approval") : t("workorders.execute");
       const payload = (await executeWorkOrder(id, rerun ? { rerun: true } : {})) as WorkOrderRecord;
+      if (String(payload.summary || "").includes("WorkerHarness")) {
+        payload.summary = t("workorders.completed_summary");
+      }
       setRowResults((prev) => ({ ...prev, [id]: { label, payload } }));
       await load();
       await showTimeline(id, track);
     } catch (e: unknown) {
+      setOrders((prev) =>
+        prev.map((order) =>
+          String(order.work_order_id || "") === id ? { ...order, status: "Failed" } : order,
+        ),
+      );
       setRowResults((prev) => ({
         ...prev,
         [id]: {
           label: t("workorders.result_error"),
-          payload: { error: e instanceof Error ? e.message : String(e) },
+          payload: { error: summarizeExecutionError(e instanceof Error ? e.message : String(e)) },
         },
       }));
+      await load();
     } finally {
       setRunningIds((prev) => ({ ...prev, [id]: false }));
     }
@@ -212,18 +268,24 @@ export default function WorkOrders() {
   const selectedTrack = stringField(selected, "track");
   const selectedStatus = stringField(selected, "status");
   const selectedCompleted = selectedStatus === "Completed";
+  const selectedFailed = selectedStatus === "Failed";
+  const selectedCancelled = selectedStatus === "Cancelled";
+  const selectedReadyToExecute = !selectedCompleted && !selectedFailed && !selectedCancelled && selectedStatus !== "Running";
+  const selectedCanRerun = (selectedCompleted || selectedFailed) && selectedTrack !== "red";
+  const selectedRerunBlocked = (selectedCompleted || selectedFailed) && selectedTrack === "red";
   const selectedRunning = Boolean(runningIds[selectedIdValue]) || selectedStatus === "Running";
   const selectedTimelineTrack = timelineWoIds[selectedIdValue];
   const selectedTimeline = timelines[selectedIdValue] || [];
   const selectedTimelineSpans = useMemo(() => timelineToSpans(selectedTimeline), [selectedTimeline]);
   const selectedResult = rowResults[selectedIdValue];
   const currentFeedback = fbWoId === selectedIdValue ? fbText : "";
+  const selectedNextAction = nextActionLabel(selectedStatus, selectedTrack, selectedRunning);
 
   return (
     <div className="space-y-5">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="text-xs font-semibold uppercase" style={{ color: "var(--text-muted)" }}>OPC</div>
+          <div className="text-xs font-semibold uppercase" style={{ color: "var(--text-muted)" }}>{t("nav.tasks")}</div>
           <h2 className="mt-1 text-xl font-bold">{t("workorders.task_center")}</h2>
           <p className="mt-1 max-w-2xl text-sm" style={{ color: "var(--text-secondary)" }}>
             {t("workorders.task_center_desc")}
@@ -264,9 +326,9 @@ export default function WorkOrders() {
             <div className="space-y-2">
               {orders.map((order, index) => {
                 const id = stringField(order, "work_order_id") || String(index);
-                const track = stringField(order, "track");
                 const status = stringField(order, "status");
                 const selectedRow = id === selectedIdValue;
+                const ownerLabel = displayAssignee((listField(order, "selected_agents").split(",")[0] || "").trim());
                 return (
                   <button
                     key={id}
@@ -275,17 +337,16 @@ export default function WorkOrders() {
                     className="w-full rounded-md border p-3 text-left transition"
                     style={{
                       borderColor: selectedRow ? "var(--accent)" : "var(--border-subtle)",
-                      background: selectedRow ? "var(--surface-raised)" : "#fff",
+                      background: selectedRow ? "var(--surface-raised)" : "var(--bg-card)",
                     }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold">{stringField(order, "mission_intent") || "Untitled task"}</div>
-                        <div className="mt-1 font-mono text-[11px]" style={{ color: "var(--text-muted)" }}>{id}</div>
+                        <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>{ownerLabel}</div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        <span className={`track-${track}`}>{track}</span>
-                        <span className="rounded px-1.5 py-0.5 text-[11px]" style={statusTone(status)}>{status || "Planned"}</span>
+                        <span className="rounded px-1.5 py-0.5 text-[11px]" style={statusTone(status)}>{friendlyStatus(status)}</span>
                       </div>
                     </div>
                   </button>
@@ -302,17 +363,25 @@ export default function WorkOrders() {
                   <p className="mt-1 text-base font-semibold">{stringField(selected, "mission_intent") || "Untitled task"}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`track-${selectedTrack}`}>{selectedTrack}</span>
-                  <span className="rounded px-2 py-1 text-xs" style={statusTone(selectedStatus)}>{selectedStatus || "Planned"}</span>
+                  <span className="rounded px-2 py-1 text-xs" style={statusTone(selectedStatus)}>{friendlyStatus(selectedStatus)}</span>
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <InfoRow label={t("workorders.contract")} value={shortHash(stringField(selected, "contract_hash"))} mono />
-                <InfoRow label={t("workorders.assigned_ai_employees")} value={listField(selected, "selected_agents")} />
-                <InfoRow label={t("workorders.executors")} value={listField(selected, "selected_executors")} />
-                <InfoRow label={t("workorders.skills")} value={listField(selected, "required_skills")} />
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <InfoRow label={t("workorders.assigned_ai_employees")} value={displayAssignee(listField(selected, "selected_agents").split(",")[0] || "")} />
+                <InfoRow label={t("workorders.timeline")} value={selectedTimeline.length > 0 ? `${selectedTimeline.length} ${t("workorders.events")}` : t("workorders.no_events")} />
+                <InfoRow label={t("workorders.next_action")} value={selectedNextAction} />
               </div>
+              <details className="mt-3 rounded-md border p-3" style={{ borderColor: "var(--border-subtle)" }}>
+                <summary className="cursor-pointer text-xs font-semibold">{t("app.alpha_console")}</summary>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <InfoRow label={t("workorders.assigned_ai_employees")} value={listField(selected, "selected_agents")} />
+                  <InfoRow label={t("workorders.contract")} value={shortHash(stringField(selected, "contract_hash"))} mono />
+                  <InfoRow label={t("workorders.executors")} value={listField(selected, "selected_executors")} />
+                  <InfoRow label={t("workorders.skills")} value={listField(selected, "required_skills")} />
+                  <InfoRow label={t("workorders.internal_task_id")} value={selectedIdValue || "-"} mono />
+                </div>
+              </details>
             </div>
 
             <div className="card space-y-3">
@@ -336,7 +405,7 @@ export default function WorkOrders() {
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                {!selectedCompleted && (
+                {selectedReadyToExecute && (
                   <button
                     onClick={() => executeRow(selectedIdValue, selectedTrack)}
                     disabled={selectedTrack === "red" || selectedRunning}
@@ -350,10 +419,12 @@ export default function WorkOrders() {
                     {selectedRunning ? t("workorders.running") : selectedTrack === "yellow" ? t("workorders.submit_approval") : selectedTrack === "red" ? t("workorders.execute_blocked") : t("workorders.execute")}
                   </button>
                 )}
-                {selectedCompleted && (
+                {(selectedCompleted || selectedFailed) && (
                   <>
-                    <button onClick={() => showTimeline(selectedIdValue, selectedTrack)} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.view_result")}</button>
-                    <button onClick={() => executeRow(selectedIdValue, selectedTrack, true)} disabled={selectedRunning || selectedTrack === "red"} className="rounded border px-2 py-1 text-xs" style={{ borderColor: selectedTrack === "red" ? "var(--red)" : "var(--border-accent)", color: selectedTrack === "red" ? "var(--red)" : "var(--text-secondary)", opacity: selectedRunning || selectedTrack === "red" ? 0.5 : 1 }}>{selectedRunning ? t("workorders.running") : t("workorders.run_again")}</button>
+                    {selectedCompleted && (
+                      <button onClick={() => showTimeline(selectedIdValue, selectedTrack)} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.view_result")}</button>
+                    )}
+                    <button onClick={() => executeRow(selectedIdValue, selectedTrack, true)} disabled={selectedRunning || !selectedCanRerun} className="rounded border px-2 py-1 text-xs" style={{ borderColor: selectedRerunBlocked ? "var(--red)" : "var(--border-accent)", color: selectedRerunBlocked ? "var(--red)" : "var(--text-secondary)", opacity: selectedRunning || !selectedCanRerun ? 0.5 : 1 }}>{selectedRunning ? t("workorders.running") : t("workorders.run_again")}</button>
                   </>
                 )}
                 <button onClick={() => showTimeline(selectedIdValue, selectedTrack)} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.view_timeline")}</button>
@@ -388,9 +459,9 @@ export default function WorkOrders() {
             <div className="card">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">{t("workorders.task_timeline")}</h3>
-                <span className="font-mono text-[11px]" style={{ color: "var(--text-muted)" }}>{selectedIdValue}</span>
+                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>{friendlyStatus(selectedStatus)}</span>
               </div>
-              <div className="mt-3 rounded border p-3" style={{ borderColor: "var(--border-subtle)", background: "#fff" }}>
+              <div className="mt-3 rounded border p-3" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}>
                 {!selectedTimelineTrack && (
                   <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                     {t("workorders.timeline_hint")}
@@ -422,7 +493,7 @@ export default function WorkOrders() {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border px-3 py-2" style={{ borderColor: "var(--border-subtle)", background: "#fff" }}>
+    <div className="rounded-md border px-3 py-2" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}>
       <div className="text-lg font-semibold">{value}</div>
       <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{label}</div>
     </div>
@@ -431,7 +502,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="rounded-md border p-3" style={{ borderColor: "var(--border-subtle)", background: "#fff" }}>
+    <div className="rounded-md border p-3" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}>
       <div className="text-[11px] uppercase" style={{ color: "var(--text-muted)" }}>{label}</div>
       <div className={`mt-1 text-xs ${mono ? "font-mono" : ""}`} style={{ color: "var(--text-secondary)" }}>{value}</div>
     </div>
@@ -441,7 +512,9 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
 function ExecutionSummary({ result }: { result: RowResult }) {
   const payload = result.payload;
   const status = String(payload.status || "");
-  const summary = String(payload.summary || payload.message || payload.error || "");
+  const rawError = String(payload.error || "").trim();
+  const hasError = rawError.length > 0;
+  const summary = summarizeExecutionError(String(payload.summary || payload.message || payload.error || ""));
   const approvalId = String(payload.approval_id || "");
   const memoryIds = Array.isArray(payload.memory_ids) ? payload.memory_ids.map(String) : [];
   const runs = Array.isArray(payload.worker_runs) ? payload.worker_runs : [];
@@ -449,8 +522,10 @@ function ExecutionSummary({ result }: { result: RowResult }) {
   const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
 
   return (
-    <div className="rounded border p-3 text-xs" style={{ borderColor: "var(--border-subtle)", background: "#fff", color: "var(--text-secondary)" }}>
-      <div className="font-semibold" style={{ color: "var(--text-primary)" }}>{result.label}: {status || "ok"}</div>
+    <div className="rounded border p-3 text-xs" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)", color: "var(--text-secondary)" }}>
+      <div className="font-semibold" style={{ color: "var(--text-primary)" }}>
+        {hasError ? t("workorders.execution_failed") : result.label}: {hasError ? t("workorders.failed") : friendlyStatus(status)}
+      </div>
       {summary && <div className="mt-1">{summary}</div>}
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
         {approvalId && <span>{t("workorders.summary_approval")}: <span className="font-mono">{approvalId}</span></span>}
