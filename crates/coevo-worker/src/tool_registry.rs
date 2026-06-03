@@ -1,6 +1,9 @@
 use crate::error::WorkerError;
 use crate::tools::file_readonly::FileReadonlyTool;
 use crate::tools::github_readonly::{GitHubReadonlyTool, ToolHandler};
+use crate::tools::http_get::HttpGetTool;
+use crate::tools::workspace_shell::WorkspaceShellTool;
+use crate::tools::workspace_write_file::WorkspaceWriteFileTool;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -74,6 +77,48 @@ impl ToolRegistry {
                 enabled: true,
             },
             Box::new(FileReadonlyTool),
+        );
+        r.register(
+            Tool {
+                tool_id: "http-get".into(),
+                name: "HTTP GET".into(),
+                tool_type: ToolType::GitHubReadonly,
+                risk_ceiling: 0.3,
+                supported_actions: vec!["HttpGet".into()],
+                permission_boundary_json: serde_json::json!({}),
+                requires_credential: false,
+                credential_ref: None,
+                enabled: true,
+            },
+            Box::new(HttpGetTool),
+        );
+        r.register(
+            Tool {
+                tool_id: "workspace-write-file".into(),
+                name: "Workspace Write File".into(),
+                tool_type: ToolType::LocalProcessSandbox,
+                risk_ceiling: 0.6,
+                supported_actions: vec!["WriteFile".into()],
+                permission_boundary_json: serde_json::json!({}),
+                requires_credential: false,
+                credential_ref: None,
+                enabled: true,
+            },
+            Box::new(WorkspaceWriteFileTool),
+        );
+        r.register(
+            Tool {
+                tool_id: "workspace-shell".into(),
+                name: "Workspace Shell".into(),
+                tool_type: ToolType::LocalProcessSandbox,
+                risk_ceiling: 0.6,
+                supported_actions: vec!["RunShell".into()],
+                permission_boundary_json: serde_json::json!({}),
+                requires_credential: false,
+                credential_ref: None,
+                enabled: true,
+            },
+            Box::new(WorkspaceShellTool),
         );
         r
     }

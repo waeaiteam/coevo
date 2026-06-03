@@ -416,7 +416,7 @@ mod tests {
     async fn test_connection_with_candidate_config_does_not_persist_on_failure() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
 
         let candidate = PutConfigRequest {
             provider_id: "desktop".to_string(),
@@ -454,7 +454,7 @@ mod tests {
     async fn active_model_paths_report_not_configured_on_fresh_db() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
 
         let (test_status, Json(test_body)) = test_connection(
             State(state.clone()),
@@ -509,7 +509,7 @@ mod tests {
     async fn discover_models_with_candidate_config_does_not_persist() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
 
         let candidate = PutConfigRequest {
             provider_id: "desktop".to_string(),
@@ -548,7 +548,7 @@ mod tests {
     async fn cloud_provider_candidate_requires_api_key_before_network_call() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
 
         let candidate = PutConfigRequest {
             provider_id: "desktop".to_string(),
@@ -582,7 +582,7 @@ mod tests {
     async fn real_provider_candidate_requires_base_url_before_network_call() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
 
         let candidate = PutConfigRequest {
             provider_id: "desktop".to_string(),

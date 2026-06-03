@@ -6,6 +6,7 @@ pub mod audit_repo;
 pub mod blackboard_repo;
 pub mod cognitive_edge_repo;
 pub mod contract_repo;
+pub mod eval_repo;
 pub mod lease_repo;
 pub mod model_config_repo;
 pub mod plan_repo;

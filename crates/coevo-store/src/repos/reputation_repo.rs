@@ -73,3 +73,68 @@ impl ReputationRepo {
         .await
     }
 }
+
+/// A single reputation snapshot, used to draw an employee's growth curve.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ReputationSnapshotRow {
+    pub snapshot_id: String,
+    pub agent_id: String,
+    pub run_id: Option<String>,
+    pub domain_competence: f64,
+    pub uncertainty_honesty: f64,
+    pub policy_compliance: f64,
+    pub resource_efficiency: f64,
+    pub task_count: i64,
+    pub overall_score: f64,
+    pub created_at_ms: i64,
+}
+
+pub struct ReputationHistoryRepo;
+
+impl ReputationHistoryRepo {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn snapshot(
+        pool: &SqlitePool,
+        agent_id: &str,
+        run_id: Option<&str>,
+        domain_competence: f64,
+        uncertainty_honesty: f64,
+        policy_compliance: f64,
+        resource_efficiency: f64,
+        task_count: i64,
+    ) -> Result<(), sqlx::Error> {
+        let overall =
+            (domain_competence + uncertainty_honesty + policy_compliance + resource_efficiency)
+                / 4.0;
+        sqlx::query(
+            "INSERT INTO reputation_history (snapshot_id, agent_id, run_id, domain_competence, uncertainty_honesty, policy_compliance, resource_efficiency, task_count, overall_score, created_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(agent_id)
+        .bind(run_id)
+        .bind(domain_competence)
+        .bind(uncertainty_honesty)
+        .bind(policy_compliance)
+        .bind(resource_efficiency)
+        .bind(task_count)
+        .bind(overall)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_by_agent(
+        pool: &SqlitePool,
+        agent_id: &str,
+        limit: i64,
+    ) -> Result<Vec<ReputationSnapshotRow>, sqlx::Error> {
+        sqlx::query_as::<_, ReputationSnapshotRow>(
+            "SELECT * FROM reputation_history WHERE agent_id = ? ORDER BY created_at_ms ASC LIMIT ?",
+        )
+        .bind(agent_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+    }
+}

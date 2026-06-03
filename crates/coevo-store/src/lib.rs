@@ -6,6 +6,7 @@
 )]
 
 pub(crate) mod enum_db;
+pub mod company_workspace;
 pub mod migrate;
 pub mod models;
 pub mod pool;

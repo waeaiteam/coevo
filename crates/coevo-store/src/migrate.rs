@@ -16,6 +16,8 @@ pub enum MigrationRecoveryOutcome {
 }
 
 /// Run all pending migrations against the given pool.
+/// Keep this file touched when embedded migrations change so local rebuilds
+/// reliably pick up the new migration set.
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::migrate!("./migrations")
         .run(pool)

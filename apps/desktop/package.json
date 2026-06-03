@@ -16,9 +16,11 @@
     "build:tauri": "node scripts/with-artifacts.mjs node scripts/build-sidecar.mjs && node scripts/with-artifacts.mjs tsc && node scripts/with-artifacts.mjs vite build && node scripts/with-artifacts.mjs tauri build"
   },
   "dependencies": {
+    "immer": "^10.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.28.0"
+    "react-router-dom": "^6.28.0",
+    "zustand": "^4.5.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2",

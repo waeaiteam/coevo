@@ -6,12 +6,14 @@ import { formatRelativeTime, shortText, stringField, type ProductRow } from "../
 
 const ACTIVE_CONVERSATION_KEY = "coevo-active-conversation-id";
 
-type IconName = "new-chat" | "company" | "projects" | "tasks" | "timeline" | "settings" | "advanced";
+type IconName = "new-chat" | "company" | "market" | "projects" | "tasks" | "timeline" | "settings" | "advanced" | "workflows";
 
 const primaryLinks: Array<{ to: string; key: string; icon: IconName; end?: boolean }> = [
   { to: "/company", key: "nav.my_company", icon: "company" },
+  { to: "/market", key: "nav.talent_market", icon: "market" },
   { to: "/projects", key: "nav.projects", icon: "projects" },
   { to: "/work-orders", key: "nav.tasks", icon: "tasks" },
+  { to: "/workflows", key: "workflows.title", icon: "workflows" },
   { to: "/timeline", key: "nav.timeline", icon: "timeline" },
   { to: "/settings/general", key: "nav.settings", icon: "settings" },
 ];
@@ -28,6 +30,13 @@ function NavIcon({ name }: { name: IconName }) {
       <>
         <path d="M4 20V9l8-5 8 5v11" />
         <path d="M9 20v-6h6v6" />
+      </>
+    ),
+    market: (
+      <>
+        <path d="M4 9h16l-1 3a2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1-5 0 2.5 2.5 0 0 1-5 0L4 9z" />
+        <path d="M4 9l1.5-4h13L20 9" />
+        <path d="M5 12v8h14v-8" />
       </>
     ),
     projects: (
@@ -63,6 +72,15 @@ function NavIcon({ name }: { name: IconName }) {
         <path d="M4 7h16" />
         <path d="M4 12h10" />
         <path d="M4 17h16" />
+      </>
+    ),
+    workflows: (
+      <>
+        <path d="M6 3v12" />
+        <circle cx="6" cy="18" r="3" />
+        <circle cx="6" cy="6" r="3" />
+        <circle cx="18" cy="6" r="3" />
+        <path d="M18 9a9 9 0 0 1-9 9" />
       </>
     ),
   };

@@ -1,8 +1,17 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import AIEmployees from "../pages/AIEmployees";
 import { setLanguage } from "../settings/i18n";
+
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <AIEmployees />
+    </MemoryRouter>,
+  );
+}
 
 const api = vi.hoisted(() => ({
   getAgentMemory: vi.fn(),
@@ -67,7 +76,7 @@ describe("AI Employee passports", () => {
   });
 
   it("shows a founder-readable passport, memory, and permission boundary for a selected employee", async () => {
-    render(<AIEmployees />);
+    renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /Founder Chief of Staff/i }));
 
@@ -101,7 +110,7 @@ describe("AI Employee passports", () => {
       },
     ]);
 
-    render(<AIEmployees />);
+    renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Seed 10 AI Employees" }));
 
@@ -114,7 +123,7 @@ describe("AI Employee passports", () => {
     const notFound = Object.assign(new Error("not found"), { status: 404 });
     api.getAgentMemory.mockRejectedValue(notFound);
 
-    render(<AIEmployees />);
+    renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /Founder Chief of Staff/i }));
 
@@ -124,7 +133,7 @@ describe("AI Employee passports", () => {
 
   it("localizes passport and memory labels in Chinese mode", async () => {
     setLanguage("zh");
-    render(<AIEmployees />);
+    renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /Founder Chief of Staff/i }));
 

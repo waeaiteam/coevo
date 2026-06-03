@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use coevo_store::repos::agent_worker_repo::AgentWorkerRepo;
+use coevo_store::repos::audit_repo::AuditRepo;
 use coevo_store::repos::worker_run_repo::WorkerRunRepo;
 use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
@@ -20,6 +21,43 @@ macro_rules! ok {
     };
 }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
+
+fn tool_policy_allowed_actions(tool_id: &str, input: &serde_json::Value) -> Vec<String> {
+    match tool_id {
+        "http-get" => vec!["http_get".to_string()],
+        "workspace-write-file" => vec!["write".to_string()],
+        "workspace-shell" => vec!["shell".to_string()],
+        "file-readonly" => match input["action"].as_str().unwrap_or("ReadFile") {
+            "ListDirectory" => vec!["list".to_string()],
+            _ => vec!["read".to_string()],
+        },
+        _ => vec![],
+    }
+}
+
+async fn audit_tool_denied(
+    pool: &sqlx::SqlitePool,
+    work_order: &coevo_core::opc::WorkOrder,
+    tool_id: &str,
+    reason: &str,
+) {
+    let _ = AuditRepo::insert(
+        pool,
+        "tool.denied",
+        Some(&work_order.contract_hash),
+        work_order.selected_agents.first().map(String::as_str),
+        None,
+        &work_order.opc_id,
+        &serde_json::json!({
+            "work_order_id": work_order.work_order_id,
+            "tool_id": tool_id,
+            "reason": reason,
+            "track": work_order.track,
+        })
+        .to_string(),
+    )
+    .await;
+}
 
 #[derive(Deserialize)]
 pub struct ToolExecReq {
@@ -78,13 +116,27 @@ pub async fn tool_execute(
         Some(t) => t,
         None => return err!(StatusCode::NOT_FOUND, "Tool not found"),
     };
+    let requested_actions = tool_policy_allowed_actions(&id, &req.input);
+    if !requested_actions.is_empty()
+        && !requested_actions.iter().all(|action| {
+            wo.allowed_actions
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(action))
+        })
+    {
+        let reason = format!(
+            "ToolDeniedByPolicy: requested actions {:?} exceed work order allowed actions {:?}",
+            requested_actions, wo.allowed_actions
+        );
+        audit_tool_denied(&s.pool, &wo, &id, &reason).await;
+        return err!(StatusCode::FORBIDDEN, reason);
+    }
     let decision =
         ToolPolicyEngine::evaluate(tool, &wo.track, &wo.allowed_actions, &wo.restricted_actions);
     if !decision.allowed {
-        return err!(
-            StatusCode::FORBIDDEN,
-            format!("ToolDeniedByPolicy: {}", decision.reason)
-        );
+        let reason = format!("ToolDeniedByPolicy: {}", decision.reason);
+        audit_tool_denied(&s.pool, &wo, &id, &reason).await;
+        return err!(StatusCode::FORBIDDEN, reason);
     }
     if decision.required_approval && req.approval_receipt.is_none() {
         return err!(
@@ -227,16 +279,18 @@ mod tests {
     use super::*;
     use crate::state::AppState;
     use axum::extract::Path;
+    use coevo_store::models::AuditEventRow;
     use coevo_core::opc::{WorkOrder, WorkOrderStatus};
     use coevo_store::migrate::run_migrations;
     use coevo_store::pool::create_test_pool;
+    use coevo_store::repos::audit_repo::AuditRepo;
     use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
 
     #[tokio::test]
     async fn run_worker_rejects_public_mock_routing_when_no_model_provider() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let now = chrono::Utc::now().timestamp_millis() as u64;
         let wo = WorkOrder {
             work_order_id: "wo-run-worker-provider-required".to_string(),
@@ -275,5 +329,182 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("MODEL_PROVIDER_NOT_CONFIGURED"));
+    }
+
+    async fn insert_work_order(
+        pool: &sqlx::SqlitePool,
+        work_order_id: &str,
+        track: &str,
+        allowed_actions: Vec<&str>,
+        restricted_actions: Vec<&str>,
+    ) {
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let wo = WorkOrder {
+            work_order_id: work_order_id.to_string(),
+            conversation_id: None,
+            contract_hash: "c".repeat(64),
+            plan_hash: "d".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "Tool execution test".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec![],
+            track: track.to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: allowed_actions.into_iter().map(str::to_string).collect(),
+            restricted_actions: restricted_actions.into_iter().map(str::to_string).collect(),
+            risk_summary: "test".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        WorkOrderRepo::create(pool, &wo).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn green_tool_execute_allows_file_read_and_http_get() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("coevo-tools-green-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let readme = root.join("notes.txt");
+        std::fs::write(&readme, "green-track-readable").unwrap();
+        let state = AppState::new(pool.clone(), root.clone());
+
+        insert_work_order(&pool, "wo-tools-green", "green", vec!["read", "http_get"], vec![]).await;
+
+        let (read_status, Json(read_body)) = tool_execute(
+            State(state.clone()),
+            Path("file-readonly".to_string()),
+            Json(ToolExecReq {
+                work_order_id: "wo-tools-green".to_string(),
+                input: serde_json::json!({
+                    "action": "ReadFile",
+                    "path": readme.to_string_lossy().to_string(),
+                    "allowed_paths": [root.to_string_lossy().to_string()]
+                }),
+                approval_receipt: None,
+            }),
+        )
+        .await;
+        assert_eq!(read_status, StatusCode::OK);
+        assert_eq!(read_body["content"], "green-track-readable");
+
+        let (http_status, Json(http_body)) = tool_execute(
+            State(state),
+            Path("http-get".to_string()),
+            Json(ToolExecReq {
+                work_order_id: "wo-tools-green".to_string(),
+                input: serde_json::json!({
+                    "url": "https://example.com"
+                }),
+                approval_receipt: None,
+            }),
+        )
+        .await;
+        assert_eq!(http_status, StatusCode::OK);
+        assert_eq!(http_body["status_code"], 200);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn workspace_write_allows_file_write_and_shell() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("coevo-tools-write-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::new(pool.clone(), root.clone());
+
+        insert_work_order(
+            &pool,
+            "wo-tools-write",
+            "yellow",
+            vec!["write", "shell"],
+            vec![],
+        )
+        .await;
+
+        let file_path = root.join("out.txt");
+        let (write_status, Json(write_body)) = tool_execute(
+            State(state.clone()),
+            Path("workspace-write-file".to_string()),
+            Json(ToolExecReq {
+                work_order_id: "wo-tools-write".to_string(),
+                input: serde_json::json!({
+                    "path": file_path.to_string_lossy().to_string(),
+                    "content": "workspace-write-ok",
+                    "workspace_root": root.to_string_lossy().to_string()
+                }),
+                approval_receipt: None,
+            }),
+        )
+        .await;
+        assert_eq!(write_status, StatusCode::OK);
+        assert_eq!(write_body["bytes_written"], 18);
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "workspace-write-ok");
+
+        let (shell_status, Json(shell_body)) = tool_execute(
+            State(state),
+            Path("workspace-shell".to_string()),
+            Json(ToolExecReq {
+                work_order_id: "wo-tools-write".to_string(),
+                input: serde_json::json!({
+                    "command": "Write-Output 'workspace-shell-ok'",
+                    "workspace_root": root.to_string_lossy().to_string()
+                }),
+                approval_receipt: None,
+            }),
+        )
+        .await;
+        assert_eq!(shell_status, StatusCode::OK);
+        assert!(shell_body["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("workspace-shell-ok"));
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn green_write_attempt_is_blocked_and_audited() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("coevo-tools-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::new(pool.clone(), root.clone());
+
+        insert_work_order(&pool, "wo-tools-denied", "green", vec!["read"], vec![]).await;
+
+        let denied_path = root.join("denied.txt");
+        let (status, Json(body)) = tool_execute(
+            State(state),
+            Path("workspace-write-file".to_string()),
+            Json(ToolExecReq {
+                work_order_id: "wo-tools-denied".to_string(),
+                input: serde_json::json!({
+                    "path": denied_path.to_string_lossy().to_string(),
+                    "content": "should-not-write",
+                    "workspace_root": root.to_string_lossy().to_string()
+                }),
+                approval_receipt: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ToolDeniedByPolicy"));
+        assert!(!denied_path.exists());
+
+        let audit_rows: Vec<AuditEventRow> = AuditRepo::list_by_tenant(&pool, "default-opc", 20)
+            .await
+            .unwrap();
+        assert!(audit_rows.iter().any(|row| row.event_type == "tool.denied"));
+
+        std::fs::remove_dir_all(root).ok();
     }
 }

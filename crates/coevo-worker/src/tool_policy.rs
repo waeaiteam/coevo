@@ -3,7 +3,12 @@ use crate::types::*;
 fn action_match(allowed: &str, supported: &str) -> bool {
     let a = allowed.to_lowercase();
     let s = supported.to_lowercase();
+    let a_norm: String = a.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let s_norm: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     if s.contains(&a) || a.contains(&s) {
+        return true;
+    }
+    if s_norm.contains(&a_norm) || a_norm.contains(&s_norm) {
         return true;
     }
     // alias: read matches ReadReadme, ReadFile, ReadRepositoryMetadata, ListFiles
@@ -14,6 +19,9 @@ fn action_match(allowed: &str, supported: &str) -> bool {
         return true;
     }
     if a == "analyze" && (s.contains("read") || s.contains("list")) {
+        return true;
+    }
+    if a == "http_get" && s_norm.contains("httpget") {
         return true;
     }
     false

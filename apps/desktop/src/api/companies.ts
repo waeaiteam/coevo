@@ -1,0 +1,219 @@
+// Multi-company data layer (API_CONTRACT §〇).
+//
+// The `/companies/...` endpoints are owned by the backend (codex Stage 1) and may
+// not be live yet. Per COLLAB_PROTOCOL §二.3, this module consumes the real contract
+// endpoints when available and otherwise falls back to a local, contract-shaped shell
+// so the four-layer drilldown UI is fully navigable today. When the backend ships
+// `/companies`, the real responses take over automatically — no UI change required.
+//
+// Strictly contract fields only (no invented fields):
+//   Company:       { opc_id, name, mission, employee_count, created_at_ms, dir }
+//   CompanyDetail: Company + { charter_md, goals, departments, shared_files_count,
+//                              memory_count, report_count }
+
+import { get, post, del } from "./client";
+import { getCompanyProfile, listEmployees, listMemory, listWorkOrders } from "./client";
+import { getLocalIdentity } from "../settings/identity";
+
+export type Company = {
+  opc_id: string;
+  name: string;
+  mission: string;
+  employee_count: number;
+  created_at_ms: number;
+  dir: string;
+};
+
+export type CompanyDetail = Company & {
+  charter_md: string;
+  goals: Array<Record<string, unknown>>;
+  departments: string[];
+  shared_files_count: number;
+  memory_count: number;
+  report_count: number;
+};
+
+const LOCAL_COMPANIES_KEY = "coevo-local-companies";
+const ACTIVE_OPC_KEY = "coevo-opc-id";
+
+function readLocal(): Company[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_COMPANIES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Company[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocal(rows: Company[]) {
+  try {
+    localStorage.setItem(LOCAL_COMPANIES_KEY, JSON.stringify(rows));
+  } catch {
+    /* ignore persistence failures */
+  }
+}
+
+export function getActiveOpcId(): string {
+  try {
+    return localStorage.getItem(ACTIVE_OPC_KEY) || getLocalIdentity().opcId;
+  } catch {
+    return getLocalIdentity().opcId;
+  }
+}
+
+export function setActiveOpcId(opcId: string) {
+  try {
+    localStorage.setItem(ACTIVE_OPC_KEY, opcId);
+  } catch {
+    /* ignore */
+  }
+}
+
+// The current backend serves a single company. Represent it as the founder's first
+// company so the list view always has at least one real, enterable company.
+async function currentCompanyShell(): Promise<Company> {
+  const identity = getLocalIdentity();
+  let name = identity.opcName;
+  let mission = "";
+  try {
+    const profile = (await getCompanyProfile()) as Record<string, unknown>;
+    name = String(profile?.name || name);
+    mission = String(profile?.mission || "");
+  } catch {
+    /* fall back to local identity */
+  }
+  let employeeCount = 0;
+  try {
+    const employees = await listEmployees();
+    employeeCount = Array.isArray(employees) ? employees.length : 0;
+  } catch {
+    /* leave at 0 */
+  }
+  return {
+    opc_id: identity.opcId,
+    name,
+    mission,
+    employee_count: employeeCount,
+    created_at_ms: 0,
+    dir: `~/.coevo/${identity.opcId}`,
+  };
+}
+
+export async function listCompanies(): Promise<Company[]> {
+  try {
+    const rows = await get<Company[]>("/companies");
+    if (Array.isArray(rows) && rows.length) return rows;
+  } catch {
+    /* backend not ready — use shell */
+  }
+  const current = await currentCompanyShell();
+  const locals = readLocal().filter((row) => row.opc_id !== current.opc_id);
+  return [current, ...locals];
+}
+
+export async function createCompany(input: { name: string; mission?: string }): Promise<Company> {
+  try {
+    const created = await post<Company>("/companies", input);
+    if (created && created.opc_id) return created;
+  } catch {
+    /* backend not ready — create a local company */
+  }
+  const opcId = `opc-${Math.random().toString(36).slice(2, 10)}`;
+  const company: Company = {
+    opc_id: opcId,
+    name: input.name.trim() || "New company",
+    mission: input.mission?.trim() || "",
+    employee_count: 0,
+    created_at_ms: Date.now(),
+    dir: `~/.coevo/${opcId}`,
+  };
+  writeLocal([...readLocal(), company]);
+  return company;
+}
+
+export async function deleteCompany(opcId: string): Promise<{ ok: boolean }> {
+  try {
+    const res = await del<{ ok: boolean }>(`/companies/${encodeURIComponent(opcId)}`);
+    if (res && res.ok) return res;
+  } catch {
+    /* backend not ready — remove from local store */
+  }
+  writeLocal(readLocal().filter((row) => row.opc_id !== opcId));
+  if (getActiveOpcId() === opcId) {
+    try {
+      localStorage.removeItem(ACTIVE_OPC_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+  return { ok: true };
+}
+
+export async function getCompanyDetail(opcId: string): Promise<CompanyDetail> {
+  try {
+    const detail = await get<CompanyDetail>(`/companies/${encodeURIComponent(opcId)}`);
+    if (detail && detail.opc_id) return detail;
+  } catch {
+    /* backend not ready — assemble a shell from existing endpoints */
+  }
+
+  const companies = await listCompanies();
+  const base =
+    companies.find((row) => row.opc_id === opcId) ||
+    (await currentCompanyShell());
+
+  const departments = new Set<string>();
+  let employeeCount = base.employee_count;
+  let memoryCount = 0;
+  try {
+    const employees = await listEmployees();
+    if (Array.isArray(employees)) {
+      employeeCount = employees.length;
+      for (const e of employees) {
+        const dept = String((e as Record<string, unknown>).department || "");
+        if (dept) departments.add(dept);
+      }
+    }
+  } catch {
+    /* keep defaults */
+  }
+  try {
+    const memories = await listMemory({ scope: "company" });
+    memoryCount = Array.isArray(memories) ? memories.length : 0;
+  } catch {
+    /* keep 0 */
+  }
+  let charterMd = "";
+  try {
+    const profile = (await getCompanyProfile()) as Record<string, unknown>;
+    const principles = Array.isArray(profile?.operating_principles)
+      ? (profile.operating_principles as unknown[]).map(String)
+      : [];
+    charterMd = principles.length ? principles.map((p) => `- ${p}`).join("\n") : "";
+  } catch {
+    /* no charter yet */
+  }
+
+  return {
+    ...base,
+    employee_count: employeeCount,
+    charter_md: charterMd,
+    goals: [],
+    departments: [...departments],
+    shared_files_count: 0,
+    memory_count: memoryCount,
+    report_count: 0,
+  };
+}
+
+// Re-exported so company-scoped pages can fetch the active company's working data
+// through one import while the backend transitions to path-based addressing.
+export async function companyWorkOrders() {
+  try {
+    return await listWorkOrders();
+  } catch {
+    return [];
+  }
+}

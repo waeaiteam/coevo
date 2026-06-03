@@ -9,7 +9,7 @@ use sqlx::{Row, SqlitePool};
 pub struct AgentEmployeeRepo;
 impl AgentEmployeeRepo {
     pub async fn list(pool: &SqlitePool) -> Result<Vec<AgentEmployee>, sqlx::Error> {
-        let rows = sqlx::query("SELECT agent_id,display_name,department,role,passport_json,model_profile_json,tool_scopes_json,memory_scope,permission_boundary_json,allowed_cognitive_layers_json,allowed_action_modes_json,risk_ceiling,reputation_vector_json,supervisor_agent_id,lifecycle_status,created_at_ms,updated_at_ms FROM agent_employees WHERE lifecycle_status != 'Retired'")
+        let rows = sqlx::query("SELECT agent_id,display_name,department,role,passport_json,model_profile_json,tool_scopes_json,memory_scope,permission_boundary_json,allowed_cognitive_layers_json,allowed_action_modes_json,risk_ceiling,reputation_vector_json,supervisor_agent_id,lifecycle_status,system_prompt,created_at_ms,updated_at_ms FROM agent_employees WHERE lifecycle_status != 'Retired'")
             .fetch_all(pool).await?;
         let mut result = vec![];
         for row in rows {
@@ -72,6 +72,7 @@ impl AgentEmployeeRepo {
                     }),
                 supervisor_agent_id: row.get("supervisor_agent_id"),
                 lifecycle_status: lifecycle_status_from_db(&status),
+                system_prompt: row.get("system_prompt"),
                 created_at_ms: row.get::<i64, _>("created_at_ms") as u64,
                 updated_at_ms: row.get::<i64, _>("updated_at_ms") as u64,
             };
@@ -81,7 +82,13 @@ impl AgentEmployeeRepo {
     }
     pub async fn upsert(pool: &SqlitePool, a: &AgentEmployee) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT OR REPLACE INTO agent_employees VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO agent_employees (\
+                agent_id, display_name, department, role, passport_json, model_profile_json, \
+                tool_scopes_json, memory_scope, permission_boundary_json, \
+                allowed_cognitive_layers_json, allowed_action_modes_json, risk_ceiling, \
+                reputation_vector_json, supervisor_agent_id, lifecycle_status, system_prompt, \
+                created_at_ms, updated_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&a.agent_id)
         .bind(&a.display_name)
@@ -98,6 +105,7 @@ impl AgentEmployeeRepo {
         .bind(serde_json::to_string(&a.reputation_vector).unwrap())
         .bind(&a.supervisor_agent_id)
         .bind(lifecycle_status_to_db(a.lifecycle_status))
+        .bind(&a.system_prompt)
         .bind(a.created_at_ms as i64)
         .bind(a.updated_at_ms as i64)
         .execute(pool)
@@ -108,6 +116,41 @@ impl AgentEmployeeRepo {
         for e in seed_employees() {
             Self::upsert(pool, &e).await?;
         }
+        Ok(())
+    }
+    pub async fn get(pool: &SqlitePool, agent_id: &str) -> Result<Option<AgentEmployee>, sqlx::Error> {
+        // Reuse list()'s full row mapping, then filter. Employee count is small.
+        let all = Self::list(pool).await?;
+        Ok(all.into_iter().find(|e| e.agent_id == agent_id))
+    }
+    pub async fn exists(pool: &SqlitePool, agent_id: &str) -> Result<bool, sqlx::Error> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT agent_id FROM agent_employees WHERE agent_id = ?")
+                .bind(agent_id)
+                .fetch_optional(pool)
+                .await?;
+        Ok(row.is_some())
+    }
+    pub async fn delete(pool: &SqlitePool, agent_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM agent_employees WHERE agent_id = ?")
+            .bind(agent_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+    pub async fn update_system_prompt(
+        pool: &SqlitePool,
+        agent_id: &str,
+        system_prompt: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE agent_employees SET system_prompt = ?, updated_at_ms = ? WHERE agent_id = ?",
+        )
+        .bind(system_prompt)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .bind(agent_id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 }

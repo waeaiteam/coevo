@@ -1,12 +1,16 @@
 pub mod compile;
 pub mod conversations;
 pub mod evaluate;
+pub mod evaluations;
 pub mod health;
 pub mod models;
 pub mod opc;
+pub mod organization;
+pub mod prompts;
 pub mod propose;
 pub mod resolve;
 pub mod route;
 pub mod timeline;
 pub mod tools;
+pub mod traces;
 pub mod workers;

@@ -11,6 +11,13 @@ pub struct LoopContext<'a> {
     pub memory_context: &'a MemoryContext,
     pub allowed_tools: &'a [&'a Tool],
     pub observation: Option<&'a str>,
+    /// Active skill prompt directives, injected into the stable prefix so that
+    /// approved skill/prompt upgrades actually change execution behavior.
+    /// Each entry is (skill_id, version, prompt_template).
+    pub skill_directives: &'a [(String, String, String)],
+    /// The assigned employee's system prompt / working charter. Injected into
+    /// the stable prefix when non-empty so the agent knows its role.
+    pub system_prompt: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -122,10 +129,44 @@ impl ContextEngine for MemoryBudgetContextEngine {
         if let Some(observation) = ctx.observation {
             user_payload["previous_observation"] = serde_json::json!(observation);
         }
-        let stable_prefix = vec![ModelMessage {
+        let mut stable_prefix = vec![ModelMessage {
             role: "system".to_string(),
             content: governance_prefix.to_string(),
         }];
+        // Inject the employee's system prompt (its role/charter) right after the
+        // governance prefix, so the agent knows who it is on every execution.
+        // Empty for built-in employees until customized via the Agent Workbench.
+        if !ctx.system_prompt.trim().is_empty() {
+            stable_prefix.push(ModelMessage {
+                role: "system".to_string(),
+                content: ctx.system_prompt.to_string(),
+            });
+        }
+        // Inject active skill prompt directives so approved skill/prompt
+        // upgrades take effect on the very next execution. This is part of the
+        // stable prefix, so a changed directive changes the prefix fingerprint
+        // (a genuinely different prompt → different cache key).
+        if !ctx.skill_directives.is_empty() {
+            let directives = ctx
+                .skill_directives
+                .iter()
+                .map(|(skill_id, version, template)| {
+                    serde_json::json!({
+                        "skill_id": skill_id,
+                        "version": version,
+                        "directive": template,
+                    })
+                })
+                .collect::<Vec<_>>();
+            stable_prefix.push(ModelMessage {
+                role: "system".to_string(),
+                content: serde_json::json!({
+                    "active_skill_directives": directives,
+                    "note": "Follow these skill directives where they apply to the mission.",
+                })
+                .to_string(),
+            });
+        }
         let volatile_suffix = vec![ModelMessage {
             role: "user".to_string(),
             content: user_payload.to_string(),
@@ -226,6 +267,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
+            skill_directives: &[],
+            system_prompt: "",
             })
             .await
             .unwrap();
@@ -251,6 +294,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
+            skill_directives: &[],
+            system_prompt: "",
             })
             .await
             .unwrap();
@@ -261,6 +306,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: Some("Tool result"),
+            skill_directives: &[],
+            system_prompt: "",
             })
             .await
             .unwrap();
@@ -304,6 +351,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
+            skill_directives: &[],
+            system_prompt: "",
             })
             .await
             .unwrap();
@@ -319,6 +368,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: Some(&compacted.summary.content),
+            skill_directives: &[],
+            system_prompt: "",
             })
             .await
             .unwrap();

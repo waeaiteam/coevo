@@ -20,8 +20,9 @@ use coevo_models::router::{
 };
 use coevo_models::types::{ModelMessage, ModelProviderConfig, ModelRequest, ResponseFormat};
 use coevo_store::repos::worker_run_repo::{
-    WorkerEventRepo, WorkerSkillUsageRepo, WorkerToolCallRepo,
+    WorkerEventRepo, WorkerRunRepo, WorkerSkillUsageRepo, WorkerToolCallRepo,
 };
+use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
 use coevo_store::repos_opc::memory_repo;
 use sqlx::SqlitePool;
 
@@ -57,6 +58,14 @@ pub struct AgentSubHarnessResult {
     pub memory_ids: Vec<String>,
     pub reflection_id: Option<String>,
     pub proposal_id: Option<String>,
+    /// Execution metrics surfaced so the server layer can update employee
+    /// reputation and growth history without re-parsing step JSON.
+    pub agent_id: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost_usd: f64,
+    pub latency_ms: u64,
 }
 
 pub struct AgentSubHarness;
@@ -122,23 +131,54 @@ impl AgentSubHarness {
             None,
         )
         .await?;
+        // Load the assigned employee's system prompt (its working charter) so it
+        // can be injected into every round's prompt. Empty for built-in employees
+        // until customized via the Agent Workbench.
+        let agent_system_prompt: String = AgentEmployeeRepo::list(pool)
+            .await
+            .ok()
+            .and_then(|emps| {
+                emps.into_iter()
+                    .find(|e| e.agent_id == authorization.agent_id)
+                    .map(|e| e.system_prompt)
+            })
+            .unwrap_or_default();
+
+        let mut skill_directives: Vec<(String, String, String)> = Vec::new();
         for sid in &selected {
-            if let Some(_full) = SkillRuntime::load_full(pool, sid).await? {
+            if let Some(full) = SkillRuntime::load_full(pool, sid).await? {
+                let version = full
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1.0.0")
+                    .to_string();
+                let prompt_template = full
+                    .get("prompt_template")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 step_create(
                     pool,
                     &mut steps,
                     &authorization.run_id,
                     "LoadSkillFull",
-                    &serde_json::json!({"loaded_skill":sid}),
+                    &serde_json::json!({
+                        "loaded_skill": sid,
+                        "version": version,
+                        "has_directive": !prompt_template.trim().is_empty(),
+                    }),
                     None,
                 )
                 .await?;
+                if !prompt_template.trim().is_empty() {
+                    skill_directives.push((sid.clone(), version.clone(), prompt_template));
+                }
                 WorkerSkillUsageRepo::create(
                     pool,
                     &format!("su-{}", uuid::Uuid::new_v4()),
                     &authorization.run_id,
                     sid,
-                    "1.0.0",
+                    &version,
                     "execution",
                     true,
                     0.9,
@@ -243,6 +283,8 @@ impl AgentSubHarness {
                     memory_context: &mem_ctx,
                     allowed_tools: &allowed,
                     observation: observation.as_deref(),
+                    skill_directives: &skill_directives,
+                    system_prompt: &agent_system_prompt,
                 })
                 .await?;
             let history_budget = provider_config
@@ -953,12 +995,31 @@ impl AgentSubHarness {
             "Completed"
         }
         .to_string();
+        let latency_ms = now().saturating_sub(started_at_ms).max(0) as u64;
+        // Persist queryable execution-summary columns for the growth page.
+        WorkerRunRepo::record_summary(
+            pool,
+            &authorization.run_id,
+            total_prompt_tokens as i64,
+            total_completion_tokens as i64,
+            total_tokens as i64,
+            total_estimated_cost_usd,
+            latency_ms as i64,
+        )
+        .await
+        .map_err(|e| WorkerError::Internal(e.to_string()))?;
         Ok(AgentSubHarnessResult {
             final_status: final_status.clone(),
             summary: format!("WorkerHarness {} execution.", final_status),
             memory_ids,
             reflection_id,
             proposal_id,
+            agent_id: authorization.agent_id.clone(),
+            prompt_tokens: total_prompt_tokens,
+            completion_tokens: total_completion_tokens,
+            total_tokens,
+            total_cost_usd: total_estimated_cost_usd,
+            latency_ms,
         })
     }
 }

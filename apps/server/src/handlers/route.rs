@@ -167,7 +167,7 @@ mod tests {
     async fn route_plan_persists_execution_plan_anchor() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let contract = contract();
         let contract_hash = hash_contract(&contract).unwrap();
         ContractRepo::insert(&pool, &contract, &contract_hash)
@@ -196,7 +196,7 @@ mod tests {
     async fn route_plan_rejects_missing_contract_anchor() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
         let missing_hash = "f".repeat(64);
         let err = route_plan(
             State(state),
@@ -216,7 +216,7 @@ mod tests {
     async fn route_plan_rejects_contract_hash_mismatch() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let contract_a = contract();
         let contract_hash = hash_contract(&contract_a).unwrap();
         ContractRepo::insert(&pool, &contract_a, &contract_hash)

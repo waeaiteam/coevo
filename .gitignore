@@ -14,6 +14,7 @@ apps/desktop/src-tauri/binaries/
 .vscode/
 *.swp
 *.swo
+apps/desktop/.claude/
 
 # OS
 .DS_Store
@@ -29,6 +30,7 @@ data/
 # Environment
 .env
 .env.local
+apps/desktop/.npmrc
 
 # Local cargo overrides
 .cargo/config.local.toml

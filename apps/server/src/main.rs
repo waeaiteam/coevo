@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::{Duration, SystemTime};
 
+use coevo_server::config::coevo_home;
 use coevo_server::config::ServerConfig;
 use coevo_server::router::build_router;
 use coevo_server::state::AppState;
@@ -47,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Build state
-    let state = AppState::new(pool);
+    let state = AppState::new(pool, coevo_home());
 
     // CORS (allow desktop app)
     let cors = CorsLayer::new()

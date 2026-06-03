@@ -16,6 +16,7 @@ type Command = {
 const pages = [
   { id: "new-chat", labelKey: "nav.new_chat", hintKey: "cmd.new_task_hint", path: "/", initials: "new chat new task xt xr xrw", icon: "plus" as IconName },
   { id: "company", labelKey: "nav.my_company", hintKey: "cmd.my_company_hint", path: "/company", initials: "company opc wdgs wdopc", icon: "building" as IconName },
+  { id: "market", labelKey: "nav.talent_market", hintKey: "cmd.market_hint", path: "/market", initials: "market talent hire zhaopin scs ai yuangong shichang", icon: "users" as IconName },
   { id: "projects", labelKey: "nav.projects", hintKey: "cmd.projects_hint", path: "/projects", initials: "projects xm", icon: "folder-tree" as IconName },
   { id: "tasks", labelKey: "nav.tasks", hintKey: "cmd.tasks_hint", path: "/work-orders", initials: "tasks rw gd workorders", icon: "list-checks" as IconName },
   { id: "timeline", labelKey: "nav.timeline", hintKey: "cmd.timeline_hint", path: "/timeline", initials: "timeline sjx audit sj", icon: "history" as IconName },
@@ -31,6 +32,10 @@ const pages = [
   { id: "risk", labelKey: "adv.risk_gate", hintKey: "adv.risk_gate_desc", path: "/risk", initials: "risk gate fx", icon: "shield-check" as IconName },
   { id: "resolution", labelKey: "adv.resolution", hintKey: "adv.resolution_desc", path: "/resolution", initials: "resolution jj", icon: "git-branch" as IconName },
   { id: "audit", labelKey: "nav.audit", hintKey: "cmd.audit_hint", path: "/audit", initials: "audit sj hd", icon: "clipboard" as IconName },
+  { id: "evaluations", labelKey: "eval.title", hintKey: "eval.desc", path: "/evaluations", initials: "evaluations eval pg pinggu", icon: "badge-check" as IconName },
+  { id: "traces", labelKey: "traces.title", hintKey: "traces.desc", path: "/traces", initials: "traces trace span lianlu zhuizong", icon: "history" as IconName },
+  { id: "workflows", labelKey: "workflows.title", hintKey: "workflows.desc", path: "/workflows", initials: "workflows dag gongzuoliu bianpai", icon: "git-branch" as IconName },
+  { id: "performance", labelKey: "perf.title", hintKey: "perf.desc", path: "/performance", initials: "performance perf xingneng sandbox shapan", icon: "gauge" as IconName },
   { id: "model", labelKey: "settings.model_provider", hintKey: "cmd.model_hint", path: "/settings/model_provider", initials: "model mx llm", icon: "brain" as IconName },
   { id: "data", labelKey: "settings.data_management", hintKey: "adv.data_management_desc", path: "/settings/data_management", initials: "data sj", icon: "database" as IconName },
 ];

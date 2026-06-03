@@ -76,6 +76,11 @@ export async function post<T = unknown>(path: string, body: unknown): Promise<T>
   return handleResponse(res) as Promise<T>;
 }
 
+export async function del<T = unknown>(path: string): Promise<T> {
+  const res = await fetch(`${getApiBase()}${path}`, { method: "DELETE", headers: headers() });
+  return handleResponse(res) as Promise<T>;
+}
+
 export async function getHealth(): Promise<HealthResponse> {
   return get("/health");
 }
@@ -115,7 +120,32 @@ export async function revokeMemory(id: string) { return post(`/opc/memory/${id}/
 export async function searchMemory(q: string) { return get(`/opc/memory?q=${encodeURIComponent(q)}`); }
 export async function listEmployees(): Promise<Record<string,unknown>[]> { return get("/opc/agents/employees"); }
 export async function seedEmployees() { return post("/opc/agents/employees/seed", {}); }
+export async function getEmployee(agentId: string): Promise<Record<string, unknown>> { return get(`/opc/agents/employees/${agentId}`); }
+export async function createEmployee(employee: Record<string, unknown>): Promise<Record<string, unknown>> { return post("/opc/agents/employees", employee); }
+export async function updateEmployee(agentId: string, employee: Record<string, unknown>): Promise<Record<string, unknown>> { return put(`/opc/agents/employees/${agentId}`, employee); }
+export async function deleteEmployee(agentId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${getApiBase()}/opc/agents/employees/${agentId}`, { method: "DELETE", headers: headers() });
+  return handleResponse(res) as Promise<{ ok: boolean }>;
+}
+export async function updateEmployeePrompt(agentId: string, systemPrompt: string, changeSummary?: string): Promise<{ ok: boolean; version_id?: string }> {
+  return put(`/opc/agents/employees/${agentId}/prompt`, { system_prompt: systemPrompt, change_summary: changeSummary });
+}
 export async function getAgentMemory(agentId: string) { return get(`/opc/agents/employees/${agentId}/memory`); }
+export interface AgentGrowth {
+  agent_id: string;
+  current_score: number;
+  direction: "improving" | "declining" | "steady" | "new";
+  total_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  total_usage: number;
+  total_cost_usd: number;
+  trend: Array<{ at: number; score: number; task_count: number }>;
+  pending_improvements: Array<{ proposal_id: string; diagnosis: string; status: string; risk: string }>;
+}
+export async function getAgentGrowth(agentId: string): Promise<AgentGrowth> { return get(`/opc/agents/employees/${agentId}/growth`); }
 export async function listExecutors(): Promise<Record<string,unknown>[]> { return get("/opc/executors"); }
 export async function registerExecutor(p: Record<string,unknown>) { return post("/opc/executors/register", p); }
 export async function disableExecutor(id: string) { return post(`/opc/executors/${id}/disable`, {}); }
@@ -231,6 +261,47 @@ export async function getTool(id: string) { return get(`/opc/tools/${id}`); }
 export async function toolHealth(id: string) { return post(`/opc/tools/${id}/health`, {}); }
 export async function toolDryRun(id: string, payload: Record<string,unknown>) { return post(`/opc/tools/${id}/dry-run`, payload); }
 export async function toolExecute(id: string, payload: Record<string,unknown>) { return post(`/opc/tools/${id}/execute`, payload); }
+
+// === Prompt Version API ===
+export interface PromptVariable {
+  name: string;
+  var_type: string;
+  default_value?: string | null;
+  required: boolean;
+}
+
+export interface PromptVersion {
+  version_id: string;
+  prompt_id: string;
+  version_number: number;
+  content: string;
+  variables: string;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  created_at: string;
+  created_by: string;
+  change_summary?: string | null;
+}
+
+export async function createPromptVersion(payload: {
+  prompt_id: string;
+  content: string;
+  variables: PromptVariable[];
+  change_summary?: string;
+}): Promise<PromptVersion> {
+  return post('/opc/prompts/versions', payload);
+}
+
+export async function publishPromptVersion(versionId: string): Promise<{ success: boolean }> {
+  return post(`/opc/prompts/versions/${versionId}/publish`, {});
+}
+
+export async function listPromptVersions(promptId: string): Promise<PromptVersion[]> {
+  return get(`/opc/prompts/${promptId}/versions`);
+}
+
+export async function getPromptVersion(versionId: string): Promise<PromptVersion> {
+  return get(`/opc/prompts/versions/${versionId}`);
+}
 
 async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });

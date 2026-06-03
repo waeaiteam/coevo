@@ -11,6 +11,7 @@ use coevo_evolution::{
 };
 use coevo_executors::adapters::*;
 use coevo_executors::traits::*;
+use coevo_store::pool::create_pool;
 use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
 use coevo_store::repos_opc::*;
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
@@ -65,12 +66,185 @@ pub struct CreateWORequest {
     pub governance_proposal: Option<GovernanceProposal>,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateFounderRequest {
+    pub display_name: Option<String>,
+    pub preferences: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateCompanyRequest {
+    pub name: String,
+    pub mission: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCompanyRequest {
+    pub name: Option<String>,
+    pub mission: Option<String>,
+    pub charter: Option<String>,
+}
+
 macro_rules! ok {
     ($v:expr) => {
         (StatusCode::OK, Json($v))
     };
 }
 macro_rules! err { ($code:expr, $msg:expr) => { ($code, Json(serde_json::json!({"error":$msg}))) } }
+
+fn founder_placeholder(profile: Option<UserProfile>) -> serde_json::Value {
+    if let Some(profile) = profile {
+        serde_json::json!({
+            "founder_id": profile.user_id,
+            "display_name": profile.display_name,
+            "preferences": {
+                "preferred_language": profile.preferred_language,
+                "timezone": profile.timezone,
+                "risk_preference": profile.risk_preference,
+                "default_mission_mode": profile.default_mission_mode,
+                "communication_style": profile.communication_style,
+            }
+        })
+    } else {
+        serde_json::json!({
+            "founder_id": "default-founder",
+            "display_name": "Founder",
+            "preferences": {}
+        })
+    }
+}
+
+async fn company_pool(
+    state: &AppState,
+    opc_id: &str,
+) -> Result<sqlx::SqlitePool, (StatusCode, Json<serde_json::Value>)> {
+    let company_dir = state.company_workspace.company_dir(opc_id);
+    if !company_dir.exists() {
+        return Err(err!(StatusCode::NOT_FOUND, "company not found"));
+    }
+    create_pool(
+        &state
+            .company_workspace
+            .company_db_path(opc_id)
+            .to_string_lossy(),
+    )
+    .await
+    .map_err(|e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+fn company_employee_dir(state: &AppState, opc_id: &str, agent_id: &str) -> std::path::PathBuf {
+    state
+        .company_workspace
+        .company_dir(opc_id)
+        .join("employees")
+        .join(agent_id)
+}
+
+fn company_employee_passport_path(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+) -> std::path::PathBuf {
+    company_employee_dir(state, opc_id, agent_id).join("passport.json")
+}
+
+fn company_employee_prompt_path(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+) -> std::path::PathBuf {
+    company_employee_dir(state, opc_id, agent_id).join("prompt.md")
+}
+
+fn company_employee_prompt_versions_dir(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+) -> std::path::PathBuf {
+    company_employee_dir(state, opc_id, agent_id).join("prompt_versions")
+}
+
+fn company_employee_prompt_version_path(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+    version: i32,
+) -> std::path::PathBuf {
+    company_employee_prompt_versions_dir(state, opc_id, agent_id).join(format!("v{version}.md"))
+}
+
+fn company_employee_prompt_current_version_path(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+) -> std::path::PathBuf {
+    company_employee_prompt_versions_dir(state, opc_id, agent_id).join("current.txt")
+}
+
+fn ensure_company_employee_files(
+    state: &AppState,
+    opc_id: &str,
+    employee: &AgentEmployee,
+) -> Result<(), String> {
+    let employee_dir = company_employee_dir(state, opc_id, &employee.agent_id);
+    std::fs::create_dir_all(&employee_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(company_employee_prompt_versions_dir(
+        state,
+        opc_id,
+        &employee.agent_id,
+    ))
+    .map_err(|e| e.to_string())?;
+    std::fs::write(
+        company_employee_passport_path(state, opc_id, &employee.agent_id),
+        serde_json::to_string_pretty(&employee.passport).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let prompt_path = company_employee_prompt_path(state, opc_id, &employee.agent_id);
+    if !prompt_path.exists() {
+        std::fs::write(prompt_path, &employee.system_prompt).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn read_company_employee_current_prompt_version(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+) -> Result<Option<i32>, String> {
+    let path = company_employee_prompt_current_version_path(state, opc_id, agent_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    raw.trim()
+        .parse::<i32>()
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn write_company_employee_prompt_version(
+    state: &AppState,
+    opc_id: &str,
+    agent_id: &str,
+    version: i32,
+    content: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(company_employee_prompt_versions_dir(state, opc_id, agent_id))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        company_employee_prompt_version_path(state, opc_id, agent_id, version),
+        content,
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::write(company_employee_prompt_path(state, opc_id, agent_id), content)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        company_employee_prompt_current_version_path(state, opc_id, agent_id),
+        version.to_string(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 fn memory_scope_query_to_db(scope: Option<&str>) -> Option<&'static str> {
     match scope?.trim() {
@@ -331,6 +505,260 @@ fn make_executor(source_type: &ExecutorSourceType) -> Option<Box<dyn ExternalExe
 }
 
 // === Profiles ===
+pub async fn get_founder(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    match user_profile_repo::UserProfileRepo::get(&s.pool, "default-founder").await {
+        Ok(profile) => ok!(founder_placeholder(profile)),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn put_founder(
+    State(s): State<AppState>,
+    Json(req): Json<UpdateFounderRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let existing = user_profile_repo::UserProfileRepo::get(&s.pool, "default-founder")
+        .await
+        .ok()
+        .flatten();
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let display_name = req
+        .display_name
+        .unwrap_or_else(|| existing.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| "Founder".to_string()));
+    let preferred_language = existing
+        .as_ref()
+        .map(|p| p.preferred_language.clone())
+        .unwrap_or_else(|| "zh-CN".to_string());
+    let timezone = existing
+        .as_ref()
+        .map(|p| p.timezone.clone())
+        .unwrap_or_else(|| "Asia/Shanghai".to_string());
+    let communication_style = existing
+        .as_ref()
+        .map(|p| p.communication_style.clone())
+        .unwrap_or_else(|| "concise".to_string());
+
+    let profile = UserProfile {
+        user_id: "default-founder".to_string(),
+        display_name,
+        preferred_language,
+        timezone,
+        risk_preference: existing
+            .as_ref()
+            .map(|p| p.risk_preference)
+            .unwrap_or(RiskPreference::Balanced),
+        default_mission_mode: existing
+            .as_ref()
+            .map(|p| p.default_mission_mode)
+            .unwrap_or(MissionMode::Collaborative),
+        long_term_goals: existing
+            .as_ref()
+            .map(|p| p.long_term_goals.clone())
+            .unwrap_or_default(),
+        business_domains: existing
+            .as_ref()
+            .map(|p| p.business_domains.clone())
+            .unwrap_or_default(),
+        communication_style,
+        approval_preferences: existing.as_ref().map(|p| p.approval_preferences.clone()).unwrap_or(
+            ApprovalPreferences {
+                auto_approve_below_risk: 0.3,
+                require_explicit_for_yellow: true,
+                require_mfa_for_red: true,
+                negative_consent_timeout_secs: 300,
+            },
+        ),
+        data_boundaries: existing
+            .as_ref()
+            .map(|p| p.data_boundaries.clone())
+            .unwrap_or_default(),
+        budget_limits: existing.as_ref().map(|p| p.budget_limits.clone()).unwrap_or(
+            BudgetLimits {
+                max_cost_per_task_usd: 50.0,
+                max_cost_per_day_usd: 500.0,
+                max_agents_per_task: 5,
+            },
+        ),
+        favorite_tools: existing
+            .as_ref()
+            .map(|p| p.favorite_tools.clone())
+            .unwrap_or_default(),
+        active_projects: existing
+            .as_ref()
+            .map(|p| p.active_projects.clone())
+            .unwrap_or_default(),
+        created_at_ms: existing.as_ref().map(|p| p.created_at_ms).unwrap_or(now),
+        updated_at_ms: now,
+    };
+
+    match user_profile_repo::UserProfileRepo::upsert(&s.pool, &profile).await {
+        Ok(()) => ok!(founder_placeholder(Some(profile))),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn list_companies(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    match s.company_workspace.list_companies().await {
+        Ok(items) => {
+            let enriched: Vec<_> = items
+                .into_iter()
+                .map(|company| {
+                    let employee_count = {
+                        let db_path = s.company_workspace.company_db_path(&company.opc_id);
+                        if db_path.exists() {
+                            0
+                        } else {
+                            0
+                        }
+                    };
+                    serde_json::json!({
+                        "opc_id": company.opc_id,
+                        "name": company.name,
+                        "mission": "",
+                        "employee_count": employee_count,
+                        "created_at_ms": company.created_at_ms,
+                        "dir": company.dir,
+                    })
+                })
+                .collect();
+            ok!(serde_json::Value::Array(enriched))
+        }
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn create_company(
+    State(s): State<AppState>,
+    Json(req): Json<CreateCompanyRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if req.name.trim().is_empty() {
+        return err!(StatusCode::UNPROCESSABLE_ENTITY, "name is required");
+    }
+    match s
+        .company_workspace
+        .create_company(req.name.trim(), req.mission.as_deref(), "default-founder")
+        .await
+    {
+        Ok(company) => ok!(serde_json::json!({
+            "opc_id": company.opc_id,
+            "name": company.name,
+            "mission": req.mission.unwrap_or_default(),
+            "employee_count": 0,
+            "created_at_ms": company.created_at_ms,
+            "dir": company.dir,
+        })),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn get_company(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let listed = match s.company_workspace.list_companies().await {
+        Ok(items) => items,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let Some(company) = listed.into_iter().find(|company| company.opc_id == opc_id) else {
+        return err!(StatusCode::NOT_FOUND, "company not found");
+    };
+    let charter_path = s.company_workspace.company_dir(&company.opc_id).join("charter.md");
+    let charter_md = std::fs::read_to_string(charter_path).unwrap_or_default();
+    ok!(serde_json::json!({
+        "opc_id": company.opc_id,
+        "name": company.name,
+        "mission": "",
+        "employee_count": 0,
+        "created_at_ms": company.created_at_ms,
+        "dir": company.dir,
+        "charter_md": charter_md,
+        "goals": [],
+        "departments": [],
+        "shared_files_count": 0,
+        "memory_count": 0,
+        "report_count": 0,
+    }))
+}
+
+pub async fn put_company(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+    Json(req): Json<UpdateCompanyRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let company_dir = s.company_workspace.company_dir(&opc_id);
+    if !company_dir.exists() {
+        return err!(StatusCode::NOT_FOUND, "company not found");
+    }
+
+    let company_json = company_dir.join("company.json");
+    let raw = match std::fs::read_to_string(&company_json) {
+        Ok(raw) => raw,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let mut identity: coevo_store::company_workspace::CompanyIdentity =
+        match serde_json::from_str(&raw) {
+            Ok(identity) => identity,
+            Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+    if let Some(name) = req.name.as_ref().filter(|name| !name.trim().is_empty()) {
+        identity.name = name.trim().to_string();
+    }
+    if let Some(mission) = req.mission.as_ref() {
+        identity.mission = mission.clone();
+    }
+    identity.updated_at_ms = chrono::Utc::now().timestamp_millis() as u64;
+    if let Err(e) = std::fs::write(&company_json, serde_json::to_string_pretty(&identity).unwrap())
+    {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    if let Some(charter) = req.charter {
+        if let Err(e) = std::fs::write(company_dir.join("charter.md"), charter) {
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+
+    let companies = match s.company_workspace.list_companies().await {
+        Ok(companies) => companies,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let updated_index: Vec<_> = companies
+        .into_iter()
+        .map(|company| {
+            if company.opc_id == opc_id {
+                coevo_store::company_workspace::CompanyIndexEntry {
+                    name: identity.name.clone(),
+                    ..company
+                }
+            } else {
+                company
+            }
+        })
+        .collect();
+    let index_path = s.company_workspace.companies_index_path();
+    if let Err(e) = std::fs::write(index_path, serde_json::to_string_pretty(&updated_index).unwrap())
+    {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    ok!(serde_json::json!({
+        "opc_id": identity.opc_id,
+        "name": identity.name,
+        "mission": identity.mission,
+        "employee_count": 0,
+        "created_at_ms": identity.created_at_ms,
+        "dir": company_dir.to_string_lossy().to_string(),
+    }))
+}
+
+pub async fn delete_company(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match s.company_workspace.delete_company(&opc_id).await {
+        Ok(()) => ok!(serde_json::json!({"ok": true})),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 pub async fn get_user_profile(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match user_profile_repo::UserProfileRepo::get(&s.pool, "default-founder").await {
         Ok(Some(p)) => ok!(serde_json::to_value(p).unwrap()),
@@ -435,6 +863,27 @@ pub async fn list_employees(State(s): State<AppState>) -> (StatusCode, Json<serd
             |items| ok!(serde_json::to_value(items).unwrap()),
         )
 }
+
+pub async fn list_company_employees(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let result = agent_employee_repo::AgentEmployeeRepo::list(&pool).await.map(|employees| {
+        for employee in &employees {
+            let _ = ensure_company_employee_files(&s, &opc_id, employee);
+        }
+        employees
+    });
+    pool.close().await;
+    result.map_or_else(
+        |e| err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        |items| ok!(serde_json::to_value(items).unwrap()),
+    )
+}
 pub async fn seed_employees_handler(
     State(s): State<AppState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -449,6 +898,33 @@ pub async fn seed_employees_handler(
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
+
+pub async fn seed_company_employees_handler(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let response = match agent_employee_repo::AgentEmployeeRepo::seed(&pool).await {
+        Ok(()) => {
+            let count = agent_employee_repo::AgentEmployeeRepo::list(&pool)
+                .await
+                .map(|employees| {
+                    for employee in &employees {
+                        let _ = ensure_company_employee_files(&s, &opc_id, employee);
+                    }
+                    employees.len()
+                })
+                .unwrap_or(0);
+            ok!(serde_json::json!({"ok":true,"inserted":count,"total":count}))
+        }
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    pool.close().await;
+    response
+}
 pub async fn get_agent_memory(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -456,6 +932,471 @@ pub async fn get_agent_memory(
     match agent_memory_repo::AgentMemoryRepo::get(&s.pool, &id).await {
         Ok(Some(m)) => ok!(serde_json::to_value(m).unwrap()),
         Ok(None) => err!(StatusCode::NOT_FOUND, "Agent memory not found"),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Employee growth: a plain-language view of how an AI employee is performing
+/// over time — aggregated run stats, a reputation trend, and any pending
+/// improvement suggestions awaiting the founder's approval.
+pub async fn get_agent_growth(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use coevo_store::repos::reputation_repo::ReputationHistoryRepo;
+    use coevo_store::repos::worker_run_repo::WorkerRunRepo;
+
+    let (total, completed, failed, avg_latency, tokens, cost) =
+        WorkerRunRepo::agent_run_stats(&s.pool, &id)
+            .await
+            .unwrap_or((0, 0, 0, 0.0, 0, 0.0));
+
+    let history = ReputationHistoryRepo::list_by_agent(&s.pool, &id, 100)
+        .await
+        .unwrap_or_default();
+    let trend: Vec<serde_json::Value> = history
+        .iter()
+        .map(|h| {
+            serde_json::json!({
+                "at": h.created_at_ms,
+                "score": (h.overall_score * 100.0).round(),
+                "task_count": h.task_count,
+            })
+        })
+        .collect();
+
+    // Direction: compare the latest snapshot to the earliest available.
+    let direction = match (history.first(), history.last()) {
+        (Some(first), Some(last)) if history.len() >= 2 => {
+            let delta = last.overall_score - first.overall_score;
+            if delta > 0.02 {
+                "improving"
+            } else if delta < -0.02 {
+                "declining"
+            } else {
+                "steady"
+            }
+        }
+        _ => "new",
+    };
+
+    let current_score = history
+        .last()
+        .map(|h| (h.overall_score * 100.0).round())
+        .unwrap_or(50.0);
+    let success_rate = if total > 0 {
+        ((completed as f64 / total as f64) * 100.0).round()
+    } else {
+        0.0
+    };
+
+    // Pending improvement proposals awaiting the founder's approval.
+    let proposals = skill_evolution_repo::SkillEvolutionRepo::list(&s.pool, None)
+        .await
+        .unwrap_or_default();
+    let pending: Vec<serde_json::Value> = proposals
+        .iter()
+        .filter_map(|p| {
+            let v = serde_json::to_value(p).ok()?;
+            let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
+            if status == "Proposed" || status == "Verified" || status == "NeedsHumanReview" {
+                Some(serde_json::json!({
+                    "proposal_id": p.proposal_id,
+                    "diagnosis": p.diagnosis,
+                    "status": v.get("status"),
+                    "risk": p.risk_assessment,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    ok!(serde_json::json!({
+        "agent_id": id,
+        "current_score": current_score,
+        "direction": direction,
+        "total_tasks": total,
+        "completed_tasks": completed,
+        "failed_tasks": failed,
+        "success_rate": success_rate,
+        "avg_latency_ms": avg_latency.round(),
+        "total_usage": tokens,
+        "total_cost_usd": cost,
+        "trend": trend,
+        "pending_improvements": pending,
+    }))
+}
+
+// === Agent Workbench: employee CRUD + prompt management ===
+pub async fn get_employee(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match agent_employee_repo::AgentEmployeeRepo::get(&s.pool, &id).await {
+        Ok(Some(e)) => ok!(serde_json::to_value(e).unwrap()),
+        Ok(None) => err!(StatusCode::NOT_FOUND, "Employee not found"),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn get_company_employee(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let result = agent_employee_repo::AgentEmployeeRepo::get(&pool, &id).await.map(|employee| {
+        if let Some(ref employee) = employee {
+            let _ = ensure_company_employee_files(&s, &opc_id, employee);
+        }
+        employee
+    });
+    pool.close().await;
+    match result {
+        Ok(Some(e)) => ok!(serde_json::to_value(e).unwrap()),
+        Ok(None) => err!(StatusCode::NOT_FOUND, "Employee not found"),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn create_employee(
+    State(s): State<AppState>,
+    Json(mut employee): Json<AgentEmployee>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if employee.agent_id.trim().is_empty() {
+        return err!(StatusCode::UNPROCESSABLE_ENTITY, "agent_id is required");
+    }
+    match agent_employee_repo::AgentEmployeeRepo::exists(&s.pool, &employee.agent_id).await {
+        Ok(true) => return err!(StatusCode::CONFLICT, "agent_id already exists"),
+        Ok(false) => {}
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    employee.created_at_ms = now;
+    employee.updated_at_ms = now;
+    match agent_employee_repo::AgentEmployeeRepo::upsert(&s.pool, &employee).await {
+        Ok(()) => ok!(serde_json::to_value(employee).unwrap()),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn create_company_employee(
+    State(s): State<AppState>,
+    Path(opc_id): Path<String>,
+    Json(mut employee): Json<AgentEmployee>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    if employee.agent_id.trim().is_empty() {
+        pool.close().await;
+        return err!(StatusCode::UNPROCESSABLE_ENTITY, "agent_id is required");
+    }
+    match agent_employee_repo::AgentEmployeeRepo::exists(&pool, &employee.agent_id).await {
+        Ok(true) => {
+            pool.close().await;
+            return err!(StatusCode::CONFLICT, "agent_id already exists");
+        }
+        Ok(false) => {}
+        Err(e) => {
+            pool.close().await;
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    employee.created_at_ms = now;
+    employee.updated_at_ms = now;
+    let result = agent_employee_repo::AgentEmployeeRepo::upsert(&pool, &employee)
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|_| ensure_company_employee_files(&s, &opc_id, &employee).map(|_| ()));
+    pool.close().await;
+    match result {
+        Ok(()) => ok!(serde_json::to_value(employee).unwrap()),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn update_employee(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(mut employee): Json<AgentEmployee>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    employee.agent_id = id;
+    employee.updated_at_ms = chrono::Utc::now().timestamp_millis() as u64;
+    match agent_employee_repo::AgentEmployeeRepo::upsert(&s.pool, &employee).await {
+        Ok(()) => ok!(serde_json::to_value(employee).unwrap()),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn update_company_employee(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+    Json(mut employee): Json<AgentEmployee>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let existing = match agent_employee_repo::AgentEmployeeRepo::get(&pool, &id).await {
+        Ok(Some(existing)) => existing,
+        Ok(None) => {
+            pool.close().await;
+            return err!(StatusCode::NOT_FOUND, "Employee not found");
+        }
+        Err(e) => {
+            pool.close().await;
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    };
+    employee.agent_id = id;
+    employee.passport = existing.passport;
+    employee.created_at_ms = existing.created_at_ms;
+    employee.updated_at_ms = chrono::Utc::now().timestamp_millis() as u64;
+    let result = agent_employee_repo::AgentEmployeeRepo::upsert(&pool, &employee)
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|_| ensure_company_employee_files(&s, &opc_id, &employee).map(|_| ()));
+    pool.close().await;
+    match result {
+        Ok(()) => ok!(serde_json::to_value(employee).unwrap()),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn delete_employee(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match agent_employee_repo::AgentEmployeeRepo::delete(&s.pool, &id).await {
+        Ok(()) => ok!(serde_json::json!({"ok": true, "deleted": id})),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn delete_company_employee(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let result = agent_employee_repo::AgentEmployeeRepo::delete(&pool, &id).await;
+    pool.close().await;
+    match result {
+        Ok(()) => ok!(serde_json::json!({"ok": true, "deleted": id})),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdatePromptRequest {
+    pub system_prompt: String,
+    pub change_summary: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct PromptRollbackRequest {
+    pub version: i32,
+}
+
+pub async fn update_employee_prompt(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdatePromptRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Save the prompt on the employee record.
+    if let Err(e) =
+        agent_employee_repo::AgentEmployeeRepo::update_system_prompt(&s.pool, &id, &req.system_prompt)
+            .await
+    {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    // Version it through the shared prompt-version history (prompt_id = agent_id).
+    let version_id = crate::handlers::prompts::record_and_publish_version(
+        &s.pool,
+        &id,
+        &req.system_prompt,
+        "workbench",
+        req.change_summary.as_deref(),
+    )
+    .await
+    .ok();
+    ok!(serde_json::json!({"ok": true, "agent_id": id, "version_id": version_id}))
+}
+
+pub async fn get_company_employee_prompt(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let prompt_path = company_employee_prompt_path(&s, &opc_id, &id);
+    if !prompt_path.exists() {
+        let pool = match company_pool(&s, &opc_id).await {
+            Ok(pool) => pool,
+            Err(err) => return err,
+        };
+        let employee = match agent_employee_repo::AgentEmployeeRepo::get(&pool, &id).await {
+            Ok(Some(employee)) => employee,
+            Ok(None) => {
+                pool.close().await;
+                return err!(StatusCode::NOT_FOUND, "Employee not found");
+            }
+            Err(e) => {
+                pool.close().await;
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+        };
+        let _ = ensure_company_employee_files(&s, &opc_id, &employee);
+        pool.close().await;
+    }
+    let content = match std::fs::read_to_string(&prompt_path) {
+        Ok(content) => content,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let version = match read_company_employee_current_prompt_version(&s, &opc_id, &id) {
+        Ok(Some(version)) => version,
+        Ok(None) => 0,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    ok!(serde_json::json!({"content_md": content, "version": version}))
+}
+
+pub async fn update_company_employee_prompt(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+    Json(req): Json<UpdatePromptRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let employee = match agent_employee_repo::AgentEmployeeRepo::get(&pool, &id).await {
+        Ok(Some(employee)) => employee,
+        Ok(None) => {
+            pool.close().await;
+            return err!(StatusCode::NOT_FOUND, "Employee not found");
+        }
+        Err(e) => {
+            pool.close().await;
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    };
+    let _ = ensure_company_employee_files(&s, &opc_id, &employee);
+    let current_version = match read_company_employee_current_prompt_version(&s, &opc_id, &id) {
+        Ok(Some(version)) => version,
+        Ok(None) => 0,
+        Err(e) => {
+            pool.close().await;
+            return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
+        }
+    };
+    let next_version = current_version + 1;
+    if let Err(e) = write_company_employee_prompt_version(&s, &opc_id, &id, next_version, &req.system_prompt) {
+        pool.close().await;
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+
+    if let Err(e) =
+        agent_employee_repo::AgentEmployeeRepo::update_system_prompt(&pool, &id, &req.system_prompt).await
+    {
+        pool.close().await;
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    pool.close().await;
+    ok!(serde_json::json!({"version": next_version, "change_summary": req.change_summary}))
+}
+
+pub async fn list_company_employee_prompt_versions(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let dir = company_employee_prompt_versions_dir(&s, &opc_id, &id);
+    if !dir.exists() {
+        return ok!(serde_json::json!([]));
+    }
+    let current = match read_company_employee_current_prompt_version(&s, &opc_id, &id) {
+        Ok(version) => version,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let mut versions = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(raw_version) = stem.strip_prefix('v') else {
+            continue;
+        };
+        let Ok(version) = raw_version.parse::<i32>() else {
+            continue;
+        };
+        versions.push(serde_json::json!({
+            "version": version,
+            "current": current == Some(version),
+            "path": path.to_string_lossy().to_string(),
+        }));
+    }
+    versions.sort_by(|a, b| {
+        b["version"]
+            .as_i64()
+            .unwrap_or_default()
+            .cmp(&a["version"].as_i64().unwrap_or_default())
+    });
+    ok!(serde_json::Value::Array(versions))
+}
+
+pub async fn get_company_employee_prompt_version(
+    State(s): State<AppState>,
+    Path((opc_id, id, version)): Path<(String, String, i32)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let version_path = company_employee_prompt_version_path(&s, &opc_id, &id, version);
+    if !version_path.exists() {
+        return err!(StatusCode::NOT_FOUND, "Prompt version not found");
+    }
+    match std::fs::read_to_string(&version_path) {
+        Ok(content) => ok!(serde_json::json!({"content_md": content, "version": version})),
+        Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub async fn rollback_company_employee_prompt(
+    State(s): State<AppState>,
+    Path((opc_id, id)): Path<(String, String)>,
+    Json(req): Json<PromptRollbackRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let version_path = company_employee_prompt_version_path(&s, &opc_id, &id, req.version);
+    if !version_path.exists() {
+        return err!(StatusCode::NOT_FOUND, "Prompt version not found");
+    }
+    let content = match std::fs::read_to_string(&version_path) {
+        Ok(content) => content,
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if let Err(e) = write_company_employee_prompt_version(&s, &opc_id, &id, req.version, &content) {
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    let pool = match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool,
+        Err(err) => return err,
+    };
+    let update_result =
+        agent_employee_repo::AgentEmployeeRepo::update_system_prompt(&pool, &id, &content).await;
+    pool.close().await;
+    match update_result {
+        Ok(()) => ok!(serde_json::json!({"version": req.version, "ok": true})),
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1154,6 +2095,16 @@ pub async fn approve_proposal(
     if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::record_version(&s.pool, &vr).await {
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
+    // Converge the evolution upgrade into the prompt-version history so the
+    // approved prompt becomes the published version the runtime + UI both read.
+    let _ = crate::handlers::prompts::record_and_publish_version(
+        &s.pool,
+        &proposal.target_skill_id,
+        &proposal.proposed_changes,
+        "skill-evolution",
+        Some(&proposal.diagnosis),
+    )
+    .await;
     if let Err(e) =
         skill_evolution_repo::SkillEvolutionRepo::update_status(&s.pool, &id, "Applied").await
     {
@@ -1177,9 +2128,16 @@ mod tests {
     use crate::handlers::timeline::work_order_audit_export;
     use crate::state::AppState;
     use coevo_core::contract::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
     use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
     use coevo_store::{migrate::run_migrations, pool::create_test_pool};
     use std::sync::Mutex;
+    use tower::ServiceExt;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1233,6 +2191,254 @@ mod tests {
             .execute(pool)
         .await
         .unwrap();
+    }
+
+    async fn company_test_state() -> (AppState, std::path::PathBuf) {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("coevo-company-handler-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(pool, root.clone());
+        (state, root)
+    }
+
+    #[tokio::test]
+    async fn company_routes_create_fetch_and_delete_real_companies() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (state, root) = company_test_state().await;
+        let app = Router::new()
+            .route("/companies", get(list_companies).post(create_company))
+            .route("/companies/{opc_id}", get(get_company).delete(delete_company))
+            .with_state(state.clone());
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/companies")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Alpha Labs",
+                            "mission": "Build alpha"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::OK);
+        let created: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let opc_id = created["opc_id"].as_str().unwrap().to_string();
+        assert!(opc_id.starts_with("opc-"));
+        assert_eq!(created["name"], "Alpha Labs");
+        assert_eq!(created["mission"], "Build alpha");
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/companies")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let listed: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["opc_id"], opc_id);
+        assert_eq!(listed[0]["name"], "Alpha Labs");
+
+        let detail_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/companies/{opc_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(detail_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(detail["opc_id"], opc_id);
+        assert_eq!(detail["name"], "Alpha Labs");
+        assert_eq!(detail["charter_md"], "# Alpha Labs\n\nBuild alpha");
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/companies/{opc_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::OK);
+
+        let after_delete_response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/companies")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after_delete_response.status(), StatusCode::OK);
+        let after_delete: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(after_delete_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_delete.as_array().unwrap().len(), 0);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn company_detail_returns_not_found_after_company_is_deleted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (state, root) = company_test_state().await;
+        let company = state
+            .company_workspace
+            .create_company("Beta Works", Some("Build beta"), "default-founder")
+            .await
+            .unwrap();
+
+        state
+            .company_workspace
+            .delete_company(&company.opc_id)
+            .await
+            .unwrap();
+
+        let (status, Json(body)) = get_company(State(state), Path(company.opc_id)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "company not found");
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn company_employee_handlers_isolate_seeded_data_per_company() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (state, root) = company_test_state().await;
+        let alpha = state
+            .company_workspace
+            .create_company("Alpha", Some("Alpha mission"), "default-founder")
+            .await
+            .unwrap();
+        let beta = state
+            .company_workspace
+            .create_company("Beta", Some("Beta mission"), "default-founder")
+            .await
+            .unwrap();
+
+        let (alpha_empty_status, Json(alpha_empty)) =
+            list_company_employees(State(state.clone()), Path(alpha.opc_id.clone())).await;
+        assert_eq!(alpha_empty_status, StatusCode::OK);
+        assert_eq!(alpha_empty.as_array().unwrap().len(), 0);
+
+        let (beta_empty_status, Json(beta_empty)) =
+            list_company_employees(State(state.clone()), Path(beta.opc_id.clone())).await;
+        assert_eq!(beta_empty_status, StatusCode::OK);
+        assert_eq!(beta_empty.as_array().unwrap().len(), 0);
+
+        let (seed_status, Json(seed_body)) =
+            seed_company_employees_handler(State(state.clone()), Path(alpha.opc_id.clone())).await;
+        assert_eq!(seed_status, StatusCode::OK);
+        assert!(seed_body["total"].as_u64().unwrap() > 0);
+
+        let (alpha_seeded_status, Json(alpha_seeded)) =
+            list_company_employees(State(state.clone()), Path(alpha.opc_id.clone())).await;
+        assert_eq!(alpha_seeded_status, StatusCode::OK);
+        assert!(alpha_seeded.as_array().unwrap().len() > 0);
+
+        let (beta_after_alpha_status, Json(beta_after_alpha)) =
+            list_company_employees(State(state.clone()), Path(beta.opc_id.clone())).await;
+        assert_eq!(beta_after_alpha_status, StatusCode::OK);
+        assert_eq!(beta_after_alpha.as_array().unwrap().len(), 0);
+
+        let delete_beta = delete_company(State(state.clone()), Path(beta.opc_id.clone())).await;
+        assert_eq!(delete_beta.0, StatusCode::OK);
+
+        let (alpha_after_delete_status, Json(alpha_after_delete)) =
+            list_company_employees(State(state), Path(alpha.opc_id)).await;
+        assert_eq!(alpha_after_delete_status, StatusCode::OK);
+        assert_eq!(
+            alpha_after_delete.as_array().unwrap().len(),
+            alpha_seeded.as_array().unwrap().len()
+        );
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn company_employee_passport_is_read_only_on_update() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (state, root) = company_test_state().await;
+        let company = state
+            .company_workspace
+            .create_company("Passport Co", Some("Read only passport"), "default-founder")
+            .await
+            .unwrap();
+
+        let (seed_status, _) =
+            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone())).await;
+        assert_eq!(seed_status, StatusCode::OK);
+
+        let (get_status, Json(before)) = get_company_employee(
+            State(state.clone()),
+            Path((company.opc_id.clone(), "agent-pm-01".to_string())),
+        )
+        .await;
+        assert_eq!(get_status, StatusCode::OK);
+        let mut employee: AgentEmployee = serde_json::from_value(before.clone()).unwrap();
+        let original_passport_id = employee.passport.passport_id.clone();
+        employee.display_name = "Updated PM".to_string();
+        employee.passport.passport_id = "tampered-passport".to_string();
+
+        let (update_status, Json(updated)) = update_company_employee(
+            State(state.clone()),
+            Path((company.opc_id.clone(), "agent-pm-01".to_string())),
+            Json(employee),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated["display_name"], "Updated PM");
+
+        let (after_status, Json(after)) = get_company_employee(
+            State(state),
+            Path((company.opc_id.clone(), "agent-pm-01".to_string())),
+        )
+        .await;
+        assert_eq!(after_status, StatusCode::OK);
+        assert_eq!(after["passport"]["passport_id"], original_passport_id);
+
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -1324,7 +2530,7 @@ mod tests {
     async fn memory_scope_query_accepts_snake_case_after_snake_case_create_payload() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
         let memory = MemoryRecord {
             memory_id: "mem-snake-query".to_string(),
             scope: MemoryScope::Company,
@@ -1376,7 +2582,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-red-alpha-block";
 
         let create = CreateWORequest {
@@ -1420,7 +2626,7 @@ mod tests {
     async fn create_work_order_overrides_client_track_with_server_classification() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-server-classifies-red";
 
         let create = CreateWORequest {
@@ -1465,7 +2671,7 @@ mod tests {
         agent_employee_repo::AgentEmployeeRepo::seed(&pool)
             .await
             .unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-verdict-downgrade";
 
         let create = CreateWORequest {
@@ -1524,7 +2730,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-green-file-readonly";
         let root = std::env::temp_dir().join(format!("coevo-readonly-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -1586,7 +2792,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-green-provider-required";
 
         let create = CreateWORequest {
@@ -1636,7 +2842,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-green-active-model-routing";
         let root =
             std::env::temp_dir().join(format!("coevo-active-model-{}", uuid::Uuid::new_v4()));
@@ -1708,7 +2914,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-audit-export";
         let root =
             std::env::temp_dir().join(format!("coevo-audit-export-{}", uuid::Uuid::new_v4()));
@@ -1828,7 +3034,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-yellow-approval";
         let contract_hash = "c".repeat(64);
         insert_contract(&pool, &contract_hash).await;
@@ -1910,6 +3116,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn founder_and_company_handlers_manage_multi_company_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("coevo-server-company-{}", uuid::Uuid::new_v4()));
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone(), root.clone());
+
+        let (founder_status, Json(founder)) = get_founder(State(state.clone())).await;
+        assert_eq!(founder_status, StatusCode::OK);
+        assert_eq!(founder["founder_id"], "default-founder");
+
+        let (update_founder_status, Json(updated_founder)) = put_founder(
+            State(state.clone()),
+            Json(UpdateFounderRequest {
+                display_name: Some("WAE Founder".to_string()),
+                preferences: None,
+            }),
+        )
+        .await;
+        assert_eq!(update_founder_status, StatusCode::OK);
+        assert_eq!(updated_founder["display_name"], "WAE Founder");
+
+        let (create_status, Json(created)) = create_company(
+            State(state.clone()),
+            Json(CreateCompanyRequest {
+                name: "Alpha Labs".to_string(),
+                mission: Some("Build alpha".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::OK);
+        let opc_id = created["opc_id"].as_str().unwrap().to_string();
+        assert!(root.join("companies.json").exists());
+        assert!(root.join(&opc_id).join("company.json").exists());
+        assert!(root.join(&opc_id).join("data.db").exists());
+
+        let (list_status, Json(companies)) = list_companies(State(state.clone())).await;
+        assert_eq!(list_status, StatusCode::OK);
+        assert_eq!(companies.as_array().unwrap().len(), 1);
+        assert_eq!(companies[0]["opc_id"], opc_id);
+
+        let (detail_status, Json(detail)) =
+            get_company(State(state.clone()), Path(opc_id.clone())).await;
+        assert_eq!(detail_status, StatusCode::OK);
+        assert_eq!(detail["opc_id"], opc_id);
+        assert!(detail["charter_md"].as_str().unwrap_or_default().contains("Alpha Labs"));
+
+        let (update_status, Json(updated_company)) = put_company(
+            State(state.clone()),
+            Path(opc_id.clone()),
+            Json(UpdateCompanyRequest {
+                name: Some("Alpha Labs Renamed".to_string()),
+                mission: Some("Build alpha better".to_string()),
+                charter: Some("# Alpha Charter\n\nRenamed company.".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated_company["name"], "Alpha Labs Renamed");
+
+        let (updated_detail_status, Json(updated_detail)) =
+            get_company(State(state.clone()), Path(opc_id.clone())).await;
+        assert_eq!(updated_detail_status, StatusCode::OK);
+        assert!(updated_detail["charter_md"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Alpha Charter"));
+
+        let (delete_status, Json(deleted)) =
+            delete_company(State(state.clone()), Path(opc_id.clone())).await;
+        assert_eq!(delete_status, StatusCode::OK);
+        assert_eq!(deleted["ok"], true);
+        assert!(!root.join(&opc_id).exists());
+
+        let (post_delete_list_status, Json(post_delete_companies)) =
+            list_companies(State(state)).await;
+        assert_eq!(post_delete_list_status, StatusCode::OK);
+        assert!(post_delete_companies.as_array().unwrap().is_empty());
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
     async fn approval_endpoint_approves_and_reenters_with_receipt() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
@@ -1918,7 +3207,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-yellow-approval-endpoint";
         let contract_hash = "e".repeat(64);
         insert_contract(&pool, &contract_hash).await;
@@ -1964,7 +3253,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let work_order_id = "wo-yellow-no-freeform-proof";
         let contract_hash = "f".repeat(64);
         insert_contract(&pool, &contract_hash).await;
@@ -2015,7 +3304,7 @@ mod tests {
             .await
             .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
         let contract_hash = "e".repeat(64);
         insert_contract(&pool, &contract_hash).await;
 

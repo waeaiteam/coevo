@@ -454,6 +454,46 @@ impl WorkerHarness {
         WorkerRunRepo::set_status(pool, &run_id, &sub_result.final_status)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?;
+
+        // Close the self-optimization loop's "evaluate" arm: turn the run outcome
+        // into a reputation update and a growth-history snapshot for this employee.
+        {
+            let outcome = match sub_result.final_status.as_str() {
+                "Completed" => 1.0,
+                "WaitingApproval" => 0.6,
+                "TimedOut" | "Blocked" => 0.2,
+                _ => 0.0, // Failed / Cancelled
+            };
+            // Difficulty proxy: more reasoning rounds (tokens) => harder task.
+            let difficulty = if sub_result.total_tokens > 4000 {
+                4.0
+            } else if sub_result.total_tokens > 1500 {
+                3.0
+            } else {
+                2.0
+            };
+            if let Ok(rv) = coevo_reputation::scoring::ReputationEngine::update(
+                pool,
+                &sub_result.agent_id,
+                difficulty,
+                outcome,
+                0.5,
+            )
+            .await
+            {
+                let _ = coevo_store::repos::reputation_repo::ReputationHistoryRepo::snapshot(
+                    pool,
+                    &sub_result.agent_id,
+                    Some(&run_id),
+                    rv.task_domain_competence,
+                    rv.uncertainty_honesty,
+                    rv.policy_compliance,
+                    rv.resource_efficiency,
+                    rv.task_count as i64,
+                )
+                .await;
+            }
+        }
         WorkerEventRepo::append(
             pool,
             &run_id,

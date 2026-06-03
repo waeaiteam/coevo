@@ -387,7 +387,8 @@ mod tests {
         .await
         .unwrap();
 
-        let (status, Json(body)) = global_timeline(State(AppState::new(pool))).await;
+        let (status, Json(body)) =
+            global_timeline(State(AppState::new(pool, std::env::temp_dir()))).await;
         assert_eq!(status, StatusCode::OK);
         let items = body.as_array().unwrap();
         assert_eq!(items.len(), 2);

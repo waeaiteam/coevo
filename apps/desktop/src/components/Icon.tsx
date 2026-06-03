@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export type IconName =
   | "plus"
@@ -236,10 +236,12 @@ export default function Icon({
   name,
   className,
   size,
+  style,
 }: {
   name: IconName;
   className?: string;
   size?: number;
+  style?: CSSProperties;
 }) {
   return (
     <svg
@@ -253,6 +255,7 @@ export default function Icon({
       height={size ?? "1em"}
       aria-hidden="true"
       className={className}
+      style={style}
     >
       {PATHS[name]}
     </svg>

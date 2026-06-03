@@ -182,6 +182,11 @@ pub struct AgentEmployee {
     pub reputation_vector: super::reputation::ReputationVector,
     pub supervisor_agent_id: Option<String>,
     pub lifecycle_status: LifecycleStatus,
+    /// The employee's system prompt / working charter. Injected into the
+    /// execution prompt so the agent knows its role and how to work. Empty by
+    /// default for built-in employees (customizable via the Agent Workbench).
+    #[serde(default)]
+    pub system_prompt: String,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
 }

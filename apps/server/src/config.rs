@@ -4,7 +4,7 @@
 use std::env;
 use std::path::PathBuf;
 
-fn coevo_home() -> PathBuf {
+pub fn coevo_home() -> PathBuf {
     if let Ok(h) = env::var("COEVO_HOME") {
         return PathBuf::from(h);
     }

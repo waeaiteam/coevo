@@ -220,6 +220,7 @@ describe("ordinary user product surface", () => {
     expect(screen.getByText("Recent Chats")).toBeInTheDocument();
     const nav = await screen.findByRole("navigation", { name: /Primary/i });
     expect(within(nav).getByRole("link", { name: /My Company/i })).toHaveAttribute("href", "/company");
+    expect(within(nav).getByRole("link", { name: /AI Talent Market/i })).toHaveAttribute("href", "/market");
     expect(within(nav).getByRole("link", { name: /Projects/i })).toHaveAttribute("href", "/projects");
     expect(within(nav).getByRole("link", { name: /^Tasks$/i })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: /Timeline/i })).toHaveAttribute("href", "/timeline");

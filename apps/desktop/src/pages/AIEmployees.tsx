@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { getAgentMemory, listEmployees, seedEmployees } from "../api/client";
+import { Link } from "react-router-dom";
+import { createEmployee, getAgentMemory, listEmployees, seedEmployees } from "../api/client";
+import Icon from "../components/Icon";
+import AgentWorkbenchPanel from "../components/AgentWorkbenchPanel";
 import { t, useLanguage } from "../settings/i18n";
 
 const DEPTS = [
@@ -89,6 +92,8 @@ export default function AIEmployees() {
   const [agentMemory, setAgentMemory] = useState<Record<string, unknown> | null>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryError, setMemoryError] = useState("");
+  const [showWorkbench, setShowWorkbench] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -168,6 +173,9 @@ export default function AIEmployees() {
         </div>
         <div className="flex items-center gap-2">
           {seedResult && <span className="text-xs" style={{ color: seedResult.startsWith("Error") ? "var(--red)" : "var(--green)" }}>{seedResult}</span>}
+          <button onClick={() => setShowCreate(true)} className="product-link-button">
+            <Icon name="plus" /> {t("workbench.new_employee")}
+          </button>
           <button onClick={seed} disabled={seeding} className="px-3 py-1.5 text-xs rounded-md text-white" style={{ background: "var(--accent)" }}>
             {seeding ? t("employees.seeding") : emps.length === 0 ? t("employees.seed") : t("employees.reseed")}
           </button>
@@ -231,8 +239,41 @@ export default function AIEmployees() {
           })}
         </section>
 
-        <EmployeeDetail employee={selected} passport={passport} boundary={boundary} memory={agentMemory} memoryLoading={memoryLoading} memoryError={memoryError} />
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <button
+              className="product-link-button"
+              style={{ borderColor: !showWorkbench ? "var(--accent)" : undefined, color: !showWorkbench ? "var(--accent)" : undefined }}
+              onClick={() => setShowWorkbench(false)}
+            >
+              <Icon name="user" /> {t("workbench.tab_overview")}
+            </button>
+            <button
+              className="product-link-button"
+              style={{ borderColor: showWorkbench ? "var(--accent)" : undefined, color: showWorkbench ? "var(--accent)" : undefined }}
+              onClick={() => setShowWorkbench(true)}
+            >
+              <Icon name="sliders" /> {t("workbench.tab_manage")}
+            </button>
+          </div>
+          {showWorkbench && selected ? (
+            <AgentWorkbenchPanel
+              employee={selected}
+              onChanged={load}
+              onDeleted={() => { setSelectedId(""); setShowWorkbench(false); load(); }}
+            />
+          ) : (
+            <EmployeeDetail employee={selected} passport={passport} boundary={boundary} memory={agentMemory} memoryLoading={memoryLoading} memoryError={memoryError} />
+          )}
+        </div>
       </div>
+
+      {showCreate && (
+        <CreateEmployeeModal
+          onClose={() => setShowCreate(false)}
+          onCreated={(id) => { setShowCreate(false); setSelectedId(id); setShowWorkbench(true); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -264,9 +305,19 @@ function EmployeeDetail({
   return (
     <section className="rounded-md border" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)" }}>
       <div className="border-b p-4" style={{ borderColor: "var(--border-subtle)" }}>
-        <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>{t("employees.selected")}</div>
-        <h3 className="mt-1 text-lg font-bold">{String(employee.display_name || employee.agent_id || "")}</h3>
-        <div className="mt-1 font-mono text-xs" style={{ color: "var(--accent)" }}>{String(employee.agent_id || "")}</div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>{t("employees.selected")}</div>
+            <h3 className="mt-1 text-lg font-bold">{String(employee.display_name || employee.agent_id || "")}</h3>
+            <div className="mt-1 font-mono text-xs" style={{ color: "var(--accent)" }}>{String(employee.agent_id || "")}</div>
+          </div>
+          <Link
+            to={`/employees/${encodeURIComponent(String(employee.agent_id || ""))}/growth`}
+            className="product-link-button"
+          >
+            <Icon name="badge-check" /> {t("growth.view")}
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-5 p-4 lg:grid-cols-2">
@@ -352,6 +403,107 @@ function MemoryList({ label, items }: { label: string; items: string[] }) {
       <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>{label}</div>
       <div className="mt-2 space-y-1">
         {items.length ? items.map((item) => <div key={item} className="text-xs" style={{ color: "var(--text-secondary)" }}>{item}</div>) : <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("common.none")}</div>}
+      </div>
+    </div>
+  );
+}
+
+const NEW_DEPTS = ["founder_office", "product", "engineering", "research", "governance", "sre", "growth", "finance", "legal", "design", "content", "custom"];
+
+function CreateEmployeeModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  useLanguage();
+  const [name, setName] = useState("");
+  const [department, setDepartment] = useState("custom");
+  const [riskCeiling, setRiskCeiling] = useState(0.3);
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function create() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    const agentId = `agent-${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = Date.now();
+    const employee = {
+      agent_id: agentId,
+      display_name: name.trim(),
+      department,
+      role: department,
+      passport: {
+        passport_id: `passport-${agentId}`,
+        issued_by: "workbench",
+        roles: [department],
+        capabilities: ["analysis", "planning"],
+        restrictions: ["no production write", "no financial transfer"],
+        expires_at_ms: null,
+      },
+      model_profile: {
+        provider: "mock", base_url: "", api_key_ref: "",
+        default_model: "gpt-4o", fast_model: "gpt-4o-mini", reasoning_model: "o1",
+        structured_output_model: "gpt-4o", timeout_ms: 30000, max_tokens: 4096, max_cost_per_task_usd: 1.0,
+      },
+      tool_scopes: ["urn:coevo:tool:read"],
+      memory_scope: "agent",
+      permission_boundary: {
+        max_risk_score: riskCeiling, can_write_fact: false, can_write_decision: false,
+        can_access_network: false, can_access_filesystem: false, can_call_external_executor: false, can_propose_skill: true,
+      },
+      allowed_cognitive_layers: ["Hypothesis", "Suggestion"],
+      allowed_action_modes: ["DRAFT_ONLY"],
+      risk_ceiling: riskCeiling,
+      reputation_vector: {
+        agent_id: agentId, task_domain_competence: 0.5, uncertainty_honesty: 0.5,
+        policy_compliance: 0.5, resource_efficiency: 0.5, task_count: 0,
+        high_difficulty_avoidance_count: 0, last_updated_ms: now,
+      },
+      supervisor_agent_id: "agent-founder-01",
+      lifecycle_status: "active",
+      system_prompt: systemPrompt,
+      created_at_ms: now,
+      updated_at_ms: now,
+    };
+    try {
+      await createEmployee(employee);
+      onCreated(agentId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="command-overlay" onMouseDown={onClose}>
+      <div className="command-panel" style={{ width: "min(560px, calc(100vw - 32px))", padding: 20 }} onMouseDown={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold mb-3">{t("workbench.new_employee")}</h3>
+        {error && <div className="product-pill red mb-3">{error}</div>}
+        <div className="space-y-3">
+          <label className="block">
+            <span className="metric-label">{t("workbench.name")}</span>
+            <input className="select-control w-full mt-1" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("workbench.name_placeholder")} />
+          </label>
+          <label className="block">
+            <span className="metric-label">{t("workbench.department")}</span>
+            <select className="select-control w-full mt-1" value={department} onChange={(e) => setDepartment(e.target.value)}>
+              {NEW_DEPTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="metric-label">{t("workbench.risk_ceiling")}</span>
+            <input type="number" min={0} max={1} step={0.1} className="select-control w-full mt-1" value={riskCeiling} onChange={(e) => setRiskCeiling(Number(e.target.value) || 0.3)} />
+          </label>
+          <label className="block">
+            <span className="metric-label">{t("workbench.system_prompt")}</span>
+            <textarea className="composer-textarea w-full mt-1" style={{ minHeight: 90, border: "1px solid var(--border-subtle)", borderRadius: 8, padding: 10 }}
+              value={systemPrompt} placeholder={t("workbench.system_prompt_placeholder")} onChange={(e) => setSystemPrompt(e.target.value)} />
+          </label>
+        </div>
+        <div className="flex items-center gap-2 mt-4">
+          <button className="primary-button" disabled={busy || !name.trim()} onClick={create}>
+            {busy ? <Icon name="spinner" className="icon-spin" /> : <Icon name="plus" />} {t("workbench.create")}
+          </button>
+          <button className="product-link-button" onClick={onClose}>{t("workbench.cancel")}</button>
+        </div>
       </div>
     </div>
   );

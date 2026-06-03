@@ -102,7 +102,7 @@ mod tests {
     async fn compile_contract_persists_contract_anchor() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool.clone());
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
 
         let Json(response) = compile_contract(
             State(state),

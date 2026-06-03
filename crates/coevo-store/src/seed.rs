@@ -165,6 +165,7 @@ fn employee(
         reputation_vector: ReputationVector::new(agent_id.to_string()),
         supervisor_agent_id: Some("agent-founder-01".to_string()),
         lifecycle_status: LifecycleStatus::Active,
+        system_prompt: String::new(),
         created_at_ms: now,
         updated_at_ms: now,
     }

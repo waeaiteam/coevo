@@ -674,6 +674,7 @@ dependencies = [
  "coevo-core",
  "coevo-models",
  "coevo-policy",
+ "coevo-reputation",
  "coevo-risk",
  "coevo-store",
  "hex",

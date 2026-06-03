@@ -26,6 +26,14 @@ const groups: { titleKey: string; items: ConsoleItem[] }[] = [
     ],
   },
   {
+    titleKey: "adv.group.quality",
+    items: [
+      { labelKey: "adv.quality_check", descKey: "adv.quality_check_desc", to: "/evaluations" },
+      { labelKey: "adv.usage_overview", descKey: "adv.usage_overview_desc", to: "/performance" },
+      { labelKey: "adv.task_replay", descKey: "adv.task_replay_desc", to: "/traces" },
+    ],
+  },
+  {
     titleKey: "adv.group.governance",
     items: [
       { labelKey: "adv.risk_gate", descKey: "adv.risk_gate_desc", to: "/risk" },

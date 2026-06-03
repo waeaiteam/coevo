@@ -17,7 +17,12 @@ impl WorkerRunRepo {
         started: i64,
         ended: Option<i64>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO worker_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query(
+            "INSERT INTO worker_runs (\
+                run_id, work_order_id, agent_id, worker_id, session_id, status, \
+                result_json, memory_ids_json, errors_json, audit_ref, started_at_ms, ended_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
             .bind(run_id)
             .bind(wo_id)
             .bind(agent_id)
@@ -60,6 +65,32 @@ impl WorkerRunRepo {
             .await?;
         Ok(())
     }
+    /// Persist queryable execution-summary columns (tokens/cost/latency) at the
+    /// end of a run so the employee-growth page can aggregate without re-parsing
+    /// step JSON blobs.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_summary(
+        pool: &SqlitePool,
+        id: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        total_tokens: i64,
+        total_cost_usd: f64,
+        latency_ms: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE worker_runs SET prompt_tokens=?, completion_tokens=?, total_tokens=?, total_cost_usd=?, latency_ms=? WHERE run_id=?",
+        )
+        .bind(prompt_tokens)
+        .bind(completion_tokens)
+        .bind(total_tokens)
+        .bind(total_cost_usd)
+        .bind(latency_ms)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
     pub async fn complete(
         pool: &SqlitePool,
         id: &str,
@@ -69,6 +100,35 @@ impl WorkerRunRepo {
         sqlx::query("UPDATE worker_runs SET status='Completed', result_json=?, memory_ids_json=?, ended_at_ms=? WHERE run_id=?")
             .bind(result).bind(mem_ids).bind(chrono::Utc::now().timestamp_millis()).bind(id).execute(pool).await?;
         Ok(())
+    }
+    /// Aggregate execution stats for one agent across all its runs — powers the
+    /// employee growth page and the (de-stubbed) agent evaluator.
+    /// Returns (total_runs, completed_runs, failed_runs, avg_latency_ms, total_tokens, total_cost_usd).
+    pub async fn agent_run_stats(
+        pool: &SqlitePool,
+        agent_id: &str,
+    ) -> Result<(i64, i64, i64, f64, i64, f64), sqlx::Error> {
+        let row: (i64, i64, i64, Option<f64>, Option<i64>, Option<f64>) = sqlx::query_as(
+            "SELECT \
+               COUNT(*) AS total, \
+               SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) AS completed, \
+               SUM(CASE WHEN status='Failed' THEN 1 ELSE 0 END) AS failed, \
+               AVG(latency_ms) AS avg_latency, \
+               SUM(total_tokens) AS tokens, \
+               SUM(total_cost_usd) AS cost \
+             FROM worker_runs WHERE agent_id = ?",
+        )
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await?;
+        Ok((
+            row.0,
+            row.1,
+            row.2,
+            row.3.unwrap_or(0.0),
+            row.4.unwrap_or(0),
+            row.5.unwrap_or(0.0),
+        ))
     }
 }
 

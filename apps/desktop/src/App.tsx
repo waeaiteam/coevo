@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import { GovernanceProvider } from "./hooks/useGovernance";
 import { getModelConfig } from "./api/client";
 import { clearModelProviderConfigured, isModelProviderConfigured, markModelProviderConfigured } from "./settings/onboarding";
+import { initTraceWiring } from "./stores/traceStore";
 import BootPage from "./components/BootPage";
 import FirstRun from "./components/FirstRun";
 import Layout from "./components/Layout";
@@ -10,12 +11,14 @@ import MissionChat from "./pages/MissionChat";
 import Dashboard from "./pages/Dashboard";
 import MyCompany from "./pages/MyCompany";
 import CompanyDetail from "./pages/CompanyDetail";
+import Office from "./pages/Office";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import TaskDetail from "./pages/TaskDetail";
 import FounderProfile from "./pages/FounderProfile";
 import CompanyMemory from "./pages/CompanyMemory";
 import AIEmployees from "./pages/AIEmployees";
+import TalentMarket from "./pages/TalentMarket";
 import SkillsPage from "./pages/SkillsPage";
 import ExternalExecutors from "./pages/ExternalExecutors";
 import WorkOrders from "./pages/WorkOrders";
@@ -27,6 +30,13 @@ import Resolution from "./pages/Resolution";
 import Audit from "./pages/Audit";
 import Settings from "./pages/Settings";
 import Timeline from "./pages/Timeline";
+import Evaluations from "./pages/Evaluations";
+import Traces from "./pages/Traces";
+import Workflows from "./pages/Workflows";
+import Performance from "./pages/Performance";
+import EmployeeGrowth from "./pages/EmployeeGrowth";
+
+initTraceWiring();
 
 export default function App() {
   const [booted, setBooted] = useState(false);
@@ -60,6 +70,8 @@ export default function App() {
           <Route path="/conversations/:conversationId" element={<MissionChat />} />
           <Route path="/company" element={<MyCompany />} />
           <Route path="/company/details" element={<CompanyDetail />} />
+          <Route path="/companies/:opcId" element={<CompanyDetail />} />
+          <Route path="/companies/:opcId/office" element={<Office />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
           <Route path="/tasks/:workOrderId" element={<TaskDetail />} />
@@ -67,6 +79,8 @@ export default function App() {
           <Route path="/founder" element={<FounderProfile />} />
           <Route path="/memory" element={<CompanyMemory />} />
           <Route path="/employees" element={<AIEmployees />} />
+          <Route path="/market" element={<TalentMarket />} />
+          <Route path="/employees/:agentId/growth" element={<EmployeeGrowth />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/executors" element={<ExternalExecutors />} />
           <Route path="/work-orders" element={<WorkOrders />} />
@@ -77,6 +91,10 @@ export default function App() {
           <Route path="/resolution" element={<Resolution />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/timeline" element={<Timeline />} />
+          <Route path="/evaluations" element={<Evaluations />} />
+          <Route path="/traces" element={<Traces />} />
+          <Route path="/workflows" element={<Workflows />} />
+          <Route path="/performance" element={<Performance />} />
           <Route path="/settings/*" element={<Settings />} />
         </Route>
       </Routes>

@@ -149,7 +149,7 @@ mod tests {
     async fn conversation_handlers_persist_thread_messages_and_task_links() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
 
         let (create_status, Json(created)) = create_conversation(
             State(state.clone()),
@@ -189,7 +189,7 @@ mod tests {
     async fn append_conversation_message_rejects_empty_content() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let state = AppState::new(pool);
+        let state = AppState::new(pool, std::env::temp_dir());
         let (create_status, _) = create_conversation(
             State(state.clone()),
             Json(CreateConversationRequest {

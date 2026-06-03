@@ -10,6 +10,7 @@ coevo-store.workspace = true
 coevo-models.workspace = true
 coevo-policy.workspace = true
 coevo-risk.workspace = true
+coevo-reputation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
