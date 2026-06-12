@@ -3,6 +3,7 @@ pub mod conversations;
 pub mod evaluate;
 pub mod evaluations;
 pub mod health;
+pub mod identifiers;
 pub mod models;
 pub mod opc;
 pub mod organization;

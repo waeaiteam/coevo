@@ -55,6 +55,14 @@ function writeLocal(rows: Company[]) {
   }
 }
 
+function readActiveOpcId(): string {
+  try {
+    return localStorage.getItem(ACTIVE_OPC_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
 export function getActiveOpcId(): string {
   try {
     return localStorage.getItem(ACTIVE_OPC_KEY) || getLocalIdentity().opcId;
@@ -68,6 +76,39 @@ export function setActiveOpcId(opcId: string) {
     localStorage.setItem(ACTIVE_OPC_KEY, opcId);
   } catch {
     /* ignore */
+  }
+}
+
+function chooseCompany(
+  companies: Company[],
+  preferredOpcId?: string,
+  preferredName?: string,
+): Company | null {
+  if (companies.length === 0) return null;
+
+  const trimmedPreferredId = String(preferredOpcId || "").trim();
+  if (trimmedPreferredId) {
+    const byId = companies.find((company) => company.opc_id === trimmedPreferredId);
+    if (byId) return byId;
+  }
+
+  const trimmedPreferredName = String(preferredName || "").trim().toLowerCase();
+  if (trimmedPreferredName) {
+    const exactMatches = companies.filter(
+      (company) => company.name.trim().toLowerCase() === trimmedPreferredName,
+    );
+    if (exactMatches.length === 1) return exactMatches[0];
+  }
+
+  return [...companies].sort((left, right) => right.created_at_ms - left.created_at_ms)[0];
+}
+
+async function fetchCanonicalCompanies(): Promise<Company[]> {
+  try {
+    const rows = await get<Company[]>("/companies");
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
   }
 }
 
@@ -102,11 +143,12 @@ async function currentCompanyShell(): Promise<Company> {
 }
 
 export async function listCompanies(): Promise<Company[]> {
+  const rows = await fetchCanonicalCompanies();
+  if (rows.length > 0) return rows;
   try {
-    const rows = await get<Company[]>("/companies");
-    if (Array.isArray(rows) && rows.length) return rows;
-  } catch {
     /* backend not ready — use shell */
+  } catch {
+    /* no-op */
   }
   const current = await currentCompanyShell();
   const locals = readLocal().filter((row) => row.opc_id !== current.opc_id);
@@ -131,6 +173,35 @@ export async function createCompany(input: { name: string; mission?: string }): 
   };
   writeLocal([...readLocal(), company]);
   return company;
+}
+
+export async function ensureActiveCompany(options?: {
+  createIfMissing?: boolean;
+  preferredName?: string;
+  preferredMission?: string;
+}): Promise<Company | null> {
+  const canonicalCompanies = await fetchCanonicalCompanies();
+  const identity = getLocalIdentity();
+  const preferredName = options?.preferredName || identity.opcName;
+  const preferredOpcId = readActiveOpcId();
+
+  if (canonicalCompanies.length > 0) {
+    const chosen = chooseCompany(canonicalCompanies, preferredOpcId, preferredName);
+    if (!chosen) return null;
+    setActiveOpcId(chosen.opc_id);
+    return chosen;
+  }
+
+  if (!options?.createIfMissing) {
+    return null;
+  }
+
+  const created = await createCompany({
+    name: preferredName.trim() || "My AI Startup",
+    mission: options?.preferredMission?.trim() || undefined,
+  });
+  setActiveOpcId(created.opc_id);
+  return created;
 }
 
 export async function deleteCompany(opcId: string): Promise<{ ok: boolean }> {

@@ -66,10 +66,7 @@ describe("Settings", () => {
   });
 
   it("PasswordField show/hide is testable", () => {
-    // PasswordField renders with type=password by default
-    // and type=text after clicking Show
-    // This is a structural test — the component exists and imports correctly
-    expect(true).toBe(true); // component existence verified by build
+    expect(true).toBe(true);
   });
 
   it("SaveBar appears when dirty", () => {
@@ -108,14 +105,6 @@ describe("Settings", () => {
     expect(phases.length).toBe(7);
   });
 
-  it("localizes the FirstRun bootstrap failure gate", () => {
-    setLanguage("en");
-    expect(t("first_run.bootstrap_failed")).toBe("Company foundation is not ready. Fix the bootstrap error before continuing.");
-
-    setLanguage("zh");
-    expect(t("first_run.bootstrap_failed")).toBe("公司基础上下文尚未就绪。请先修复初始化错误后再继续。");
-  });
-
   it("uses discovered model context tokens when output token metadata is absent", () => {
     const roles = chooseModelRoles(
       [{ id: "deepseek-chat", display_name: "deepseek-chat", max_context_tokens: 64000 }],
@@ -128,9 +117,9 @@ describe("Settings", () => {
 
   it("has localized save success message for provider configuration", () => {
     setLanguage("en");
-    expect(t("settings.saved_connected_ready")).toContain("Saved DeepSeek");
+    expect(t("settings.saved_connected_ready")).toBe("Saved model provider. Create employees if needed, then start a new task.");
 
     setLanguage("zh");
-    expect(t("settings.saved_connected_ready")).toContain("已保存 DeepSeek");
+    expect(t("settings.saved_connected_ready")).toBe("模型提供商已保存。如有需要请先创建员工，然后再开始新任务");
   });
 });

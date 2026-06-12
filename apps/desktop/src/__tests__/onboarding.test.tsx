@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import FirstRun from "../components/FirstRun";
 import Settings from "../pages/Settings";
+import * as companiesApi from "../api/companies";
 import { getLanguage, setLanguage, t } from "../settings/i18n";
 import { MODEL_PROVIDER_CONFIGURED_KEY } from "../settings/onboarding";
 
@@ -14,10 +15,6 @@ const api = vi.hoisted(() => ({
   updateUserProfile: vi.fn(),
   testModelConnection: vi.fn(),
   discoverModels: vi.fn(),
-  listEmployees: vi.fn(),
-  seedEmployees: vi.fn(),
-  listSkills: vi.fn(),
-  seedSkills: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
@@ -28,35 +25,21 @@ vi.mock("../api/client", () => ({
   updateUserProfile: api.updateUserProfile,
   testModelConnection: api.testModelConnection,
   discoverModels: api.discoverModels,
-  listEmployees: api.listEmployees,
-  seedEmployees: api.seedEmployees,
-  listSkills: api.listSkills,
-  seedSkills: api.seedSkills,
 }));
 
 describe("Desktop onboarding", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.restoreAllMocks();
     api.createMemory.mockReset();
     api.updateCompanyProfile.mockReset();
     api.updateModelConfig.mockReset();
     api.updateUserProfile.mockReset();
     api.testModelConnection.mockReset();
     api.discoverModels.mockReset();
-    api.listEmployees.mockReset();
-    api.seedEmployees.mockReset();
-    api.listSkills.mockReset();
-    api.seedSkills.mockReset();
     api.createMemory.mockResolvedValue({ ok: true });
     api.updateCompanyProfile.mockResolvedValue({ ok: true });
     api.updateUserProfile.mockResolvedValue({ ok: true });
-    api.listEmployees.mockResolvedValue([
-      { agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 },
-      { agent_id: "agent-research-01", lifecycle_status: "Active", risk_ceiling: 0.3 },
-    ]);
-    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
-    api.seedEmployees.mockResolvedValue({ ok: true, total: 2 });
-    api.seedSkills.mockResolvedValue({ ok: true, total: 1 });
   });
 
   afterEach(() => {
@@ -111,6 +94,14 @@ describe("Desktop onboarding", () => {
   });
 
   it("FirstRun persists company foundation before opening model setup", async () => {
+    vi.spyOn(companiesApi, "createCompany").mockResolvedValue({
+      opc_id: "opc-real-001",
+      name: "WAE AI Team",
+      mission: "Build governed desktop agents for product work.",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-real-001",
+    });
     const onDone = vi.fn();
     render(
       <MemoryRouter initialEntries={["/"]}>
@@ -130,9 +121,6 @@ describe("Desktop onboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: /Continue to company setup/i }));
 
     expect(await screen.findByRole("heading", { name: /Company setup/i })).toBeInTheDocument();
-    await waitFor(() => expect(api.seedEmployees).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(api.seedSkills).toHaveBeenCalledTimes(1));
-
     fireEvent.change(screen.getByLabelText(/Company mission/i), {
       target: { value: "Build governed desktop agents for product work." },
     });
@@ -155,7 +143,7 @@ describe("Desktop onboarding", () => {
     expect(localStorage.getItem("coevo-opc-name")).toBe("WAE AI Team");
     expect(localStorage.getItem("coevo-user-name")).toBe("Wae");
     expect(localStorage.getItem("coevo-tenant-id")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(opcId).toBe("default-opc");
+    expect(opcId).toBe("opc-real-001");
     expect(api.updateUserProfile).toHaveBeenCalledWith(expect.objectContaining({
       user_id: "default-founder",
       display_name: "Wae",
@@ -206,9 +194,15 @@ describe("Desktop onboarding", () => {
     expect(localStorage.getItem("coevo-settings") || "").not.toMatch(/api[_-]?key|sk-live-secret/i);
   });
 
-  it("fails fast in Company Foundation when bootstrap seed/list fails", async () => {
-    api.seedEmployees.mockRejectedValue(new Error("seed employees failed"));
-
+  it("allows company setup to finish before any employee exists", async () => {
+    vi.spyOn(companiesApi, "createCompany").mockResolvedValue({
+      opc_id: "opc-zero-employee-001",
+      name: "Zero Team Co",
+      mission: "Start clean",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-zero-employee-001",
+    });
     render(
       <MemoryRouter initialEntries={["/"]}>
         <Routes>
@@ -219,16 +213,13 @@ describe("Desktop onboarding", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Continue to company setup/i }));
-    expect(await screen.findByText(/seed employees failed/i)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: /Model Provider handoff/i })).not.toBeInTheDocument();
-    const createButton = screen.getByRole("button", { name: /Create OPC and continue/i });
-    expect(createButton).toBeDisabled();
-    fireEvent.click(createButton);
-    await waitFor(() => expect(screen.getByText(/seed employees failed/i)).toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: /Company setup/i })).toBeInTheDocument();
+    expect(screen.getByText(/Employees on day one/i).parentElement).toHaveTextContent("0 agents");
+    expect(screen.getByText(/Company starter skills/i).parentElement).toHaveTextContent("1 skills");
+    fireEvent.click(screen.getByRole("button", { name: /Create OPC and continue/i }));
 
-    expect(api.updateUserProfile).not.toHaveBeenCalled();
-    expect(api.updateCompanyProfile).not.toHaveBeenCalled();
-    expect(api.createMemory).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.createMemory).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("heading", { name: /Model Provider handoff/i })).toBeInTheDocument();
   });
 
   it("Model Providers does not expose the mock provider option", () => {
@@ -292,6 +283,14 @@ describe("Desktop onboarding", () => {
   });
 
   it("Test / Discover Models marks the model provider as configured after success and populates model select", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue({
+      opc_id: "opc-live-001",
+      name: "Live Co",
+      mission: "Ship",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-live-001",
+    });
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
@@ -305,14 +304,6 @@ describe("Desktop onboarding", () => {
         { id: "o3-mini", display_name: "o3-mini", max_output_tokens: 100000 },
       ],
     });
-    api.listEmployees
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
-    api.listSkills
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ skill_id: "skill-mission-draft", status: "Active" }]);
-    api.seedEmployees.mockResolvedValue({ ok: true });
-    api.seedSkills.mockResolvedValue({ ok: true });
 
     render(
       <MemoryRouter initialEntries={["/settings/model_provider"]}>
@@ -337,8 +328,6 @@ describe("Desktop onboarding", () => {
       reasoning_model: "o3-mini",
       structured_output_model: "gpt-4o",
     }));
-    expect(api.seedEmployees).toHaveBeenCalledTimes(1);
-    expect(api.seedSkills).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument();
   });
 
@@ -358,6 +347,14 @@ describe("Desktop onboarding", () => {
   });
 
   it("does not write API keys to localStorage while testing and discovering models", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue({
+      opc_id: "opc-live-001",
+      name: "Live Co",
+      mission: "Ship",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-live-001",
+    });
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
@@ -365,8 +362,6 @@ describe("Desktop onboarding", () => {
       provider_kind: "OpenAI",
     });
     api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
-    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
-    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
 
     render(
       <MemoryRouter initialEntries={["/settings/model_provider"]}>
@@ -385,6 +380,14 @@ describe("Desktop onboarding", () => {
   });
 
   it("clears the API key field and SaveBar after a successful provider save", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue({
+      opc_id: "opc-live-001",
+      name: "Live Co",
+      mission: "Ship",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-live-001",
+    });
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
@@ -392,8 +395,6 @@ describe("Desktop onboarding", () => {
       provider_kind: "OpenAI",
     });
     api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
-    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
-    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
 
     render(
       <MemoryRouter initialEntries={["/settings/model_provider"]}>
@@ -416,14 +417,22 @@ describe("Desktop onboarding", () => {
     }));
   });
 
-  it("does not mark the model provider configured when workspace bootstrap fails", async () => {
+  it("saves the model provider without trying to bootstrap employees", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue({
+      opc_id: "opc-live-001",
+      name: "Live Co",
+      mission: "Ship",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-live-001",
+    });
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
       latency_ms: 12,
       provider_kind: "OpenAICompatible",
     });
-    api.listEmployees.mockRejectedValue(new Error("database unavailable"));
+    api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
 
     render(
       <MemoryRouter initialEntries={["/settings/model_provider"]}>
@@ -435,11 +444,19 @@ describe("Desktop onboarding", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
-    await waitFor(() => expect(screen.getByText(/Workspace bootstrap failed/i)).toBeInTheDocument());
-    expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
+    await waitFor(() => expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true"));
+    expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument();
   });
 
   it("does not mark the model provider configured when model config save fails", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue({
+      opc_id: "opc-live-001",
+      name: "Live Co",
+      mission: "Ship",
+      employee_count: 1,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-live-001",
+    });
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
       latency_ms: 12,
@@ -477,6 +494,33 @@ describe("Desktop onboarding", () => {
 
     await waitFor(() => expect(screen.getByText(/connection failed/i)).toBeInTheDocument());
     expect(api.updateModelConfig).not.toHaveBeenCalled();
+    expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
+  });
+
+  it("reports missing active company clearly after a successful connection test", async () => {
+    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue(null);
+    api.updateModelConfig.mockResolvedValue({});
+    api.testModelConnection.mockResolvedValue({
+      model: "gpt-4o",
+      latency_ms: 12,
+      provider_kind: "OpenAI",
+    });
+    api.discoverModels.mockResolvedValue({ models: [{ id: "gpt-4o", display_name: "gpt-4o" }] });
+
+    render(
+      <MemoryRouter initialEntries={["/settings/model_provider"]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
+
+    await screen.findByText(
+      /Connection failed: No company is available yet\. Create or select a company before saving the model provider\./i,
+      { selector: "span" },
+    );
     expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
   });
 

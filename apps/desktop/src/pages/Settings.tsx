@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { ensureActiveCompany } from "../api/companies";
 import NumberField from "../components/NumberField";
 import PasswordField from "../components/PasswordField";
 import SelectField from "../components/SelectField";
@@ -8,7 +9,6 @@ import SettingsLayout from "../components/SettingsLayout";
 import SettingsSection from "../components/SettingsSection";
 import TextField from "../components/TextField";
 import ToggleField from "../components/ToggleField";
-import { ensureWorkspaceDefaults } from "../api/bootstrap";
 import { discoverModels, getApiBase, testModelConnection, updateModelConfig } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
 import { SettingsProvider, useSettings } from "../hooks/useSettings";
@@ -134,10 +134,9 @@ function ModelProviderPanel() {
       const finalPatch = { default_model: roles.default_model, fast_model: roles.fast_model, reasoning_model: roles.reasoning_model, structured_output_model: roles.structured_output_model, max_tokens: roles.max_tokens };
       const persistedSettings = { ...settings, model_provider: { ...settings.model_provider, ...finalPatch, api_key: "" } };
       await updateModelConfig(configFromCurrent(finalPatch));
-      try {
-        await ensureWorkspaceDefaults();
-      } catch (e: unknown) {
-        throw new Error(`Workspace bootstrap failed: ${e instanceof Error ? e.message : String(e)}`);
+      const activeCompany = await ensureActiveCompany();
+      if (!activeCompany) {
+        throw new Error("No company is available yet. Create or select a company before saving the model provider.");
       }
       replaceAndMarkSaved(persistedSettings);
       markModelProviderConfigured();

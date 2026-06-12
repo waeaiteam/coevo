@@ -1,10 +1,8 @@
-import { listEmployees, listSkills, seedEmployees, seedSkills } from "./client";
+import { listEmployees, listSkills } from "./client";
 
 export type WorkspaceBootstrap = {
   selectedAgentIds: string[];
   requiredSkillIds: string[];
-  seededEmployees: boolean;
-  seededSkills: boolean;
 };
 
 const TRACK_RISK: Record<"green" | "yellow" | "red", number> = {
@@ -56,27 +54,17 @@ function hasQualifiedEmployee(employees: Record<string, unknown>[], track: "gree
 }
 
 export async function ensureWorkspaceDefaults(track: "green" | "yellow" | "red" = "green"): Promise<WorkspaceBootstrap> {
-  let employees = await listEmployees().catch(() => []);
-  let seededEmployees = false;
-  if (!hasQualifiedEmployee(employees, track)) {
-    await seedEmployees();
-    seededEmployees = true;
-    employees = await listEmployees().catch(() => []);
-  }
-
-  let skills = await listSkills().catch(() => []);
-  let seededSkills = false;
+  const employees = await listEmployees().catch(() => []);
+  const skills = await listSkills().catch(() => []);
   const hasMissionDraftSkill = skills.some((s) => s.skill_id === "skill-mission-draft" && isActive(s));
   if (!hasMissionDraftSkill) {
-    await seedSkills();
-    seededSkills = true;
-    skills = await listSkills().catch(() => []);
+    throw new Error("Company skill template skill-mission-draft is missing. Recreate the company or repair company skills before starting tasks.");
   }
 
   const employee = chooseEmployeeForTrack(employees, track);
   const agentId = String((employee || {}).agent_id || "");
   if (!agentId) {
-    throw new Error(`No active AI Employee can handle ${track} track after workspace bootstrap.`);
+    throw new Error(`No active AI Employee can handle ${track} track. Create an employee in AI Employees before starting tasks.`);
   }
 
   const missionSkill = skills.find((s) => s.skill_id === "skill-mission-draft" && isActive(s));
@@ -85,7 +73,5 @@ export async function ensureWorkspaceDefaults(track: "green" | "yellow" | "red" 
   return {
     selectedAgentIds: [agentId],
     requiredSkillIds: [skillId],
-    seededEmployees,
-    seededSkills,
   };
 }
