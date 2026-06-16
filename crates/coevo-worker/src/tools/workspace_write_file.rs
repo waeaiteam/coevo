@@ -17,7 +17,11 @@ fn resolve_target(input: &serde_json::Value) -> Result<(PathBuf, PathBuf), Worke
         return Err(WorkerError::ToolDeniedByPolicy);
     }
     let target = PathBuf::from(path);
-    let target = if target.is_absolute() { target } else { root.join(target) };
+    let target = if target.is_absolute() {
+        target
+    } else {
+        root.join(target)
+    };
     if !target.starts_with(&root) {
         return Err(WorkerError::PathTraversalDenied);
     }

@@ -8,6 +8,7 @@ node_modules/
 dist/
 apps/desktop/dist/
 apps/desktop/src-tauri/binaries/
+.artifacts/
 
 # IDE
 .idea/
@@ -26,6 +27,8 @@ Thumbs.db
 *.db-wal
 *.db-shm
 data/
+apps/server/default-opc/
+crates/coevo-worker/default-opc/
 
 # Environment
 .env

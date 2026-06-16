@@ -146,78 +146,354 @@ struct ParsedIntent {
     estimated_hops: u32,
 }
 
-/// Simple keyword-based intent parser.
-/// In production this would use an LLM for semantic understanding.
-fn parse_intent(user_intent: &str) -> Result<ParsedIntent, CompileError> {
-    let intent = user_intent.trim().to_lowercase();
+/// A semantic concept the intent parser can recognise, defined by a bilingual
+/// keyword table. ASCII terms are matched case-insensitively; CJK terms are
+/// matched against the raw intent string (lowercasing is a no-op for CJK and
+/// would only risk normalising away the characters we want to match).
+struct Concept {
+    /// Stable identifier, used by the classification logic below.
+    id: ConceptId,
+    /// English / ASCII terms, lowercase. Matched against the lowercased intent.
+    en: &'static [&'static str],
+    /// Chinese / CJK terms. Matched against the raw intent.
+    zh: &'static [&'static str],
+}
 
-    if intent.is_empty() {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConceptId {
+    Read,
+    Write,
+    Delete,
+    Deploy,
+    Production,
+    Staging,
+    Database,
+    File,
+    Payment,
+    CustomerData,
+    EmailNotify,
+    Shell,
+    ExternalApi,
+}
+
+/// Bilingual, data-driven concept table (English + Chinese).
+///
+/// Each concept maps a normalised meaning to the surface terms that express it
+/// in either language. The parser classifies a mission by the *union* of every
+/// concept whose English or Chinese terms appear in the intent, so a mixed
+/// mission like "部署 backend 到 production" lights up both `Deploy` (zh) and
+/// `Production` (en).
+const CONCEPTS: &[Concept] = &[
+    Concept {
+        id: ConceptId::Read,
+        en: &[
+            "read",
+            "readonly",
+            "read-only",
+            "query",
+            "analyze",
+            "analyse",
+            "analysis",
+            "summarize",
+            "summarise",
+            "summary",
+            "retrieve",
+            "search",
+            "view",
+            "inspect",
+            "fetch",
+            "list",
+        ],
+        zh: &["读", "读取", "查看", "分析", "总结", "查询", "检索"],
+    },
+    Concept {
+        id: ConceptId::Write,
+        en: &[
+            "write", "create", "modify", "update", "edit", "generate", "add", "insert", "append",
+            "patch",
+        ],
+        zh: &["写", "写入", "修改", "创建", "新建", "编辑", "生成"],
+    },
+    Concept {
+        id: ConceptId::Delete,
+        en: &[
+            "delete", "remove", "drop", "purge", "clear", "truncate", "wipe",
+        ],
+        zh: &["删", "删除", "移除", "清空", "清除"],
+    },
+    Concept {
+        id: ConceptId::Deploy,
+        en: &[
+            "deploy",
+            "release",
+            "publish",
+            "ship",
+            "rollout",
+            "roll out",
+            "rollback",
+            "roll back",
+            "canary",
+        ],
+        zh: &["部署", "发布", "上线", "灰度"],
+    },
+    Concept {
+        id: ConceptId::Production,
+        en: &["production", "prod", "live", "live env"],
+        zh: &["生产", "线上", "正式环境"],
+    },
+    Concept {
+        id: ConceptId::Staging,
+        en: &[
+            "staging",
+            "stage",
+            "test env",
+            "test environment",
+            "sandbox",
+            "preprod",
+            "pre-prod",
+            "pre-release",
+        ],
+        zh: &["预发", "测试环境", "沙箱"],
+    },
+    Concept {
+        id: ConceptId::Database,
+        en: &["database", "db", "sql", "table", "schema"],
+        zh: &["数据库", "库表", "sql"],
+    },
+    Concept {
+        id: ConceptId::File,
+        en: &["file", "directory", "folder", "storage", "filesystem"],
+        zh: &["文件", "目录", "文件夹"],
+    },
+    Concept {
+        id: ConceptId::Payment,
+        en: &[
+            "payment", "pay", "transfer", "refund", "billing", "invoice", "charge", "payout",
+        ],
+        zh: &["支付", "付款", "转账", "退款", "账单"],
+    },
+    Concept {
+        id: ConceptId::CustomerData,
+        en: &[
+            "customer data",
+            "user data",
+            "personal info",
+            "personal information",
+            "privacy",
+            "pii",
+        ],
+        zh: &["客户数据", "用户数据", "个人信息", "隐私"],
+    },
+    Concept {
+        id: ConceptId::EmailNotify,
+        en: &[
+            "email",
+            "e-mail",
+            "notify",
+            "notification",
+            "broadcast",
+            "alert",
+        ],
+        zh: &["邮件", "发邮件", "通知", "群发"],
+    },
+    Concept {
+        id: ConceptId::Shell,
+        en: &[
+            "shell",
+            "command",
+            "script",
+            "terminal",
+            "bash",
+            "cmd",
+            "run command",
+        ],
+        zh: &["命令", "脚本", "终端", "执行命令"],
+    },
+    Concept {
+        id: ConceptId::ExternalApi,
+        en: &[
+            "call api",
+            "external api",
+            "api",
+            "endpoint",
+            "http request",
+            "rest",
+            "webhook",
+        ],
+        zh: &["调用接口", "api", "请求"],
+    },
+];
+
+/// The concepts that represent a concrete *action* the mission wants taken.
+/// A mission that matches none of these has no recognisable verb and is treated
+/// as highly ambiguous (and therefore conservatively).
+const ACTION_CONCEPTS: [ConceptId; 4] = [
+    ConceptId::Read,
+    ConceptId::Write,
+    ConceptId::Delete,
+    ConceptId::Deploy,
+];
+
+/// Returns true if `concept` is expressed anywhere in the intent.
+/// `lower` is the lowercased intent (for ASCII terms); `raw` is the original
+/// (for CJK terms). ASCII terms are also lowercased so the comparison is
+/// case-insensitive on both sides.
+fn concept_matches(concept: &Concept, lower: &str, raw: &str) -> bool {
+    concept.en.iter().any(|term| lower.contains(term))
+        || concept.zh.iter().any(|term| raw.contains(term))
+}
+
+/// Count of CJK (Han) ideographs in the string. Used to approximate a word
+/// count for missions written in Chinese, where whitespace tokenisation
+/// under-counts severely (often the whole mission is a single "word").
+fn cjk_char_count(s: &str) -> usize {
+    s.chars().filter(|c| is_cjk(*c)).count()
+}
+
+/// Whether a char is a CJK ideograph (covers the common BMP + Ext-A ranges and
+/// the SIP via the surrogate-free `char` value).
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF      // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF    // CJK Unified Ideographs
+        | 0xF900..=0xFAFF    // CJK Compatibility Ideographs
+        | 0x2_0000..=0x2_A6DF // Extension B
+        | 0x2_A700..=0x2_EBEF // Extensions C–F
+    )
+}
+
+/// Effective word count that works across scripts: ASCII/space-delimited tokens
+/// plus roughly one word per two CJK characters (Chinese averages ~2 chars per
+/// lexical word).
+fn effective_word_count(intent: &str) -> usize {
+    let cjk = cjk_char_count(intent);
+    // Whitespace tokens that aren't purely CJK (CJK is counted separately).
+    let ascii_words = intent
+        .split_whitespace()
+        .filter(|w| w.chars().any(|c| !is_cjk(c)))
+        .count();
+    ascii_words + cjk.div_ceil(2)
+}
+
+/// Keyword-based, bilingual intent parser.
+///
+/// Classification is driven entirely by the [`CONCEPTS`] table (English +
+/// Chinese), so the two languages are treated identically and mixed-language
+/// missions classify by the union of their matches. In production this would be
+/// backed by an LLM for semantic understanding.
+fn parse_intent(user_intent: &str) -> Result<ParsedIntent, CompileError> {
+    let raw = user_intent.trim();
+    if raw.is_empty() {
         return Err(CompileError::EmptyIntent);
     }
+    let lower = raw.to_lowercase();
 
-    // Detect environment
-    let environment = if intent.contains("production") || intent.contains("prod") {
+    // ---- Concept detection (union of English + Chinese matches) ----
+    let has = |id: ConceptId| -> bool {
+        CONCEPTS
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| concept_matches(c, &lower, raw))
+            .unwrap_or(false)
+    };
+
+    let read = has(ConceptId::Read);
+    let write = has(ConceptId::Write);
+    let delete = has(ConceptId::Delete);
+    let deploy = has(ConceptId::Deploy);
+    let production = has(ConceptId::Production);
+    let staging = has(ConceptId::Staging);
+    let database = has(ConceptId::Database);
+    let file = has(ConceptId::File);
+    let payment = has(ConceptId::Payment);
+    let customer = has(ConceptId::CustomerData);
+    let notify = has(ConceptId::EmailNotify);
+    let shell = has(ConceptId::Shell);
+    let external_api = has(ConceptId::ExternalApi);
+
+    // ---- Environment ----
+    let environment = if production {
         "production"
-    } else if intent.contains("staging") {
+    } else if staging {
         "staging"
     } else {
         "development"
     };
 
-    // Detect risk level
-    let risk_level = if intent.contains("high risk")
-        || intent.contains("dangerous")
-        || intent.contains("critical")
-    {
+    // ---- Explicit risk markers (bilingual) ----
+    let explicit_high = ["high risk", "dangerous", "critical"]
+        .iter()
+        .any(|t| lower.contains(t))
+        || ["高风险", "危险", "严重", "紧急"]
+            .iter()
+            .any(|t| raw.contains(t));
+    let explicit_medium = ["medium risk", "moderate"]
+        .iter()
+        .any(|t| lower.contains(t))
+        || ["中风险", "谨慎"].iter().any(|t| raw.contains(t));
+
+    // ---- Risk level: data-driven from concepts, then explicit markers ----
+    // High: irreversible / regulated operations, or a mutation aimed at prod.
+    let mutating = write || deploy || delete;
+    let risk_level = if delete || payment || customer || (mutating && production) || explicit_high {
         "high"
-    } else if intent.contains("medium risk") || intent.contains("moderate") {
+    } else if write || deploy || shell || staging || explicit_medium {
         "medium"
     } else {
         "low"
     };
 
-    // Detect actions
+    // ---- Actions (allowed action modes) ----
     let mut actions = vec![];
-    if intent.contains("read") || intent.contains("query") || intent.contains("analyze") {
+    if read {
         actions.push("DRAFT_ONLY".to_string());
     }
-    if intent.contains("write") || intent.contains("update") || intent.contains("modify") {
+    if write {
         actions.push("MUTABLE_WRITE".to_string());
     }
-    if intent.contains("deploy") || intent.contains("commit") || intent.contains("execute") {
+    if deploy || delete {
         actions.push("COMMIT_READY".to_string());
     }
     if actions.is_empty() {
+        // No recognised action verb — default to the least-privileged mode.
         actions.push("DRAFT_ONLY".to_string());
     }
 
-    // Detect data domains
+    // ---- Data domains ----
     let mut data_domains = vec!["urn:coevo:data:default".to_string()];
-    if intent.contains("database") || intent.contains("db") {
+    if database {
         data_domains.push("urn:coevo:data:database".to_string());
     }
-    if intent.contains("file") || intent.contains("storage") {
+    if file {
         data_domains.push("urn:coevo:data:filesystem".to_string());
     }
-    if intent.contains("network") || intent.contains("http") {
+    if payment {
+        data_domains.push("urn:coevo:data:payment".to_string());
+    }
+    if customer {
+        data_domains.push("urn:coevo:data:customer".to_string());
+    }
+    if notify || external_api {
         data_domains.push("urn:coevo:data:network".to_string());
     }
+    if shell {
+        data_domains.push("urn:coevo:data:shell".to_string());
+    }
 
-    // Heuristic ambiguity: shorter/more vague = more ambiguous
-    let word_count = intent.split_whitespace().count();
-    let action_verb_count = intent
-        .split_whitespace()
-        .filter(|w| {
-            matches!(
-                *w,
-                "read" | "write" | "create" | "delete" | "update" | "analyze" | "deploy" | "query"
-            )
-        })
-        .count();
-    let ambiguity_score = if word_count < 3 || action_verb_count == 0 {
-        0.6
-    } else if word_count < 8 {
-        0.4
+    // ---- Ambiguity (CJK-aware) ----
+    // A mission that matches no action concept has no recognisable verb: it is
+    // maximally ambiguous and must trip the hard ambiguity gate so it is
+    // treated conservatively rather than silently passing as low-risk draft.
+    let action_concepts_matched = ACTION_CONCEPTS.iter().filter(|id| has(**id)).count();
+    let words = effective_word_count(raw);
+    let ambiguity_score = if action_concepts_matched == 0 {
+        // > 0.7 so `compile()` rejects with AmbiguityTooHigh. Strictly higher
+        // than any classified mission below.
+        0.8
+    } else if words < 3 {
+        0.5
+    } else if words < 8 {
+        0.35
     } else {
         0.2
     };
@@ -363,4 +639,211 @@ pub enum CompileError {
     PolicyEngineError(String),
     #[error("serialization error: {0}")]
     SerializationError(String),
+}
+
+// ---- Tests ----
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coevo_core::metadata::CommonMetadataHeader;
+
+    fn meta() -> CommonMetadataHeader {
+        CommonMetadataHeader::new(
+            "0".repeat(64),
+            "0".repeat(64),
+            "test".to_string(),
+            "0".repeat(64),
+            "Synthesizer".to_string(),
+        )
+    }
+
+    async fn compile(intent: &str) -> Result<CompileResult, CompileError> {
+        MCLCompiler::new()
+            .compile(intent, "DRAFT", None, &meta())
+            .await
+    }
+
+    // --- Concept-level (parser) assertions ---
+
+    #[test]
+    fn chinese_read_classifies_as_low_risk_draft_only() {
+        let p = parse_intent("分析数据库表并总结查询结果").unwrap();
+        assert_eq!(p.risk_level, "low", "Chinese read intent must be low risk");
+        assert_eq!(
+            p.actions,
+            vec!["DRAFT_ONLY".to_string()],
+            "Chinese read intent must be draft-only"
+        );
+        assert!(
+            p.ambiguity_score <= 0.7,
+            "classified Chinese read must not trip the ambiguity gate, got {}",
+            p.ambiguity_score
+        );
+    }
+
+    #[test]
+    fn english_and_chinese_read_agree() {
+        let en = parse_intent("read and analyze the database query results").unwrap();
+        let zh = parse_intent("读取并分析数据库查询结果").unwrap();
+        assert_eq!(en.risk_level, zh.risk_level);
+        assert_eq!(en.actions, zh.actions);
+    }
+
+    #[test]
+    fn chinese_deploy_to_production_is_highest_risk_like_english() {
+        let zh = parse_intent("部署服务到生产环境").unwrap();
+        let en = parse_intent("deploy the service to production").unwrap();
+        assert_eq!(
+            zh.risk_level, "high",
+            "Chinese deploy→prod must be high risk"
+        );
+        assert_eq!(
+            zh.risk_level, en.risk_level,
+            "Chinese deploy→prod must match English risk level"
+        );
+        assert_eq!(zh.environment, "production");
+        assert!(zh.actions.contains(&"COMMIT_READY".to_string()));
+    }
+
+    #[test]
+    fn chinese_delete_database_is_high_risk() {
+        let p = parse_intent("删除生产数据库").unwrap();
+        assert_eq!(
+            p.risk_level, "high",
+            "Chinese delete-database must be high risk"
+        );
+        assert!(p.actions.contains(&"COMMIT_READY".to_string()));
+        assert!(p
+            .data_domains
+            .contains(&"urn:coevo:data:database".to_string()));
+    }
+
+    #[test]
+    fn chinese_payment_and_pii_are_high_risk() {
+        assert_eq!(parse_intent("处理客户退款转账").unwrap().risk_level, "high");
+        assert_eq!(
+            parse_intent("导出用户数据和个人信息").unwrap().risk_level,
+            "high"
+        );
+    }
+
+    #[test]
+    fn mixed_language_classifies_by_union() {
+        // "部署 backend 到 production" → Deploy(zh) ∪ Production(en).
+        let p = parse_intent("部署 backend 到 production").unwrap();
+        assert_eq!(p.environment, "production");
+        assert!(p.actions.contains(&"COMMIT_READY".to_string()));
+        assert_eq!(p.risk_level, "high");
+    }
+
+    #[test]
+    fn mixed_language_chinese_verb_english_noun() {
+        // 修改 (write, zh) + production (en) → high-risk mutation against prod.
+        let p = parse_intent("修改 production database 配置").unwrap();
+        assert_eq!(p.environment, "production");
+        assert!(p.actions.contains(&"MUTABLE_WRITE".to_string()));
+        assert_eq!(p.risk_level, "high");
+    }
+
+    #[test]
+    fn gibberish_chinese_is_highly_ambiguous() {
+        // No action concept → must exceed the hard ambiguity gate (0.7).
+        let p = parse_intent("天气怎么样啊今天").unwrap();
+        assert!(
+            p.ambiguity_score >= 0.7,
+            "unclassifiable Chinese must be highly ambiguous, got {}",
+            p.ambiguity_score
+        );
+    }
+
+    #[test]
+    fn gibberish_ascii_is_highly_ambiguous() {
+        let p = parse_intent("the quick brown fox jumps").unwrap();
+        assert!(p.ambiguity_score >= 0.7, "got {}", p.ambiguity_score);
+    }
+
+    #[test]
+    fn unclassifiable_is_not_more_permissive_than_a_write_mission() {
+        // A classified write/deploy mission must be MORE permissive (lower
+        // ambiguity) than an unclassifiable one — the latter must not slip
+        // through as a silent low-risk draft.
+        let unclassified = parse_intent("随便看看这个东西嘛").unwrap();
+        let write = parse_intent("修改测试环境的配置文件").unwrap();
+        let deploy = parse_intent("部署到预发环境").unwrap();
+        assert!(unclassified.ambiguity_score > write.ambiguity_score);
+        assert!(unclassified.ambiguity_score > deploy.ambiguity_score);
+        assert!(write.ambiguity_score <= 0.7);
+        assert!(deploy.ambiguity_score <= 0.7);
+    }
+
+    #[test]
+    fn cjk_word_count_does_not_over_penalise_length() {
+        // A short-but-classified Chinese mission segments by CJK chars rather
+        // than collapsing to a single whitespace "word".
+        assert!(effective_word_count("读取并分析数据库查询结果") >= 4);
+        assert!(effective_word_count("read the file") >= 3);
+        // Mixed counts both scripts.
+        assert!(effective_word_count("部署 backend 到 production") >= 4);
+    }
+
+    // --- End-to-end (compile) assertions ---
+
+    #[tokio::test]
+    async fn chinese_deploy_to_production_requires_explicit_approval() {
+        let result = compile("部署关键修复到生产数据库")
+            .await
+            .expect("classified Chinese deploy must compile");
+        assert_eq!(
+            result.contract.human_approval_policy.approval_mode,
+            ApprovalMode::ExplicitApproval,
+            "Chinese deploy→prod MUST require EXPLICIT_APPROVAL, mirroring English"
+        );
+        assert!(result.contract.risk_tolerance_profile.allow_emergency_lease);
+    }
+
+    #[tokio::test]
+    async fn english_deploy_to_production_still_requires_explicit_approval() {
+        // Regression guard: English behaviour is unchanged.
+        let result = compile("Deploy critical production hotfix to fix the database")
+            .await
+            .expect("English deploy must compile");
+        assert_eq!(
+            result.contract.human_approval_policy.approval_mode,
+            ApprovalMode::ExplicitApproval
+        );
+    }
+
+    #[tokio::test]
+    async fn chinese_read_compiles_green_equivalent() {
+        let result = compile("分析并总结数据库查询结果")
+            .await
+            .expect("Chinese read must compile");
+        assert_eq!(
+            result.contract.human_approval_policy.approval_mode,
+            ApprovalMode::NegativeConsent,
+            "Chinese read should be Green-equivalent (negative consent)"
+        );
+        assert_eq!(
+            result.contract.allowed_action_modes,
+            vec![ActionMode::DraftOnly]
+        );
+    }
+
+    #[tokio::test]
+    async fn gibberish_chinese_is_rejected_as_too_ambiguous() {
+        let outcome = compile("天气怎么样啊今天").await;
+        assert!(
+            matches!(outcome, Err(CompileError::AmbiguityTooHigh { .. })),
+            "unclassifiable Chinese must be rejected as too ambiguous, not silently drafted"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_intent_is_rejected() {
+        assert!(matches!(
+            compile("   ").await,
+            Err(CompileError::EmptyIntent)
+        ));
+    }
 }

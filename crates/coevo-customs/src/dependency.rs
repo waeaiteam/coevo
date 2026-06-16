@@ -54,21 +54,27 @@ impl CognitiveDependencyGraph {
         queue.push_back(invalidated_entry_id.to_string());
         visited.insert(invalidated_entry_id.to_string());
 
-        // BFS traversal following dependents
+        // BFS traversal following dependents. `visited` dedupes the frontier so
+        // a diamond/multi-hop dependency graph never invalidates (or re-queries)
+        // the same entry twice; `find_dependents` additionally filters
+        // already-invalid rows at the DB layer (SELECT DISTINCT ... is_valid=1),
+        // so this loop is idempotent even across overlapping paths.
         while let Some(current) = queue.pop_front() {
             let dependents = CognitiveEdgeRepo::find_dependents(pool, &current).await?;
             for edge in dependents {
-                if !visited.contains(&edge.source_entry_id) {
-                    visited.insert(edge.source_entry_id.clone());
-                    queue.push_back(edge.source_entry_id.clone());
-                    invalidated.push(edge.source_entry_id.clone());
-                    // Mark the dependent entry as invalid
-                    coevo_store::repos::blackboard_repo::BlackboardRepo::invalidate(
-                        pool,
-                        &edge.source_entry_id,
-                    )
-                    .await?;
+                // Skip self-edges and anything already seen on the frontier.
+                if edge.source_entry_id == current || visited.contains(&edge.source_entry_id) {
+                    continue;
                 }
+                visited.insert(edge.source_entry_id.clone());
+                queue.push_back(edge.source_entry_id.clone());
+                invalidated.push(edge.source_entry_id.clone());
+                // Mark the dependent entry as invalid
+                coevo_store::repos::blackboard_repo::BlackboardRepo::invalidate(
+                    pool,
+                    &edge.source_entry_id,
+                )
+                .await?;
             }
         }
 

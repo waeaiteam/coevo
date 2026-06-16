@@ -38,19 +38,37 @@ impl RiskGate {
         let required_conf = required_confidence(action_risk);
 
         // ---- Layer 1: OPA Policy Filter ----
+        // Fail closed: a policy-engine error is NOT an implicit allow. If the
+        // engine cannot be reached or errors, we deny rather than silently
+        // skipping the policy layer (which previously happened on `Err`).
         let policy_result = self
             .policy_engine
             .evaluate_action(&action.action_urn, contract)
             .await;
-        if let Ok(result) = policy_result {
-            if !result.passed {
+        match policy_result {
+            Ok(result) => {
+                if !result.passed {
+                    return GateDecisionSpec {
+                        decision: GateDecision::Deny,
+                        required_confidence: required_conf,
+                        available_confidence: 0.0,
+                        action_risk,
+                        inaction_risk,
+                        reason: format!("OPA policy denied: {:?}", result.violations),
+                        mfa_auth_url: None,
+                        task_status_url: None,
+                        lease: None,
+                    };
+                }
+            }
+            Err(e) => {
                 return GateDecisionSpec {
                     decision: GateDecision::Deny,
                     required_confidence: required_conf,
                     available_confidence: 0.0,
                     action_risk,
                     inaction_risk,
-                    reason: format!("OPA policy denied: {:?}", result.violations),
+                    reason: format!("Policy engine unavailable; failing closed (deny): {e}"),
                     mfa_auth_url: None,
                     task_status_url: None,
                     lease: None,
@@ -97,7 +115,12 @@ impl RiskGate {
 
         // Insufficient confidence: compare with InactionRisk
         if inaction_risk > action_risk && contract.risk_tolerance_profile.allow_emergency_lease {
-            // Emergency lease path
+            // Emergency lease path. NOTE: the gate itself cannot mint a lease
+            // (it has no LeaseManager / DB handle), so `lease` is left `None`
+            // here. An `AllowWithLease` with `lease == None` is NOT yet
+            // actionable — the caller MUST provision a real dual-signed lease
+            // via `LeaseManager::grant` before performing the action. Use
+            // `GateDecisionSpec::is_actionable` to enforce this fail-closed.
             return GateDecisionSpec {
                 decision: GateDecision::AllowWithLease,
                 required_confidence: required_conf,
@@ -105,12 +128,12 @@ impl RiskGate {
                 action_risk,
                 inaction_risk,
                 reason: format!(
-                    "InactionRisk {:.2} > ActionRisk {:.2}; emergency lease granted",
+                    "InactionRisk {:.2} > ActionRisk {:.2}; emergency lease REQUIRED before action (caller must call LeaseManager::grant)",
                     inaction_risk, action_risk
                 ),
                 mfa_auth_url: None,
                 task_status_url: None,
-                lease: None, // filled by lease manager
+                lease: None, // unprovisioned — caller must grant a lease
             };
         }
 
@@ -126,8 +149,37 @@ impl RiskGate {
                 available_conf, required_conf
             ),
             mfa_auth_url: contract.human_approval_policy.mfa_auth_url.clone(),
-            task_status_url: Some("https://coevo.local/approval/status".to_string()),
+            task_status_url: approval_status_url(),
             lease: None,
         }
+    }
+}
+
+/// Build the human-approval status polling URL from the deployment's public
+/// base URL. Returns `Some("<base>/approval/status")` when
+/// `COEVO_PUBLIC_BASE_URL` is set (trailing slashes trimmed), or `None`
+/// otherwise — never a hardcoded `coevo.local` placeholder that points nowhere.
+fn approval_status_url() -> Option<String> {
+    let base = std::env::var("COEVO_PUBLIC_BASE_URL").ok()?;
+    let base = base.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    Some(format!("{base}/approval/status"))
+}
+
+/// Whether a gate decision authorizes the action *as it stands*.
+///
+/// Fail-closed companion to [`RiskGate::evaluate`]: an `AllowWithLease` verdict
+/// is only actionable once a real lease has been attached (`lease.is_some()`).
+/// A bare `Allow` is actionable; everything else (deny / approval / defer /
+/// escalate, or an `AllowWithLease` with no lease) is not. Callers that map
+/// gate decisions to an "allow" outcome should gate on this rather than
+/// treating `AllowWithLease` as an unconditional allow.
+pub fn is_actionable(spec: &GateDecisionSpec) -> bool {
+    match spec.decision {
+        GateDecision::Allow => true,
+        GateDecision::AllowWithLease => spec.lease.is_some(),
+        _ => false,
     }
 }

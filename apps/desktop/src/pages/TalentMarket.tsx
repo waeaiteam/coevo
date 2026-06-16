@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createEmployee, listEmployees, seedEmployees } from "../api/client";
 import Icon, { type IconName } from "../components/Icon";
+import { loadSettingsSnapshot } from "../hooks/useSettings";
 import { t, useLanguage } from "../settings/i18n";
+import { presetFor } from "../settings/modelPresets";
 
 type Preset = {
   department: string;
@@ -27,6 +29,8 @@ const PRESETS: Preset[] = [
 function buildEmployee(preset: Preset, displayName: string) {
   const agentId = `agent-${preset.department.replace(/_/g, "-")}-${Math.random().toString(36).slice(2, 6)}`;
   const now = Date.now();
+  const settings = loadSettingsSnapshot();
+  const providerPreset = presetFor(settings.model_provider.provider);
   return {
     agent_id: agentId,
     display_name: displayName,
@@ -41,9 +45,16 @@ function buildEmployee(preset: Preset, displayName: string) {
       expires_at_ms: null,
     },
     model_profile: {
-      provider: "mock", base_url: "", api_key_ref: "",
-      default_model: "gpt-4o", fast_model: "gpt-4o-mini", reasoning_model: "o1",
-      structured_output_model: "gpt-4o", timeout_ms: 30000, max_tokens: 4096, max_cost_per_task_usd: 1.0,
+      provider: providerPreset.provider,
+      base_url: settings.model_provider.base_url || providerPreset.baseUrl,
+      api_key_ref: "coevo/model-provider",
+      default_model: settings.model_provider.default_model || providerPreset.defaultModel,
+      fast_model: settings.model_provider.fast_model || providerPreset.fastModel,
+      reasoning_model: settings.model_provider.reasoning_model || providerPreset.reasoningModel,
+      structured_output_model: settings.model_provider.structured_output_model || providerPreset.structuredModel,
+      timeout_ms: settings.model_provider.request_timeout_ms,
+      max_tokens: settings.model_provider.max_tokens,
+      max_cost_per_task_usd: settings.model_provider.max_cost_per_task_usd,
     },
     tool_scopes: ["urn:coevo:tool:read"],
     memory_scope: "agent",

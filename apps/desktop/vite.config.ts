@@ -1,8 +1,12 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
-const defaultArtifactRoot = `D:/${"\u7f16\u8bd1\u4ea7\u7269"}/coevo`;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..", "..");
+const defaultArtifactRoot = join(repoRoot, ".artifacts");
 const artifactRoot = process.env.COEVO_BUILD_ARTIFACT_DIR || defaultArtifactRoot;
 
 export default defineConfig({

@@ -15,7 +15,13 @@ impl UserProfileRepo {
     }
     pub async fn upsert(pool: &SqlitePool, p: &UserProfile) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT OR REPLACE INTO user_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO user_profiles (\
+                user_id, display_name, preferred_language, timezone, risk_preference, \
+                default_mission_mode, long_term_goals_json, business_domains_json, \
+                communication_style, approval_preferences_json, data_boundaries_json, \
+                budget_limits_json, favorite_tools_json, active_projects_json, \
+                created_at_ms, updated_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&p.user_id)
         .bind(&p.display_name)

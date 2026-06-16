@@ -6,10 +6,10 @@ import { useSettings } from "../hooks/useSettings";
 import { t, useLanguage } from "../settings/i18n";
 import type { CoevoSettings } from "../settings/types";
 
-type SectionKey = keyof CoevoSettings | "data_management";
+type SectionKey = keyof CoevoSettings | "data_management" | "mcp_servers";
 type SectionGroup = "common" | "advanced";
 
-const COMMON_SECTIONS: SectionKey[] = ["general", "model_provider", "appearance", "data_management"];
+const COMMON_SECTIONS: SectionKey[] = ["general", "model_provider", "mcp_servers", "appearance", "data_management"];
 const ADVANCED_SECTIONS: SectionKey[] = ["agent_runtime", "governance", "risk_gate", "cognitive_customs", "policy_engine", "privacy", "developer"];
 
 interface Props {

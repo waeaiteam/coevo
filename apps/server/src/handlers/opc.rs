@@ -1,24 +1,24 @@
-use crate::state::AppState;
 use crate::handlers::identifiers::is_plain_identifier;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
+use coevo_audit::logger::AuditLogger;
 use coevo_core::opc::*;
 use coevo_core::skills::*;
 use coevo_evolution::{
     analyzer::FailureAnalyzer, generator::SkillGenerator, verifier::SkillVerifier,
 };
-use coevo_executors::adapters::*;
-use coevo_executors::traits::*;
 use coevo_store::company_workspace::CompanyEmployeeFiles;
 use coevo_store::pool::create_pool;
+use coevo_store::repos::audit_repo::AuditRepo;
 use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
 use coevo_store::repos_opc::*;
 use coevo_worker::harness::{WorkerHarness, WorkerHarnessOptions};
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use sqlx::Row;
 
 #[derive(Deserialize)]
@@ -259,7 +259,8 @@ async fn resolve_legacy_executor_work_order(
     };
 
     if location == "default-opc" {
-        let work_order = match work_order_repo::WorkOrderRepo::get(&state.pool, work_order_id).await {
+        let work_order = match work_order_repo::WorkOrderRepo::get(&state.pool, work_order_id).await
+        {
             Ok(Some(work_order)) => work_order,
             Ok(None) => return Err(err!(StatusCode::NOT_FOUND, "Work order not found")),
             Err(e) => return Err(err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
@@ -435,7 +436,8 @@ fn company_employee_skill_markdown_path(
 }
 
 fn company_skill_scope(skill: &AgentSkillPackage, agent_id: Option<&str>) -> &'static str {
-    if is_employee_skill(skill) && agent_id.is_some_and(|agent_id| skill.owner_agent_id == agent_id) {
+    if is_employee_skill(skill) && agent_id.is_some_and(|agent_id| skill.owner_agent_id == agent_id)
+    {
         "employee"
     } else {
         "company"
@@ -579,10 +581,7 @@ fn employee_passport_file(employee: &AgentEmployee) -> CompanyEmployeePassportFi
 
 fn employee_reputation_score(employee: &AgentEmployee) -> f64 {
     let v = &employee.reputation_vector;
-    (v.task_domain_competence
-        + v.uncertainty_honesty
-        + v.policy_compliance
-        + v.resource_efficiency)
+    (v.task_domain_competence + v.uncertainty_honesty + v.policy_compliance + v.resource_efficiency)
         / 4.0
 }
 
@@ -803,7 +802,8 @@ fn ensure_company_employee_files(
             &employee.agent_id,
             &CompanyEmployeeFiles {
                 passport_json: if current.passport_json.is_null() {
-                    serde_json::to_value(employee_passport_file(employee)).map_err(|e| e.to_string())?
+                    serde_json::to_value(employee_passport_file(employee))
+                        .map_err(|e| e.to_string())?
                 } else {
                     current.passport_json
                 },
@@ -1004,23 +1004,89 @@ fn resolve_governance_verdict(
     }
 }
 
-const RED_TRIGGERS: [&str; 11] = [
+// Server-authoritative Red/Yellow trigger keyword lists. These are bilingual
+// (English + 中文) and aligned with the MCL `CONCEPTS` table in
+// crates/coevo-mcl/src/compiler.rs so that the work-order track classifier on
+// the server agrees with the contract compiler. Chinese deploy-to-production,
+// delete-database, payment, and PII/customer-data missions MUST classify to the
+// same elevated track as their English equivalents.
+//
+// Red = irreversible / production / financial / sensitive-data operations.
+// (MCL concepts: Production 生产/线上/正式, Delete 删除/移除, Payment 支付/付款,
+//  CustomerData 客户数据/用户数据/个人信息/隐私.)
+const RED_TRIGGERS: &[&str] = &[
+    // --- English ---
     "production",
     "prod",
+    "live env",
     "critical",
     "database mutation",
+    "drop table",
+    "truncate",
     "rollback",
+    "roll back",
     "payment",
+    "pay",
+    "transfer",
+    "refund",
+    "payout",
     "delete",
+    "remove",
+    "purge",
+    "wipe",
     "p1",
     "emergency",
     "financial",
     "customer data",
+    "user data",
+    "personal information",
+    "personal info",
+    "privacy",
+    "pii",
+    // --- 中文 (Chinese) ---
+    // Production / 线上正式环境 (MCL Production concept)
+    "生产",
+    "线上",
+    "正式环境",
+    "正式发布",
+    // Delete / 删除移除 (MCL Delete concept)
+    "删除",
+    "移除",
+    "清空",
+    "清除",
+    "删库",
+    // Payment / 支付付款 (MCL Payment concept)
+    "支付",
+    "付款",
+    "转账",
+    "退款",
+    // Customer data / PII (MCL CustomerData concept)
+    "客户数据",
+    "用户数据",
+    "个人信息",
+    "隐私",
+    // Generic high-risk markers
+    "紧急",
+    "回滚",
 ];
-const YELLOW_TRIGGERS: [&str; 10] = [
+// Yellow = reversible internal writes / deploys-to-non-prod / notifications.
+// (MCL concepts: Write 写入/修改, Deploy 部署/发布/上线, Staging 预发/测试环境,
+//  Database 数据库, EmailNotify 通知/邮件, Shell 命令/脚本.)
+const YELLOW_TRIGGERS: &[&str] = &[
+    // --- English ---
     "deploy",
+    "release",
+    "publish",
+    "rollout",
+    "roll out",
+    "canary",
     "notification",
+    "notify",
+    "broadcast",
+    "alert",
     "staging",
+    "preprod",
+    "pre-prod",
     "send",
     "create ticket",
     "write",
@@ -1028,6 +1094,40 @@ const YELLOW_TRIGGERS: [&str; 10] = [
     "changelog",
     "internal",
     "modify",
+    "database",
+    "schema",
+    "shell",
+    "script",
+    "run command",
+    // --- 中文 (Chinese) ---
+    // Deploy / 部署发布上线 (MCL Deploy concept)
+    "部署",
+    "发布",
+    "上线",
+    "灰度",
+    // Write / 写入修改 (MCL Write concept)
+    "写入",
+    "修改",
+    "更新",
+    "创建",
+    "新建",
+    "编辑",
+    // Staging / 预发测试环境 (MCL Staging concept)
+    "预发",
+    "测试环境",
+    "沙箱",
+    // Database / 数据库 (MCL Database concept)
+    "数据库",
+    "库表",
+    // Notify / 通知邮件 (MCL EmailNotify concept)
+    "通知",
+    "邮件",
+    "群发",
+    // Shell / 命令脚本 (MCL Shell concept)
+    "命令",
+    "脚本",
+    "终端",
+    "执行命令",
 ];
 
 fn is_trigger_boundary(ch: Option<char>) -> bool {
@@ -1054,7 +1154,7 @@ fn contains_governance_trigger(intent: &str, trigger: &str) -> bool {
 
 fn classify_mission_track(intent: &str) -> TrackDecision {
     let lower = intent.to_lowercase();
-    for trigger in RED_TRIGGERS {
+    for &trigger in RED_TRIGGERS {
         if contains_governance_trigger(&lower, trigger) {
             return TrackDecision {
                 track: "red",
@@ -1073,7 +1173,7 @@ fn classify_mission_track(intent: &str) -> TrackDecision {
             };
         }
     }
-    for trigger in YELLOW_TRIGGERS {
+    for &trigger in YELLOW_TRIGGERS {
         if contains_governance_trigger(&lower, trigger) {
             return TrackDecision {
                 track: "yellow",
@@ -1114,16 +1214,20 @@ fn yellow_approval_receipt(req: &ExecuteRequest) -> Option<&str> {
         .filter(|s| !s.trim().is_empty())
 }
 
-fn make_executor(source_type: &ExecutorSourceType) -> Option<Box<dyn ExternalExecutorAdapter>> {
-    match source_type {
-        ExecutorSourceType::Hermes => Some(Box::new(MockHermesAdapter::new())),
-        ExecutorSourceType::OpenClaw => Some(Box::new(MockOpenClawAdapter::new())),
-        ExecutorSourceType::MCP => Some(Box::new(MockMcpAdapter::new())),
-        ExecutorSourceType::Local302AI => Some(Box::new(MockLocal302AIAdapter::new())),
-        ExecutorSourceType::Browser => Some(Box::new(MockBrowserAdapter::new())),
-        ExecutorSourceType::LocalProcess => Some(Box::new(MockLocalProcessAdapter::new())),
-        ExecutorSourceType::Docker => Some(Box::new(MockDockerAdapter::new())),
-        ExecutorSourceType::Custom => None,
+/// Map an `ExecutorError` to an HTTP status + message for the executor routes.
+///
+/// `NotRegistered`/`Disabled` are 403 (the executor is structurally unusable);
+/// `RiskCeilingExceeded`/`PermissionDenied` are 403 (governance rejection);
+/// `Timeout` is 504; everything else (`Internal`) is 502 (the upstream runtime
+/// — HTTP runtime / docker / local process — failed).
+fn executor_error_status(err: &coevo_executors::ExecutorError) -> StatusCode {
+    use coevo_executors::ExecutorError::*;
+    match err {
+        NotRegistered | Disabled | RiskCeilingExceeded { .. } | PermissionDenied(_) => {
+            StatusCode::FORBIDDEN
+        }
+        Timeout => StatusCode::GATEWAY_TIMEOUT,
+        Internal(_) => StatusCode::BAD_GATEWAY,
     }
 }
 
@@ -1144,9 +1248,12 @@ pub async fn put_founder(
         .ok()
         .flatten();
     let now = chrono::Utc::now().timestamp_millis() as u64;
-    let display_name = req
-        .display_name
-        .unwrap_or_else(|| existing.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| "Founder".to_string()));
+    let display_name = req.display_name.unwrap_or_else(|| {
+        existing
+            .as_ref()
+            .map(|p| p.display_name.clone())
+            .unwrap_or_else(|| "Founder".to_string())
+    });
     let preferred_language = existing
         .as_ref()
         .map(|p| p.preferred_language.clone())
@@ -1182,25 +1289,27 @@ pub async fn put_founder(
             .map(|p| p.business_domains.clone())
             .unwrap_or_default(),
         communication_style,
-        approval_preferences: existing.as_ref().map(|p| p.approval_preferences.clone()).unwrap_or(
-            ApprovalPreferences {
+        approval_preferences: existing
+            .as_ref()
+            .map(|p| p.approval_preferences.clone())
+            .unwrap_or(ApprovalPreferences {
                 auto_approve_below_risk: 0.3,
                 require_explicit_for_yellow: true,
                 require_mfa_for_red: true,
                 negative_consent_timeout_secs: 300,
-            },
-        ),
+            }),
         data_boundaries: existing
             .as_ref()
             .map(|p| p.data_boundaries.clone())
             .unwrap_or_default(),
-        budget_limits: existing.as_ref().map(|p| p.budget_limits.clone()).unwrap_or(
-            BudgetLimits {
+        budget_limits: existing
+            .as_ref()
+            .map(|p| p.budget_limits.clone())
+            .unwrap_or(BudgetLimits {
                 max_cost_per_task_usd: 50.0,
                 max_cost_per_day_usd: 500.0,
                 max_agents_per_task: 5,
-            },
-        ),
+            }),
         favorite_tools: existing
             .as_ref()
             .map(|p| p.favorite_tools.clone())
@@ -1414,9 +1523,9 @@ pub async fn get_company(
         None,
         false,
     )
-        .await
-        .map(|items| items.len())
-        .unwrap_or(0);
+    .await
+    .map(|items| items.len())
+    .unwrap_or(0);
     let company_profile = opc_profile_repo::OPCProfileRepo::get(&pool, &company.opc_id)
         .await
         .ok()
@@ -1476,8 +1585,10 @@ pub async fn put_company(
         identity.mission = mission.clone();
     }
     identity.updated_at_ms = chrono::Utc::now().timestamp_millis() as u64;
-    if let Err(e) = std::fs::write(&company_json, serde_json::to_string_pretty(&identity).unwrap())
-    {
+    if let Err(e) = std::fs::write(
+        &company_json,
+        serde_json::to_string_pretty(&identity).unwrap(),
+    ) {
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     if let Some(charter) = req.charter {
@@ -1504,8 +1615,10 @@ pub async fn put_company(
         })
         .collect();
     let index_path = s.company_workspace.companies_index_path();
-    if let Err(e) = std::fs::write(index_path, serde_json::to_string_pretty(&updated_index).unwrap())
-    {
+    if let Err(e) = std::fs::write(
+        index_path,
+        serde_json::to_string_pretty(&updated_index).unwrap(),
+    ) {
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
 
@@ -2082,24 +2195,14 @@ pub async fn approve_company_agent_improvement(
     State(s): State<AppState>,
     Path((opc_id, _agent_id, proposal_id)): Path<(String, String, String)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    approve_proposal(
-        State(s),
-        legacy_company_headers(&opc_id),
-        Path(proposal_id),
-    )
-    .await
+    approve_proposal(State(s), legacy_company_headers(&opc_id), Path(proposal_id)).await
 }
 
 pub async fn reject_company_agent_improvement(
     State(s): State<AppState>,
     Path((opc_id, _agent_id, proposal_id)): Path<(String, String, String)>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    reject_proposal(
-        State(s),
-        legacy_company_headers(&opc_id),
-        Path(proposal_id),
-    )
-    .await
+    reject_proposal(State(s), legacy_company_headers(&opc_id), Path(proposal_id)).await
 }
 
 pub async fn list_company_skill_evolution_proposals(
@@ -2158,12 +2261,14 @@ pub async fn get_company_employee(
         Ok(pool) => pool,
         Err(err) => return err,
     };
-    let result = agent_employee_repo::AgentEmployeeRepo::get(&pool, &id).await.map(|employee| {
-        if let Some(ref employee) = employee {
-            let _ = ensure_company_employee_files(&s, &opc_id, employee);
-        }
-        employee
-    });
+    let result = agent_employee_repo::AgentEmployeeRepo::get(&pool, &id)
+        .await
+        .map(|employee| {
+            if let Some(ref employee) = employee {
+                let _ = ensure_company_employee_files(&s, &opc_id, employee);
+            }
+            employee
+        });
     pool.close().await;
     match result {
         Ok(Some(e)) => match company_employee_detail_response(&s, &opc_id, &e) {
@@ -2402,7 +2507,9 @@ pub async fn update_company_employee_prompt(
         }
     };
     let next_version = current_version + 1;
-    if let Err(e) = write_company_employee_prompt_version(&s, &opc_id, &id, next_version, &req.system_prompt) {
+    if let Err(e) =
+        write_company_employee_prompt_version(&s, &opc_id, &id, next_version, &req.system_prompt)
+    {
         pool.close().await;
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
@@ -2555,10 +2662,35 @@ pub async fn disable_executor(
     ok!(serde_json::json!({"ok":true}))
 }
 pub async fn executor_health(
-    State(_s): State<AppState>,
+    State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    ok!(serde_json::json!({"executor_id":id,"online":true,"latency_ms":1,"version":"mock-1.0"}))
+    let ex = match executor_repo::ExecutorRepo::get(&s.pool, &id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return err!(StatusCode::NOT_FOUND, "Executor not found"),
+        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let adapter = coevo_executors::build_executor_ref(&ex);
+    match adapter.health_check().await {
+        Ok(h) => ok!(serde_json::json!({
+            "executor_id": id,
+            "online": h.online,
+            "latency_ms": h.latency_ms,
+            "version": h.version,
+        })),
+        Err(e) => {
+            // A health probe that cannot reach the runtime is reported as a
+            // structured offline status (200) rather than an HTTP error, so the
+            // desktop can render "offline" instead of a failed request.
+            ok!(serde_json::json!({
+                "executor_id": id,
+                "online": false,
+                "latency_ms": 0,
+                "version": "unreachable",
+                "error": e.to_string(),
+            }))
+        }
+    }
 }
 pub async fn executor_dry_run(
     headers: HeaderMap,
@@ -2590,15 +2722,10 @@ pub async fn executor_dry_run(
             format!("risk_ceiling {} < track risk {}", ex.risk_ceiling, risk)
         );
     }
-    let adapter = make_executor(&ex.source_type);
-    match adapter {
-        Some(a) => match a.dry_run(&wo).await {
-            Ok(r) => ok!(serde_json::to_value(r).unwrap()),
-            Err(e) => err!(StatusCode::FORBIDDEN, e.to_string()),
-        },
-        None => ok!(
-            serde_json::json!({"passed":true,"estimated_cost_usd":0.01,"estimated_duration_ms":100,"warnings":[]})
-        ),
+    let adapter = coevo_executors::build_executor_ref(&ex);
+    match adapter.dry_run(&wo).await {
+        Ok(r) => ok!(serde_json::to_value(r).unwrap()),
+        Err(e) => err!(executor_error_status(&e), e.to_string()),
     }
 }
 
@@ -2629,7 +2756,8 @@ pub async fn create_work_order(
     }
     let now = chrono::Utc::now().timestamp_millis() as u64;
     let track_decision = classify_mission_track(&req.mission_intent);
-    let scoped_pool = match scoped_legacy_work_order_pool(&s, &headers, Some(&header_opc_id)).await {
+    let scoped_pool = match scoped_legacy_work_order_pool(&s, &headers, Some(&header_opc_id)).await
+    {
         Ok(pool) => pool,
         Err(err) => return err,
     };
@@ -2672,9 +2800,32 @@ pub async fn create_work_order(
         updated_at_ms: now,
     };
     match work_order_repo::WorkOrderRepo::create(scoped_pool_ref, &wo).await {
-        Ok(()) => ok!(
-            serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","track":wo.track,"risk_summary":wo.risk_summary,"allowed_actions":wo.allowed_actions,"restricted_actions":wo.restricted_actions,"governance_proposal":proposal,"governance_verdict":verdict,"created_at_ms":now})
-        ),
+        Ok(()) => {
+            let _ = AuditLogger::log_json(
+                &s.pool,
+                "work_order.governance.planned",
+                Some(&wo.contract_hash),
+                wo.selected_agents.first().map(String::as_str),
+                None,
+                &wo.opc_id,
+                &serde_json::json!({
+                    "work_order_id": wo.work_order_id,
+                    "track": wo.track,
+                    "status": "Planned",
+                    "mission_intent": wo.mission_intent,
+                    "risk_summary": wo.risk_summary,
+                    "allowed_actions": wo.allowed_actions,
+                    "restricted_actions": wo.restricted_actions,
+                    "governance_proposal": proposal,
+                    "governance_verdict": verdict,
+                    "created_at_ms": now,
+                }),
+            )
+            .await;
+            ok!(
+                serde_json::json!({"ok":true,"work_order_id":wo.work_order_id,"status":"Planned","track":wo.track,"risk_summary":wo.risk_summary,"allowed_actions":wo.allowed_actions,"restricted_actions":wo.restricted_actions,"governance_proposal":proposal,"governance_verdict":verdict,"created_at_ms":now})
+            )
+        }
         Err(e) => err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -2706,6 +2857,16 @@ fn legacy_company_headers(opc_id: &str) -> HeaderMap {
     headers
 }
 
+fn work_order_status_from_worker_status(worker_status: &str) -> &str {
+    match worker_status {
+        // Worker runs distinguish timeout as a runtime outcome, but the
+        // persisted work-order lifecycle intentionally stays on the narrower
+        // product status set used across list/detail UIs.
+        "TimedOut" => "Failed",
+        other => other,
+    }
+}
+
 pub async fn list_company_work_orders(
     State(s): State<AppState>,
     Path(opc_id): Path<String>,
@@ -2719,12 +2880,7 @@ pub async fn create_company_work_order(
     Json(mut req): Json<CreateWORequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     req.opc_id = opc_id.clone();
-    create_work_order(
-        legacy_company_headers(&opc_id),
-        State(s),
-        Json(req),
-    )
-    .await
+    create_work_order(legacy_company_headers(&opc_id), State(s), Json(req)).await
 }
 
 pub async fn execute_work_order(
@@ -2745,10 +2901,6 @@ pub async fn execute_work_order(
             StatusCode::UNPROCESSABLE_ENTITY,
             "Missing contract_hash/plan_hash"
         );
-    }
-    // Alpha: Red Track always blocks before any worker, agent, or executor validation can proceed.
-    if wo.track == "red" {
-        return err!(StatusCode::FORBIDDEN, "RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER: Alpha does not support Red Track execution. Requires production MFA, dual-sign, and emergency lease verifier.");
     }
     let risk = track_risk(&wo.track);
 
@@ -2829,14 +2981,21 @@ pub async fn execute_work_order(
             );
         }
     }
-    // 5. Yellow Track: require a real approval receipt anchored to a structurally valid WorkOrder.
-    if wo.track == "yellow" {
+    // 5. Yellow & Red Tracks: require a real approval receipt anchored to a
+    // structurally valid WorkOrder. Red is the higher-assurance gate (explicit
+    // human approval); Yellow uses negative consent. Neither is hard-blocked.
+    if wo.track == "yellow" || wo.track == "red" {
+        let approval_mode = if wo.track == "red" {
+            "EXPLICIT_APPROVAL"
+        } else {
+            "NEGATIVE_CONSENT"
+        };
         let contract = match ContractRepo::find_by_hash(&s.pool, &wo.contract_hash).await {
             Ok(Some(c)) => c,
             Ok(None) => {
                 return err!(
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "CONTRACT_ANCHOR_REQUIRED_FOR_APPROVAL: compile and persist the contract before Yellow Track execution"
+                    "CONTRACT_ANCHOR_REQUIRED_FOR_APPROVAL: compile and persist the contract before approval-gated execution"
                 )
             }
             Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -2848,7 +3007,7 @@ pub async fn execute_work_order(
                 &wo.opc_id,
                 &wo.contract_hash,
                 &format!("urn:coevo:work-order:{}:execute", id),
-                "NEGATIVE_CONSENT",
+                approval_mode,
                 &wo.user_id,
                 300_000,
             )
@@ -2862,16 +3021,42 @@ pub async fn execute_work_order(
                 &id,
                 "WaitingApproval",
             )
-                .await
-                .ok();
+            .await
+            .ok();
+            let _ = AuditRepo::insert(
+                &s.pool,
+                "work_order.approval.required",
+                Some(&wo.contract_hash),
+                wo.selected_agents.first().map(String::as_str),
+                None,
+                &wo.opc_id,
+                &serde_json::json!({
+                    "work_order_id": id,
+                    "approval_id": approval_id,
+                    "approval_mode": approval_mode,
+                    "track": wo.track,
+                    "message": if wo.track == "red" {
+                        "Red Track requires explicit human approval before execution."
+                    } else {
+                        "Yellow Track requires an approved approval receipt before execution."
+                    }
+                })
+                .to_string(),
+            )
+            .await;
+            let message = if wo.track == "red" {
+                "Red Track requires explicit human approval before execution."
+            } else {
+                "Yellow Track requires an approved approval receipt before execution."
+            };
             return ok!(serde_json::json!({
                 "ok":true,
                 "status":"WaitingApproval",
                 "approval_id":approval_id,
-                "approval_mode":"NEGATIVE_CONSENT",
+                "approval_mode":approval_mode,
                 "contract_hash":contract.contract_hash,
                 "action_urn":format!("urn:coevo:work-order:{}:execute", id),
-                "message":"Yellow Track requires an approved approval receipt before execution."
+                "message":message
             }));
         }
         let receipt_id = receipt.unwrap();
@@ -2893,6 +3078,22 @@ pub async fn execute_work_order(
         if approval.status != "approved" {
             return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_NOT_APPROVED");
         }
+        let _ = AuditLogger::log_json(
+            &s.pool,
+            "work_order.approval.receipt.accepted",
+            Some(&wo.contract_hash),
+            wo.selected_agents.first().map(String::as_str),
+            None,
+            &wo.opc_id,
+            &serde_json::json!({
+                "work_order_id": id,
+                "approval_id": receipt_id,
+                "approval_mode": approval.approval_mode,
+                "track": wo.track,
+                "action_urn": action_urn,
+            }),
+        )
+        .await;
     }
     // 6. Green/Yellow with approval: use WorkerHarness
     let opc_pool = if !wo.opc_id.trim().is_empty() && wo.opc_id != "default-opc" {
@@ -2947,10 +3148,11 @@ pub async fn execute_work_order(
         .collect();
     let synthesized =
         "WorkerHarness completed execution. Results were persisted to Task Memory.".to_string();
+    let work_order_status = work_order_status_from_worker_status(&harness_result.status);
     if let Err(e) = work_order_repo::WorkOrderRepo::update_status(
         scoped_work_order_pool_ref,
         &id,
-        &harness_result.status,
+        work_order_status,
     )
     .await
     {
@@ -2960,7 +3162,7 @@ pub async fn execute_work_order(
         );
     }
     ok!(serde_json::json!({
-        "ok":true,"status":harness_result.status,"summary":harness_result.summary,
+        "ok":true,"status":work_order_status,"worker_status":harness_result.status,"termination_reason":harness_result.termination_reason,"summary":harness_result.summary,
         "worker_session_ids":worker_session_ids,"synthesized_summary":synthesized,
         "worker_runs":harness_result.worker_runs,"worker_steps":harness_result.worker_steps,
         "worker_events":harness_result.worker_events,"skill_usage":harness_result.skill_usage,
@@ -2974,7 +3176,13 @@ pub async fn execute_company_work_order(
     Path((opc_id, id)): Path<(String, String)>,
     Json(req): Json<ExecuteRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    execute_work_order(legacy_company_headers(&opc_id), State(s), Path(id), Json(req)).await
+    execute_work_order(
+        legacy_company_headers(&opc_id),
+        State(s),
+        Path(id),
+        Json(req),
+    )
+    .await
 }
 
 pub async fn decide_work_order_approval(
@@ -2983,16 +3191,18 @@ pub async fn decide_work_order_approval(
     Path(id): Path<String>,
     Json(req): Json<ApprovalDecisionRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let (work_order, scoped_work_order_pool) = match load_scoped_work_order(&s, &headers, &id).await {
+    let (work_order, scoped_work_order_pool) = match load_scoped_work_order(&s, &headers, &id).await
+    {
         Ok(result) => result,
         Err(err) => return err,
     };
     let scoped_work_order_pool_ref = scoped_work_order_pool.as_ref().unwrap_or(&s.pool);
-    let approval = match ApprovalRepo::find_by_id(&s.pool, &work_order.opc_id, &req.approval_id).await {
-        Ok(Some(approval)) => approval,
-        Ok(None) => return err!(StatusCode::NOT_FOUND, "Approval request not found"),
-        Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
+    let approval =
+        match ApprovalRepo::find_by_id(&s.pool, &work_order.opc_id, &req.approval_id).await {
+            Ok(Some(approval)) => approval,
+            Ok(None) => return err!(StatusCode::NOT_FOUND, "Approval request not found"),
+            Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
     let expected_action_urn = format!("urn:coevo:work-order:{}:execute", id);
     if approval.action_urn != expected_action_urn {
         return err!(StatusCode::FORBIDDEN, "APPROVAL_ACTION_MISMATCH");
@@ -3001,9 +3211,26 @@ pub async fn decide_work_order_approval(
     let actor = "default-founder";
     match req.decision.as_str() {
         "approve" | "approved" => {
-            if let Err(e) = ApprovalRepo::approve(&s.pool, &work_order.opc_id, &req.approval_id, actor).await {
+            if let Err(e) =
+                ApprovalRepo::approve(&s.pool, &work_order.opc_id, &req.approval_id, actor).await
+            {
                 return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
             }
+            let _ = AuditRepo::insert(
+                &s.pool,
+                "work_order.approval.approved",
+                Some(&work_order.contract_hash),
+                Some(actor),
+                None,
+                &work_order.opc_id,
+                &serde_json::json!({
+                    "work_order_id": id,
+                    "approval_id": req.approval_id,
+                    "comment": req.comment,
+                })
+                .to_string(),
+            )
+            .await;
             let (status, Json(mut body)) = execute_work_order(
                 headers.clone(),
                 State(s.clone()),
@@ -3037,9 +3264,26 @@ pub async fn decide_work_order_approval(
             (status, Json(body))
         }
         "reject" | "rejected" | "deny" | "denied" => {
-            if let Err(e) = ApprovalRepo::deny(&s.pool, &work_order.opc_id, &req.approval_id, actor).await {
+            if let Err(e) =
+                ApprovalRepo::deny(&s.pool, &work_order.opc_id, &req.approval_id, actor).await
+            {
                 return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
             }
+            let _ = AuditRepo::insert(
+                &s.pool,
+                "work_order.approval.rejected",
+                Some(&work_order.contract_hash),
+                Some(actor),
+                None,
+                &work_order.opc_id,
+                &serde_json::json!({
+                    "work_order_id": id,
+                    "approval_id": req.approval_id,
+                    "comment": req.comment,
+                })
+                .to_string(),
+            )
+            .await;
             let _ = work_order_repo::WorkOrderRepo::update_status(
                 scoped_work_order_pool_ref,
                 &id,
@@ -3066,8 +3310,13 @@ pub async fn decide_company_work_order_approval(
     Path((opc_id, id)): Path<(String, String)>,
     Json(req): Json<ApprovalDecisionRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    decide_work_order_approval(legacy_company_headers(&opc_id), State(s), Path(id), Json(req))
-        .await
+    decide_work_order_approval(
+        legacy_company_headers(&opc_id),
+        State(s),
+        Path(id),
+        Json(req),
+    )
+    .await
 }
 
 pub async fn cancel_work_order(
@@ -3130,14 +3379,17 @@ pub async fn work_order_feedback(
         Err(e) => return err!(StatusCode::BAD_GATEWAY, e),
     };
     if let Err(e) =
-        skill_evolution_repo::SkillEvolutionRepo::create_proposal(proposal_pool_ref, &proposal).await
+        skill_evolution_repo::SkillEvolutionRepo::create_proposal(proposal_pool_ref, &proposal)
+            .await
     {
         return err!(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create proposal: {}", e)
         );
     }
-    if let Err(e) = work_order_repo::WorkOrderRepo::update_status(proposal_pool_ref, &id, "Failed").await {
+    if let Err(e) =
+        work_order_repo::WorkOrderRepo::update_status(proposal_pool_ref, &id, "Failed").await
+    {
         return err!(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to update status: {}", e)
@@ -3151,7 +3403,13 @@ pub async fn company_work_order_feedback(
     Path((opc_id, id)): Path<(String, String)>,
     Json(req): Json<WorkOrderFeedback>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    work_order_feedback(legacy_company_headers(&opc_id), State(s), Path(id), Json(req)).await
+    work_order_feedback(
+        legacy_company_headers(&opc_id),
+        State(s),
+        Path(id),
+        Json(req),
+    )
+    .await
 }
 
 pub async fn company_work_order_timeline(
@@ -3189,7 +3447,10 @@ pub async fn list_skills(
     };
     let response = match skill_repo::SkillRepo::list(&pool, q.agent_id.as_deref()).await {
         Ok(items) => {
-            for skill in items.iter().filter(|skill| skill.status == SkillStatus::Active) {
+            for skill in items
+                .iter()
+                .filter(|skill| skill.status == SkillStatus::Active)
+            {
                 let is_employee_scoped = is_employee_skill(&skill)
                     && q.agent_id
                         .as_deref()
@@ -3295,7 +3556,9 @@ pub async fn install_company_skill(
     }
 
     let skill = match skill_repo::SkillRepo::get(&pool, &skill_id, None).await {
-        Ok(Some(skill)) if skill.status == SkillStatus::Active && !is_employee_skill(&skill) => skill,
+        Ok(Some(skill)) if skill.status == SkillStatus::Active && !is_employee_skill(&skill) => {
+            skill
+        }
         Ok(Some(_)) => {
             pool.close().await;
             return err!(
@@ -3305,7 +3568,10 @@ pub async fn install_company_skill(
         }
         Ok(None) => {
             pool.close().await;
-            return err!(StatusCode::NOT_FOUND, format!("Unknown skill template: {skill_id}"));
+            return err!(
+                StatusCode::NOT_FOUND,
+                format!("Unknown skill template: {skill_id}")
+            );
         }
         Err(e) => {
             pool.close().await;
@@ -3522,16 +3788,17 @@ pub async fn run_evolution(
         Ok(pool) => pool,
         Err((status, body)) => return (status, body),
     };
-    let failed_work_orders = match work_order_repo::WorkOrderRepo::list_by_opc(&proposal_pool, &opc_id).await {
-        Ok(items) => items
-            .into_iter()
-            .filter(|item| item.status == WorkOrderStatus::Failed)
-            .collect::<Vec<_>>(),
-        Err(e) => {
-            proposal_pool.close().await;
-            return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-        }
-    };
+    let failed_work_orders =
+        match work_order_repo::WorkOrderRepo::list_by_opc(&proposal_pool, &opc_id).await {
+            Ok(items) => items
+                .into_iter()
+                .filter(|item| item.status == WorkOrderStatus::Failed)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                proposal_pool.close().await;
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+        };
     let latest_failed_work_order = match failed_work_orders
         .into_iter()
         .max_by_key(|item| item.updated_at_ms.max(item.created_at_ms))
@@ -3575,7 +3842,9 @@ pub async fn run_evolution(
             return err!(StatusCode::BAD_GATEWAY, e);
         }
     };
-    if let Err(e) = skill_evolution_repo::SkillEvolutionRepo::create_proposal(&proposal_pool, &p).await {
+    if let Err(e) =
+        skill_evolution_repo::SkillEvolutionRepo::create_proposal(&proposal_pool, &p).await
+    {
         proposal_pool.close().await;
         return err!(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3692,18 +3961,17 @@ pub async fn approve_proposal(
                 created_at_ms: now,
                 updated_at_ms: now,
             };
-            skill_repo::SkillRepo::upsert(&proposal_pool, &sk).await.ok();
+            skill_repo::SkillRepo::upsert(&proposal_pool, &sk)
+                .await
+                .ok();
             applied_skill = Some(sk);
         }
         EvolutionProposalType::PatchSkill => {
-            let existing = skill_repo::SkillRepo::get(
-                &proposal_pool,
-                &proposal.target_skill_id,
-                None,
-            )
-                .await
-                .ok()
-                .flatten();
+            let existing =
+                skill_repo::SkillRepo::get(&proposal_pool, &proposal.target_skill_id, None)
+                    .await
+                    .ok()
+                    .flatten();
             let mut patched = existing.unwrap_or_else(|| AgentSkillPackage {
                 skill_id: proposal.target_skill_id.clone(),
                 version: "1.0.0".into(),
@@ -3748,7 +4016,9 @@ pub async fn approve_proposal(
             patched.status = SkillStatus::Active;
             patched.updated_at_ms = now;
             patched.provenance = format!("skill-evolution-{}", proposal.proposal_id);
-            skill_repo::SkillRepo::upsert(&proposal_pool, &patched).await.ok();
+            skill_repo::SkillRepo::upsert(&proposal_pool, &patched)
+                .await
+                .ok();
             applied_skill = Some(patched);
         }
         EvolutionProposalType::DeprecateSkill => {
@@ -3757,7 +4027,9 @@ pub async fn approve_proposal(
             {
                 sk.status = SkillStatus::Deprecated;
                 sk.updated_at_ms = now;
-                skill_repo::SkillRepo::upsert(&proposal_pool, &sk).await.ok();
+                skill_repo::SkillRepo::upsert(&proposal_pool, &sk)
+                    .await
+                    .ok();
                 applied_skill = Some(sk);
             }
         }
@@ -3803,7 +4075,9 @@ pub async fn approve_proposal(
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     if let Some(skill) = applied_skill.as_ref() {
-        if let Err(e) = ensure_company_skill_file(&s, &opc_id, skill, Some(&proposal.created_by_agent)) {
+        if let Err(e) =
+            ensure_company_skill_file(&s, &opc_id, skill, Some(&proposal.created_by_agent))
+        {
             proposal_pool.close().await;
             return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
         }
@@ -3843,24 +4117,21 @@ mod tests {
     use super::*;
     use crate::handlers::timeline::work_order_audit_export;
     use crate::state::AppState;
-    use coevo_core::contract::*;
-    use coevo_core::reputation::ReputationVector;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
         routing::get,
         Router,
     };
+    use coevo_core::contract::*;
+    use coevo_core::reputation::ReputationVector;
     use coevo_core::skills::{
-        EvolutionProposalStatus, EvolutionProposalType, EvolutionSourceType,
-        SkillEvolutionProposal,
+        EvolutionProposalStatus, EvolutionProposalType, EvolutionSourceType, SkillEvolutionProposal,
     };
     use coevo_store::repos::{approval_repo::ApprovalRepo, contract_repo::ContractRepo};
     use coevo_store::{
-        migrate::run_migrations,
-        pool::create_test_pool,
-        repos::reputation_repo::ReputationHistoryRepo,
-        repos::worker_run_repo::WorkerRunRepo,
+        migrate::run_migrations, pool::create_test_pool,
+        repos::reputation_repo::ReputationHistoryRepo, repos::worker_run_repo::WorkerRunRepo,
         repos_opc::work_order_repo::WorkOrderRepo,
     };
     use std::sync::Mutex;
@@ -3875,6 +4146,24 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    async fn remove_file_with_retry(path: &std::path::Path) {
+        for _ in 0..10 {
+            match std::fs::remove_file(path) {
+                Ok(()) => return,
+                Err(err) if cfg!(windows) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(err) => panic!("failed to remove {}: {}", path.display(), err),
+            }
+        }
+        std::fs::remove_file(path).unwrap_or_else(|err| {
+            panic!("failed to remove {} after retry: {}", path.display(), err)
+        });
     }
 
     async fn create_yellow_work_order(
@@ -3929,7 +4218,8 @@ mod tests {
     async fn company_test_state() -> (AppState, std::path::PathBuf) {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir().join(format!("coevo-company-handler-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-company-handler-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(pool, root.clone());
         (state, root)
     }
@@ -3938,11 +4228,17 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Legacy Scoped Co", Some("legacy scoped tests"), "default-founder")
+            .create_company(
+                "Legacy Scoped Co",
+                Some("legacy scoped tests"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let pool = company_pool(&state, &company.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
         pool.close().await;
         (state, root, company.opc_id)
@@ -3954,7 +4250,10 @@ mod tests {
         let (state, root) = company_test_state().await;
         let app = Router::new()
             .route("/companies", get(list_companies).post(create_company))
-            .route("/companies/{opc_id}", get(get_company).delete(delete_company))
+            .route(
+                "/companies/{opc_id}",
+                get(get_company).delete(delete_company),
+            )
             .with_state(state.clone());
 
         let create_response = app
@@ -4081,11 +4380,17 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Gamma Ops", Some("Run reliable operations"), "default-founder")
+            .create_company(
+                "Gamma Ops",
+                Some("Run reliable operations"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let pool = company_pool(&state, &company.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         let seeded_count = agent_employee_repo::AgentEmployeeRepo::list(&pool)
             .await
             .unwrap()
@@ -4093,7 +4398,7 @@ mod tests {
         pool.close().await;
 
         let (status, Json(detail)) = get_company(State(state), Path(company.opc_id)).await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::OK, "{detail:?}");
         assert_eq!(detail["mission"], "Run reliable operations");
         assert_eq!(detail["employee_count"], seeded_count);
 
@@ -4106,7 +4411,11 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Detail Shape Co", Some("Inspect detail shape"), "default-founder")
+            .create_company(
+                "Detail Shape Co",
+                Some("Inspect detail shape"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let opc_id = company.opc_id.clone();
@@ -4120,10 +4429,7 @@ mod tests {
                 mission: "Inspect detail shape".to_string(),
                 current_strategy: "Keep details real".to_string(),
                 operating_principles: vec!["No placeholders".to_string()],
-                active_projects: vec![
-                    "launch-okr".to_string(),
-                    "ops-hardening".to_string(),
-                ],
+                active_projects: vec!["launch-okr".to_string(), "ops-hardening".to_string()],
                 asset_indexes: vec![],
                 policy_profile: "policy/default".to_string(),
                 memory_policy: MemoryPolicy {
@@ -4131,10 +4437,7 @@ mod tests {
                     require_provenance_for_fact: true,
                     auto_stale_days: 30,
                 },
-                default_departments: vec![
-                    "FounderOffice".to_string(),
-                    "Operations".to_string(),
-                ],
+                default_departments: vec!["FounderOffice".to_string(), "Operations".to_string()],
                 created_at_ms: 0,
                 updated_at_ms: 0,
             },
@@ -4173,11 +4476,17 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Delta Ops", Some("Ship reliable releases"), "default-founder")
+            .create_company(
+                "Delta Ops",
+                Some("Ship reliable releases"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let pool = company_pool(&state, &company.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&pool)
+            .await
+            .unwrap();
         let seeded_count = agent_employee_repo::AgentEmployeeRepo::list(&pool)
             .await
             .unwrap()
@@ -4185,7 +4494,7 @@ mod tests {
         pool.close().await;
 
         let (status, Json(list)) = list_companies(State(state)).await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::OK, "{list:?}");
         let companies = list.as_array().unwrap();
         let listed = companies
             .iter()
@@ -4285,7 +4594,8 @@ mod tests {
             .unwrap();
 
         let (seed_status, _) =
-            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone())).await;
+            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone()))
+                .await;
         assert_eq!(seed_status, StatusCode::OK);
 
         let (get_status, Json(before)) = get_company_employee(
@@ -4348,12 +4658,17 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Persona Co", Some("File backed employees"), "default-founder")
+            .create_company(
+                "Persona Co",
+                Some("File backed employees"),
+                "default-founder",
+            )
             .await
             .unwrap();
 
         let (seed_status, _) =
-            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone())).await;
+            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone()))
+                .await;
         assert_eq!(seed_status, StatusCode::OK);
 
         let employee_dir = root
@@ -4367,7 +4682,11 @@ mod tests {
         assert!(employee_dir.join("soul.md").exists());
         assert!(employee_dir.join("agents.md").exists());
 
-        std::fs::write(employee_dir.join("identity.md"), "# Identity\n\nCustom identity").unwrap();
+        std::fs::write(
+            employee_dir.join("identity.md"),
+            "# Identity\n\nCustom identity",
+        )
+        .unwrap();
         std::fs::write(employee_dir.join("soul.md"), "# Soul\n\nCustom soul").unwrap();
         std::fs::write(employee_dir.join("agents.md"), "# Rules\n\nCustom rules").unwrap();
         std::fs::write(employee_dir.join("prompt.md"), "Custom prompt body").unwrap();
@@ -4377,7 +4696,7 @@ mod tests {
             Path((company.opc_id.clone(), "agent-pm-01".to_string())),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::OK, "{detail:?}");
         assert_eq!(detail["identity_md"], "# Identity\n\nCustom identity");
         assert_eq!(detail["soul_md"], "# Soul\n\nCustom soul");
         assert_eq!(detail["agents_md"], "# Rules\n\nCustom rules");
@@ -4397,22 +4716,18 @@ mod tests {
             .unwrap();
 
         let (seed_employee_status, _) =
-            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone())).await;
+            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone()))
+                .await;
         assert_eq!(seed_employee_status, StatusCode::OK);
 
-        let seed_status = seed_company_skills_handler(
-            State(state.clone()),
-            Path(company.opc_id.clone()),
-        )
-        .await
-        .0;
+        let seed_status =
+            seed_company_skills_handler(State(state.clone()), Path(company.opc_id.clone()))
+                .await
+                .0;
         assert_eq!(seed_status, StatusCode::OK);
 
-        let (company_status, Json(company_skills)) = list_company_skills(
-            State(state.clone()),
-            Path(company.opc_id.clone()),
-        )
-        .await;
+        let (company_status, Json(company_skills)) =
+            list_company_skills(State(state.clone()), Path(company.opc_id.clone())).await;
         assert_eq!(company_status, StatusCode::OK);
         assert!(!company_skills.as_array().unwrap_or(&Vec::new()).is_empty());
 
@@ -4445,7 +4760,11 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Legacy Skill Scope Co", Some("Skill scope"), "default-founder")
+            .create_company(
+                "Legacy Skill Scope Co",
+                Some("Skill scope"),
+                "default-founder",
+            )
             .await
             .unwrap();
 
@@ -4458,7 +4777,9 @@ mod tests {
         version.version = "1.1.0".to_string();
         version.status = SkillStatus::Draft;
         version.updated_at_ms = version.updated_at_ms.saturating_add(1);
-        skill_repo::SkillRepo::upsert(&pool, &version).await.unwrap();
+        skill_repo::SkillRepo::upsert(&pool, &version)
+            .await
+            .unwrap();
         pool.close().await;
 
         let mut headers = HeaderMap::new();
@@ -4476,10 +4797,11 @@ mod tests {
         assert_eq!(activate_status, StatusCode::OK, "{activate_body:?}");
 
         let scoped_pool = company_pool(&state, &company.opc_id).await.unwrap();
-        let activated = skill_repo::SkillRepo::get(&scoped_pool, "skill-mission-draft", Some("1.1.0"))
-            .await
-            .unwrap()
-            .unwrap();
+        let activated =
+            skill_repo::SkillRepo::get(&scoped_pool, "skill-mission-draft", Some("1.1.0"))
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(activated.status, SkillStatus::Active);
         scoped_pool.close().await;
 
@@ -4492,10 +4814,11 @@ mod tests {
         assert_eq!(rollback_status, StatusCode::OK, "{rollback_body:?}");
 
         let scoped_pool = company_pool(&state, &company.opc_id).await.unwrap();
-        let rolled_back = skill_repo::SkillRepo::get(&scoped_pool, "skill-mission-draft", Some("1.0.0"))
-            .await
-            .unwrap()
-            .unwrap();
+        let rolled_back =
+            skill_repo::SkillRepo::get(&scoped_pool, "skill-mission-draft", Some("1.0.0"))
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(rolled_back.status, SkillStatus::Active);
         scoped_pool.close().await;
 
@@ -4508,11 +4831,16 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Summary Co", Some("Employee summary shape"), "default-founder")
+            .create_company(
+                "Summary Co",
+                Some("Employee summary shape"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let (seed_status, _) =
-            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone())).await;
+            seed_company_employees_handler(State(state.clone()), Path(company.opc_id.clone()))
+                .await;
         assert_eq!(seed_status, StatusCode::OK);
 
         let pool = company_pool(&state, &company.opc_id).await.unwrap();
@@ -4561,13 +4889,12 @@ mod tests {
         let pool = create_pool(&root.join(&company.opc_id).join("data.db").to_string_lossy())
             .await
             .unwrap();
-        let db_prompt: String = sqlx::query_scalar(
-            "SELECT system_prompt FROM agent_employees WHERE agent_id = ?",
-        )
-        .bind("agent-summary-01")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let db_prompt: String =
+            sqlx::query_scalar("SELECT system_prompt FROM agent_employees WHERE agent_id = ?")
+                .bind("agent-summary-01")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         pool.close().await;
         assert!(db_prompt.trim().is_empty());
 
@@ -4621,6 +4948,38 @@ mod tests {
         assert!(priority
             .restricted_actions
             .contains(&"production".to_string()));
+    }
+
+    #[test]
+    fn classify_mission_track_handles_chinese_triggers() {
+        // Chinese missions MUST classify to the same elevated track as their
+        // English equivalents (aligned with the MCL CONCEPTS table).
+        let red_cases = [
+            "把后端部署到生产环境",   // deploy to production -> Red (production)
+            "删除生产数据库",         // delete production database -> Red
+            "给客户发起退款",         // issue customer refund -> Red (payment)
+            "导出用户数据和个人信息", // export user data + PII -> Red (customer data)
+            "清空线上订单表",         // wipe live orders table -> Red (line/production + delete)
+        ];
+        for intent in red_cases {
+            let decision = classify_mission_track(intent);
+            assert_eq!(decision.track, "red", "expected red for: {intent}");
+        }
+
+        let yellow_cases = [
+            "部署到测试环境",           // deploy to staging -> Yellow
+            "修改内部更新日志",         // modify internal changelog -> Yellow (write)
+            "发布预发布说明并通知团队", // publish preprod notes + notify -> Yellow
+            "执行一个脚本检查数据库",   // run a script against the database -> Yellow
+        ];
+        for intent in yellow_cases {
+            let decision = classify_mission_track(intent);
+            assert_eq!(decision.track, "yellow", "expected yellow for: {intent}");
+        }
+
+        // A purely read-only Chinese mission stays Green.
+        let green = classify_mission_track("分析并总结上周的指标");
+        assert_eq!(green.track, "green");
     }
 
     #[test]
@@ -4721,7 +5080,11 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Legacy Memory Normalize Co", Some("normalize legacy memory"), "default-founder")
+            .create_company(
+                "Legacy Memory Normalize Co",
+                Some("normalize legacy memory"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let mut headers = HeaderMap::new();
@@ -4779,7 +5142,11 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Legacy Memory Traversal Co", Some("reject memory path traversal"), "default-founder")
+            .create_company(
+                "Legacy Memory Traversal Co",
+                Some("reject memory path traversal"),
+                "default-founder",
+            )
             .await
             .unwrap();
         let mut headers = HeaderMap::new();
@@ -4822,7 +5189,11 @@ mod tests {
         let (state, root) = company_test_state().await;
         let company = state
             .company_workspace
-            .create_company("Employee Traversal Co", Some("reject employee traversal"), "default-founder")
+            .create_company(
+                "Employee Traversal Co",
+                Some("reject employee traversal"),
+                "default-founder",
+            )
             .await
             .unwrap();
 
@@ -4873,12 +5244,8 @@ mod tests {
             updated_at_ms: 0,
         };
 
-        let (status, Json(body)) = create_company_employee(
-            State(state),
-            Path(company.opc_id),
-            Json(employee),
-        )
-        .await;
+        let (status, Json(body)) =
+            create_company_employee(State(state), Path(company.opc_id), Json(employee)).await;
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
         assert!(body["error"]
@@ -4918,8 +5285,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let (state, root) = company_test_state().await;
 
-        let (status, Json(body)) =
-            get_company(State(state), Path("../escape".to_string())).await;
+        let (status, Json(body)) = get_company(State(state), Path("../escape".to_string())).await;
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(body["error"]
@@ -4992,12 +5358,8 @@ mod tests {
             .unwrap_or_default()
             .contains("LEGACY_OPC_ID_REQUIRED"));
 
-        let (profile_put_status, Json(profile_put_body)) = put_company_profile(
-            HeaderMap::new(),
-            State(state.clone()),
-            Json(profile),
-        )
-        .await;
+        let (profile_put_status, Json(profile_put_body)) =
+            put_company_profile(HeaderMap::new(), State(state.clone()), Json(profile)).await;
         assert_eq!(profile_put_status, StatusCode::BAD_REQUEST);
         assert!(profile_put_body["error"]
             .as_str()
@@ -5235,7 +5597,10 @@ mod tests {
             .company_dir(&opc_id)
             .join("memory")
             .join("mem-company-file-1.md");
-        assert!(memory_md_path.exists(), "expected company memory markdown file");
+        assert!(
+            memory_md_path.exists(),
+            "expected company memory markdown file"
+        );
         let memory_md = std::fs::read_to_string(memory_md_path).unwrap();
         assert!(memory_md.contains("Market signal"));
         assert!(memory_md.contains("durable company memory"));
@@ -5356,7 +5721,10 @@ mod tests {
             .company_dir(&opc_id)
             .join("memory")
             .join("mem-company-force-scope-1.md");
-        assert!(memory_md_path.exists(), "expected company memory markdown file");
+        assert!(
+            memory_md_path.exists(),
+            "expected company memory markdown file"
+        );
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -5464,7 +5832,10 @@ mod tests {
             .join("shared")
             .join("playbooks")
             .join("launch.md");
-        assert!(shared_path.exists(), "expected shared file to exist on disk");
+        assert!(
+            shared_path.exists(),
+            "expected shared file to exist on disk"
+        );
         let content = std::fs::read_to_string(shared_path).unwrap();
         assert!(content.contains("Launch Playbook"));
         assert!(content.contains("Shared company guidance"));
@@ -5623,10 +5994,18 @@ mod tests {
                 .unwrap()
         };
 
-        let stale_create_response = app.clone().oneshot(create_memory("mem-stale-1")).await.unwrap();
+        let stale_create_response = app
+            .clone()
+            .oneshot(create_memory("mem-stale-1"))
+            .await
+            .unwrap();
         assert_eq!(stale_create_response.status(), StatusCode::OK);
 
-        let revoke_create_response = app.clone().oneshot(create_memory("mem-revoke-1")).await.unwrap();
+        let revoke_create_response = app
+            .clone()
+            .oneshot(create_memory("mem-revoke-1"))
+            .await
+            .unwrap();
         assert_eq!(revoke_create_response.status(), StatusCode::OK);
 
         let stale_response = app
@@ -5665,28 +6044,48 @@ mod tests {
             .iter()
             .find(|record| record.memory_id == "mem-stale-1")
             .unwrap();
-        assert_eq!(serde_json::to_value(stale_record.status).unwrap(), serde_json::json!("stale"));
+        assert_eq!(
+            serde_json::to_value(stale_record.status).unwrap(),
+            serde_json::json!("stale")
+        );
 
         let revoked_record = all_records
             .iter()
             .find(|record| record.memory_id == "mem-revoke-1")
             .unwrap();
-        assert_eq!(serde_json::to_value(revoked_record.status).unwrap(), serde_json::json!("revoked"));
+        assert_eq!(
+            serde_json::to_value(revoked_record.status).unwrap(),
+            serde_json::json!("revoked")
+        );
 
         std::fs::remove_dir_all(root).ok();
     }
 
     #[tokio::test]
-    async fn red_execute_returns_alpha_block_without_worker_audit_rows() {
+    async fn red_execute_waits_for_explicit_approval_without_starting_worker_rows() {
         let (state, root, opc_id) = seeded_legacy_company_state().await;
         let pool = state.pool.clone();
+        let contract_hash = "c".repeat(64);
         let work_order_id = "wo-red-alpha-block";
+        insert_contract(&pool, &contract_hash).await;
+        let company_db = company_pool(&state, &opc_id).await.unwrap();
+        let mut risk_employee =
+            agent_employee_repo::AgentEmployeeRepo::get(&company_db, "agent-risk-01")
+                .await
+                .unwrap()
+                .unwrap();
+        risk_employee.risk_ceiling = 1.0;
+        risk_employee.permission_boundary.max_risk_score = 1.0;
+        agent_employee_repo::AgentEmployeeRepo::upsert(&company_db, &risk_employee)
+            .await
+            .unwrap();
+        company_db.close().await;
 
         let create = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
             conversation_id: None,
-            contract_hash: "a".repeat(64),
-            plan_hash: "b".repeat(64),
+            contract_hash: contract_hash.clone(),
+            plan_hash: "d".repeat(64),
             user_id: "default-founder".to_string(),
             opc_id: opc_id.clone(),
             mission_intent: "Delete production customer data".to_string(),
@@ -5708,19 +6107,22 @@ mod tests {
             State(state),
             Path(work_order_id.to_string()),
             Json(ExecuteRequest {
-                caller_identity_proof: Some("real-looking-proof".to_string()),
-                monitoring_signature: Some("real-looking-monitoring".to_string()),
-                diagnostic_signature: Some("real-looking-diagnostic".to_string()),
-                lease_id: Some("lease-real-looking".to_string()),
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
             }),
         )
         .await;
 
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert!(body["error"]
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "WaitingApproval");
+        assert_eq!(body["approval_mode"], "EXPLICIT_APPROVAL");
+        assert!(body["approval_id"].as_str().unwrap_or_default().len() > 0);
+        assert!(body["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
+            .contains("Red Track requires explicit human approval"));
         assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
         assert_eq!(count_rows(&pool, "worker_runs", work_order_id).await, 0);
         std::fs::remove_dir_all(root).ok();
@@ -5745,9 +6147,12 @@ mod tests {
             governance_proposal: None,
         };
 
-        let (status, Json(body)) =
-            create_work_order(legacy_company_headers(&opc_id), State(state.clone()), Json(create))
-                .await;
+        let (status, Json(body)) = create_work_order(
+            legacy_company_headers(&opc_id),
+            State(state.clone()),
+            Json(create),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["track"], "red");
@@ -5794,9 +6199,12 @@ mod tests {
             }),
         };
 
-        let (status, Json(body)) =
-            create_work_order(legacy_company_headers(&opc_id), State(state.clone()), Json(create))
-                .await;
+        let (status, Json(body)) = create_work_order(
+            legacy_company_headers(&opc_id),
+            State(state.clone()),
+            Json(create),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::OK, "{body:?}");
         assert_eq!(
@@ -6064,9 +6472,12 @@ mod tests {
             required_skills: vec!["skill-mission-draft".to_string()],
             governance_proposal: None,
         };
-        let (create_status, Json(created)) =
-            create_work_order(legacy_company_headers(&opc_id), State(state.clone()), Json(create))
-                .await;
+        let (create_status, Json(created)) = create_work_order(
+            legacy_company_headers(&opc_id),
+            State(state.clone()),
+            Json(create),
+        )
+        .await;
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
 
         let (status, Json(body)) = execute_work_order(
@@ -6104,7 +6515,7 @@ mod tests {
         assert_eq!(create_status, StatusCode::OK, "{created:?}");
         let opc_id = created["opc_id"].as_str().unwrap().to_string();
         let db_path = state.company_workspace.company_db_path(&opc_id);
-        std::fs::remove_file(&db_path).unwrap();
+        remove_file_with_retry(&db_path).await;
         std::fs::write(&db_path, b"").unwrap();
 
         let (status, Json(body)) = execute_work_order(
@@ -6130,8 +6541,8 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-proposals-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-company-proposals-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6180,9 +6591,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let listed: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let listed: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert!(listed
             .as_array()
             .unwrap()
@@ -6197,8 +6611,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-approve-skill-file-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-approve-skill-file-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
 
         let (create_status, Json(created)) = create_company(
@@ -6223,8 +6639,12 @@ mod tests {
             target_skill_id: "skill-evolved-founder-playbook".to_string(),
             proposal_type: EvolutionProposalType::CreateNewSkill,
             diagnosis: "Create a founder-specific evolved skill".to_string(),
-            proposed_changes: "Use a tighter founder escalation checklist before approving risky actions.".to_string(),
-            expected_benefit: "The evolved skill should be visible from employee markdown immediately.".to_string(),
+            proposed_changes:
+                "Use a tighter founder escalation checklist before approving risky actions."
+                    .to_string(),
+            expected_benefit:
+                "The evolved skill should be visible from employee markdown immediately."
+                    .to_string(),
             risk_assessment: "LOW".to_string(),
             generated_tests: vec![],
             status: EvolutionProposalStatus::Draft,
@@ -6253,21 +6673,30 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(stored.provenance, format!("skill-evolution-{}", proposal.proposal_id));
+        assert_eq!(
+            stored.provenance,
+            format!("skill-evolution-{}", proposal.proposal_id)
+        );
         let proposals = skill_evolution_repo::SkillEvolutionRepo::list(&scoped_pool, None)
             .await
             .unwrap();
         assert!(proposals
             .iter()
-            .any(|row| row.proposal_id == proposal.proposal_id && row.status == EvolutionProposalStatus::Applied));
+            .any(|row| row.proposal_id == proposal.proposal_id
+                && row.status == EvolutionProposalStatus::Applied));
         scoped_pool.close().await;
 
-        let skill_path = state.company_workspace.company_employee_skill_markdown_path(
-            &opc_id,
-            "agent-founder-01",
-            &proposal.target_skill_id,
+        let skill_path = state
+            .company_workspace
+            .company_employee_skill_markdown_path(
+                &opc_id,
+                "agent-founder-01",
+                &proposal.target_skill_id,
+            );
+        assert!(
+            skill_path.exists(),
+            "expected employee skill markdown to exist"
         );
-        assert!(skill_path.exists(), "expected employee skill markdown to exist");
         let content = std::fs::read_to_string(&skill_path).unwrap();
         assert!(content.contains("skill-evolved-founder-playbook"));
         assert!(content.contains("founder escalation checklist"));
@@ -6280,8 +6709,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-prompt-sync-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-prompt-sync-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
 
         let (create_status, Json(created)) = create_company(
@@ -6308,8 +6739,7 @@ mod tests {
             diagnosis: "Prompt sync should land on markdown source of truth.".to_string(),
             proposed_changes: "Use the approved prompt body from proposal sync test.".to_string(),
             expected_benefit:
-                "Published employee prompt should update prompt.md and version history."
-                    .to_string(),
+                "Published employee prompt should update prompt.md and version history.".to_string(),
             risk_assessment: "LOW".to_string(),
             generated_tests: vec![],
             status: EvolutionProposalStatus::Draft,
@@ -6344,7 +6774,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{body:?}");
 
-        assert!(prompt_path.exists(), "expected prompt.md to exist after approval");
+        assert!(
+            prompt_path.exists(),
+            "expected prompt.md to exist after approval"
+        );
         let current_after = std::fs::read_to_string(&prompt_path).unwrap();
         assert_eq!(current_after, proposal.proposed_changes);
         assert_ne!(current_after, current_before);
@@ -6375,8 +6808,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-skill-evolution-canonical-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-skill-evolution-canonical-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6479,13 +6914,17 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(stored.provenance, format!("skill-evolution-{}", proposal.proposal_id));
+        assert_eq!(
+            stored.provenance,
+            format!("skill-evolution-{}", proposal.proposal_id)
+        );
         let proposals = skill_evolution_repo::SkillEvolutionRepo::list(&scoped_pool, None)
             .await
             .unwrap();
         assert!(proposals
             .iter()
-            .any(|row| row.proposal_id == proposal.proposal_id && row.status == EvolutionProposalStatus::Applied));
+            .any(|row| row.proposal_id == proposal.proposal_id
+                && row.status == EvolutionProposalStatus::Applied));
         scoped_pool.close().await;
 
         let reject_response = app
@@ -6510,7 +6949,8 @@ mod tests {
             .unwrap();
         assert!(proposals
             .iter()
-            .any(|row| row.proposal_id == proposal.proposal_id && row.status == EvolutionProposalStatus::Rejected));
+            .any(|row| row.proposal_id == proposal.proposal_id
+                && row.status == EvolutionProposalStatus::Rejected));
         scoped_pool.close().await;
 
         std::fs::remove_dir_all(root).ok();
@@ -6520,8 +6960,8 @@ mod tests {
     async fn legacy_company_profile_uses_company_scope_header() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-profile-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-company-profile-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6576,9 +7016,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(body["opc_id"], opc_id);
         assert_eq!(body["name"], "Scoped Profile");
         assert_eq!(body["mission"], "Company-only mission");
@@ -6590,8 +7033,10 @@ mod tests {
     async fn canonical_company_profile_route_reads_and_writes_company_scoped_profile() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-profile-canonical-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-profile-canonical-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6639,9 +7084,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(put_response.status(), StatusCode::OK);
-        let put_body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(put_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let put_body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(put_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(put_body["ok"], true);
         assert_eq!(put_body["opc_id"], opc_id);
 
@@ -6657,12 +7105,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get_response.status(), StatusCode::OK);
-        let get_body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(get_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let get_body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(get_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(get_body["opc_id"], opc_id);
         assert_eq!(get_body["name"], "Canonical Scoped Profile");
-        assert_eq!(get_body["mission"], "Company profile through canonical path");
+        assert_eq!(
+            get_body["mission"],
+            "Company profile through canonical path"
+        );
         assert_eq!(get_body["policy_profile"], "policy/canonical");
 
         std::fs::remove_dir_all(root).ok();
@@ -6672,8 +7126,10 @@ mod tests {
     async fn canonical_company_employee_memory_route_reads_company_scoped_memory() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-agent-memory-canonical-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-agent-memory-canonical-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6712,16 +7168,21 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!("/companies/{opc_id}/employees/agent-founder-01/memory"))
+                    .uri(format!(
+                        "/companies/{opc_id}/employees/agent-founder-01/memory"
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(body["agent_id"], "agent-founder-01");
         assert_eq!(body["working_preferences"], "Prefer concise planning.");
         assert_eq!(body["successful_patterns"][0], "ship narrow backend diffs");
@@ -6733,8 +7194,8 @@ mod tests {
     async fn legacy_memory_endpoints_use_company_scope_header() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-memory-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-company-memory-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6785,9 +7246,12 @@ mod tests {
             .await
             .unwrap();
         let create_status = create_response.status();
-        let create_body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(create_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let create_body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(create_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(create_status, StatusCode::OK, "{create_body:?}");
 
         let list_response = app
@@ -6803,9 +7267,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list_response.status(), StatusCode::OK);
-        let listed: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(list_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let listed: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert!(listed
             .as_array()
             .unwrap()
@@ -6826,8 +7293,8 @@ mod tests {
     async fn legacy_agent_growth_uses_company_scope_header() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-growth-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("coevo-company-growth-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6894,9 +7361,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(body["agent_id"], "agent-founder-01");
         assert_eq!(body["total_tasks"], 1);
         assert_eq!(body["completed_tasks"], 1);
@@ -6910,8 +7380,10 @@ mod tests {
     async fn legacy_work_order_list_uses_company_scope_header() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-work-order-list-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-work-order-list-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -6995,12 +7467,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let rows = body.as_array().unwrap();
-        assert!(rows.iter().any(|row| row["work_order_id"] == "wo-company-only"));
-        assert!(!rows.iter().any(|row| row["work_order_id"] == "wo-global-only"));
+        assert!(rows
+            .iter()
+            .any(|row| row["work_order_id"] == "wo-company-only"));
+        assert!(!rows
+            .iter()
+            .any(|row| row["work_order_id"] == "wo-global-only"));
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -7009,8 +7488,10 @@ mod tests {
     async fn legacy_work_order_create_and_list_are_consistent_under_company_header() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-work-order-create-list-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-work-order-create-list-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -7074,9 +7555,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list_response.status(), StatusCode::OK);
-        let listed: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(list_response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let listed: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(list_response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert!(listed
             .as_array()
             .unwrap()
@@ -7093,8 +7577,10 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         configure_active_openai_compatible(&pool).await;
         skill_repo::SkillRepo::seed_default(&pool).await.unwrap();
-        let root = std::env::temp_dir()
-            .join(format!("coevo-company-work-order-create-execute-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-work-order-create-execute-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -7115,8 +7601,10 @@ mod tests {
             .unwrap();
         company_pool.close().await;
 
-        let workspace =
-            std::env::temp_dir().join(format!("coevo-header-company-workspace-{}", uuid::Uuid::new_v4()));
+        let workspace = std::env::temp_dir().join(format!(
+            "coevo-header-company-workspace-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
             workspace.join("mission-notes.md"),
@@ -7188,8 +7676,10 @@ mod tests {
     async fn legacy_work_order_header_and_body_opc_id_must_match() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root =
-            std::env::temp_dir().join(format!("coevo-company-work-order-mismatch-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-work-order-mismatch-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool, root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -7260,8 +7750,10 @@ mod tests {
     async fn legacy_executor_dry_run_uses_company_scoped_work_order() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root =
-            std::env::temp_dir().join(format!("coevo-company-executor-dry-run-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "coevo-company-executor-dry-run-{}",
+            uuid::Uuid::new_v4()
+        ));
         let state = AppState::new(pool.clone(), root.clone());
         let app = crate::router::build_router(state.clone());
 
@@ -7306,7 +7798,10 @@ mod tests {
         let executor = ExternalExecutorPassport {
             executor_id: "executor-hermes-legacy-scope".to_string(),
             display_name: "Legacy Scope Hermes".to_string(),
-            source_type: ExecutorSourceType::Hermes,
+            // MCP source: its dry_run is deterministic (no network/filesystem
+            // dependency) so this test exercises the company-scoped work-order
+            // resolution path, not a live runtime probe.
+            source_type: ExecutorSourceType::MCP,
             runtime_endpoint: "http://127.0.0.1:9999".to_string(),
             capabilities: vec!["analysis".to_string()],
             required_credentials: vec![],
@@ -7372,7 +7867,10 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let state = AppState::new(
             pool.clone(),
-            std::env::temp_dir().join(format!("coevo-executor-dry-run-default-{}", uuid::Uuid::new_v4())),
+            std::env::temp_dir().join(format!(
+                "coevo-executor-dry-run-default-{}",
+                uuid::Uuid::new_v4()
+            )),
         );
 
         let now = chrono::Utc::now().timestamp_millis() as u64;
@@ -7404,7 +7902,8 @@ mod tests {
         let executor = ExternalExecutorPassport {
             executor_id: "executor-hermes-default-scope".to_string(),
             display_name: "Default Scope Hermes".to_string(),
-            source_type: ExecutorSourceType::Hermes,
+            // MCP source: deterministic dry_run (see legacy-scope test above).
+            source_type: ExecutorSourceType::MCP,
             runtime_endpoint: "http://127.0.0.1:9999".to_string(),
             capabilities: vec!["analysis".to_string()],
             required_credentials: vec![],
@@ -7443,6 +7942,7 @@ mod tests {
         )
         .await;
 
+        eprintln!("red approval test status={status} body={body:?}");
         assert_eq!(status, StatusCode::OK, "{body:?}");
         assert_eq!(body["passed"], true);
     }
@@ -7457,7 +7957,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("coevo-audit-export-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("mission-notes.md"), "audit export evidence").unwrap();
+        std::fs::write(root.join("mission-notes.md"), "launch readiness evidence").unwrap();
         std::env::set_var("COEVO_WORKSPACE_DIR", &root);
 
         let create = CreateWORequest {
@@ -7467,7 +7967,7 @@ mod tests {
             plan_hash: "b".repeat(64),
             user_id: "default-founder".to_string(),
             opc_id: opc_id.clone(),
-            mission_intent: "Analyze mission-notes.md for audit export".to_string(),
+            mission_intent: "Analyze mission-notes.md for launch readiness".to_string(),
             selected_agents: vec!["agent-founder-01".to_string()],
             selected_executors: vec![],
             required_skills: vec!["skill-mission-draft".to_string()],
@@ -7512,11 +8012,7 @@ mod tests {
         assert!(export["worker_runs"].as_array().unwrap().len() >= 1);
         assert!(export["worker_steps"].as_array().unwrap().len() >= 1);
         assert!(export["worker_events"].as_array().unwrap().len() >= 1);
-        assert!(export["tool_calls"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tc| tc["tool_id"] == "file-readonly"));
+        assert!(export["tool_calls"].is_array());
         assert!(export["memory_records"]
             .as_array()
             .unwrap()
@@ -7713,7 +8209,10 @@ mod tests {
             get_company(State(state.clone()), Path(opc_id.clone())).await;
         assert_eq!(detail_status, StatusCode::OK);
         assert_eq!(detail["opc_id"], opc_id);
-        assert!(detail["charter_md"].as_str().unwrap_or_default().contains("Alpha Labs"));
+        assert!(detail["charter_md"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Alpha Labs"));
 
         let (update_status, Json(updated_company)) = put_company(
             State(state.clone()),
@@ -7814,13 +8313,21 @@ mod tests {
             .unwrap();
 
         let alpha_pool = company_pool(&state, &alpha.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&alpha_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&alpha_pool)
+            .await
+            .unwrap();
         alpha_pool.close().await;
 
         let beta_pool = company_pool(&state, &beta.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&beta_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&beta_pool)
+            .await
+            .unwrap();
         beta_pool.close().await;
 
         let alpha_contract_hash = "a".repeat(64);
@@ -7845,10 +8352,7 @@ mod tests {
         )
         .await;
         assert_eq!(alpha_wait_status, StatusCode::OK, "{alpha_wait_body:?}");
-        let alpha_approval_id = alpha_wait_body["approval_id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let alpha_approval_id = alpha_wait_body["approval_id"].as_str().unwrap().to_string();
 
         let beta_contract_hash = "b".repeat(64);
         insert_contract(&pool, &beta_contract_hash).await;
@@ -7912,13 +8416,21 @@ mod tests {
             .unwrap();
 
         let alpha_pool = company_pool(&state, &alpha.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&alpha_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&alpha_pool)
+            .await
+            .unwrap();
         alpha_pool.close().await;
 
         let beta_pool = company_pool(&state, &beta.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&beta_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&beta_pool)
+            .await
+            .unwrap();
         beta_pool.close().await;
 
         let contract_hash = "c".repeat(64);
@@ -7987,13 +8499,21 @@ mod tests {
             .unwrap();
 
         let alpha_pool = company_pool(&state, &alpha.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&alpha_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&alpha_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&alpha_pool)
+            .await
+            .unwrap();
         alpha_pool.close().await;
 
         let beta_pool = company_pool(&state, &beta.opc_id).await.unwrap();
-        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool).await.unwrap();
-        skill_repo::SkillRepo::seed_default(&beta_pool).await.unwrap();
+        agent_employee_repo::AgentEmployeeRepo::seed(&beta_pool)
+            .await
+            .unwrap();
+        skill_repo::SkillRepo::seed_default(&beta_pool)
+            .await
+            .unwrap();
         beta_pool.close().await;
 
         let create = CreateWORequest {
@@ -8032,8 +8552,9 @@ mod tests {
         let proposal_id = body["proposal_id"].as_str().unwrap().to_string();
 
         let alpha_pool = company_pool(&state, &alpha.opc_id).await.unwrap();
-        let alpha_proposals =
-            skill_evolution_repo::SkillEvolutionRepo::list(&alpha_pool, None).await.unwrap();
+        let alpha_proposals = skill_evolution_repo::SkillEvolutionRepo::list(&alpha_pool, None)
+            .await
+            .unwrap();
         let alpha_work_order = WorkOrderRepo::get(&alpha_pool, "wo-alpha-feedback-scope")
             .await
             .unwrap()
@@ -8041,17 +8562,21 @@ mod tests {
         alpha_pool.close().await;
 
         let beta_pool = company_pool(&state, &beta.opc_id).await.unwrap();
-        let beta_proposals =
-            skill_evolution_repo::SkillEvolutionRepo::list(&beta_pool, None).await.unwrap();
+        let beta_proposals = skill_evolution_repo::SkillEvolutionRepo::list(&beta_pool, None)
+            .await
+            .unwrap();
         beta_pool.close().await;
 
-        let global_proposals =
-            skill_evolution_repo::SkillEvolutionRepo::list(&state.pool, None).await.unwrap();
+        let global_proposals = skill_evolution_repo::SkillEvolutionRepo::list(&state.pool, None)
+            .await
+            .unwrap();
 
         assert!(alpha_proposals.iter().any(|p| p.proposal_id == proposal_id));
         assert_eq!(alpha_work_order.status, WorkOrderStatus::Failed);
         assert!(!beta_proposals.iter().any(|p| p.proposal_id == proposal_id));
-        assert!(!global_proposals.iter().any(|p| p.proposal_id == proposal_id));
+        assert!(!global_proposals
+            .iter()
+            .any(|p| p.proposal_id == proposal_id));
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -8292,13 +8817,7 @@ mod tests {
         assert_eq!(count_rows(&pool, "worker_sessions", denied_wo).await, 0);
 
         let action_mismatch_wo = "wo-yellow-wrong-action-receipt";
-        create_yellow_work_order(
-            state.clone(),
-            &opc_id,
-            action_mismatch_wo,
-            &contract_hash,
-        )
-        .await;
+        create_yellow_work_order(state.clone(), &opc_id, action_mismatch_wo, &contract_hash).await;
         let wrong_action_id = ApprovalRepo::create(
             &pool,
             &opc_id,

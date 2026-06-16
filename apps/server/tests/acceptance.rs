@@ -3,6 +3,10 @@
 //! Run with: `cargo test --test acceptance -- --nocapture`
 //! These tests call the coevo server directly using library paths (no HTTP).
 
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::contract::*;
 use coevo_core::decision::*;
@@ -14,16 +18,33 @@ use coevo_mcl::compiler::MCLCompiler;
 use coevo_reputation::scoring::{ErrorSeverity, ReputationEngine};
 use coevo_resolution::engine::ResolutionEngine;
 use coevo_risk::lease::LeaseManager;
+use coevo_server::{router::build_router, state::AppState};
 use coevo_store::pool::create_test_pool;
 use coevo_store::repos::*;
+use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
 use coevo_tracks::green::GreenTrackRunner;
 use coevo_tracks::red::RedTrackRunner;
 use coevo_tracks::yellow::YellowTrackRunner;
+use tower::ServiceExt;
 
 async fn setup() -> sqlx::SqlitePool {
+    // Track runners now fail closed by default (DenyAll policy engine). These
+    // acceptance scenarios exercise the governed-but-permitted paths, so opt
+    // into the keyword MockPolicyEngine the same way production dev/test does.
+    std::env::set_var("COEVO_ENABLE_MOCK_POLICY_ENGINE", "1");
     let pool = create_test_pool().await.unwrap();
     coevo_store::migrate::run_migrations(&pool).await.unwrap();
     pool
+}
+
+/// Produce the real monitoring + diagnostic Ed25519 dual-sign signatures that
+/// `LeaseManager::grant` now requires, bound to `agent_id` + `scope`.
+fn dual_sign(agent_id: &str, scope: &[String]) -> (String, String) {
+    use coevo_risk::lease::{LEASE_ROLE_DIAGNOSTIC, LEASE_ROLE_MONITORING};
+    (
+        LeaseManager::sign_attestation(agent_id, scope, LEASE_ROLE_MONITORING),
+        LeaseManager::sign_attestation(agent_id, scope, LEASE_ROLE_DIAGNOSTIC),
+    )
 }
 
 /// Insert a minimal valid contract row so FK constraints are satisfied.
@@ -278,14 +299,16 @@ async fn test_06_lease_scope_budget_enforced() {
     insert_test_contract(&pool, "test-contract-2").await;
 
     // Grant lease with budget 2
+    let scope = vec!["urn:coevo:action:test".to_string()];
+    let (mon, diag) = dual_sign("test-agent", &scope);
     let lease = LeaseManager::grant(
         &pool,
         "test-contract",
         "test-agent",
-        vec!["urn:coevo:action:test".to_string()],
+        scope.clone(),
         2,
-        "mon-sig:test",
-        "diag-sig:test",
+        &mon,
+        &diag,
     )
     .await
     .expect("lease grant must succeed");
@@ -308,14 +331,16 @@ async fn test_06_lease_scope_budget_enforced() {
     );
 
     // Out of scope
+    let scope2 = vec!["urn:coevo:action:test".to_string()];
+    let (mon2, diag2) = dual_sign("test-agent-2", &scope2);
     let new_lease = LeaseManager::grant(
         &pool,
         "test-contract-2",
         "test-agent-2",
-        vec!["urn:coevo:action:test".to_string()],
+        scope2,
         5,
-        "mon-sig:test",
-        "diag-sig:test",
+        &mon2,
+        &diag2,
     )
     .await
     .expect("lease grant must succeed");
@@ -461,14 +486,18 @@ async fn test_10_red_with_identity_generates_lease() {
     .await
     .unwrap();
 
+    // The Red track grants a production-write lease for the first agent; sign
+    // the real monitoring + diagnostic vouches over that (agent, scope).
+    let red_scope = vec!["urn:coevo:action:production:write".to_string()];
+    let (mon, diag) = dual_sign("agent-red-1", &red_scope);
     let result = RedTrackRunner::run(
         &pool,
         "Emergency fix for production database connection pool exhaustion causing P1 outage",
         vec!["agent-red-1".to_string()],
         "red-tenant",
         Some("mock-signature:agent-red-1"),
-        Some("mon-sig:prometheus-alert-12345"),
-        Some("diag-sig:top-10-diagnostic-agent"),
+        Some(&mon),
+        Some(&diag),
     )
     .await;
 
@@ -693,4 +722,490 @@ async fn test_13_reputation_difficulty_adjusted() {
         "Severe penalty must drop compliance below 0.8. Got: {:.3}",
         rv2.policy_compliance
     );
+}
+
+// ============================================================================
+// Test 14: Company employee file-backed storage is canonical and prompt index stays aligned
+// ============================================================================
+#[tokio::test]
+async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment() {
+    let pool = setup().await;
+    let root = std::env::temp_dir().join(format!(
+        "coevo-acceptance-company-files-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let app = build_router(AppState::new(pool, root.clone()));
+
+    let create_company = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/companies")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "Acceptance Files Co",
+                        "mission": "Verify employee file-backed storage"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_company.status(), StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_company.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let opc_id = created["opc_id"].as_str().unwrap().to_string();
+    let agent_id = "agent-pm-01";
+
+    let seed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/companies/{opc_id}/employees/seed"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seed.status(), StatusCode::OK);
+
+    let employee_dir = root.join(&opc_id).join("employees").join(agent_id);
+    assert!(employee_dir.join("passport.json").exists());
+    assert!(employee_dir.join("identity.md").exists());
+    assert!(employee_dir.join("soul.md").exists());
+    assert!(employee_dir.join("agents.md").exists());
+    assert!(employee_dir.join("prompt.md").exists());
+    assert!(employee_dir.join("prompt_versions").exists());
+
+    let v1 = "You are acceptance prompt v1.";
+    let v2 = "You are acceptance prompt v2.";
+
+    for (prompt, summary) in [(v1, "initial"), (v2, "refine")] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/companies/{opc_id}/employees/{agent_id}/prompt"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "system_prompt": prompt,
+                            "change_summary": summary
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let rollback = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/companies/{opc_id}/employees/{agent_id}/prompt/rollback"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "version": 1 }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rollback.status(), StatusCode::OK);
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(detail.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let passport_file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(employee_dir.join("passport.json")).unwrap())
+            .unwrap();
+    assert_eq!(detail_body["passport"], passport_file);
+    assert_eq!(detail_body["prompt_md"], v1);
+
+    let company_pool =
+        coevo_store::pool::create_pool(&root.join(&opc_id).join("data.db").to_string_lossy())
+            .await
+            .unwrap();
+    company_pool.close().await;
+
+    std::fs::write(employee_dir.join("prompt.md"), "File canonical prompt").unwrap();
+
+    let detail_after_divergence = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_after_divergence.status(), StatusCode::OK);
+    let detail_after_divergence_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(detail_after_divergence.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        detail_after_divergence_body["prompt_md"],
+        "File canonical prompt"
+    );
+
+    let prompt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}/prompt"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), StatusCode::OK);
+    let prompt_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(prompt.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(prompt_body["content_md"], "File canonical prompt");
+    assert_eq!(prompt_body["version"], 1);
+    assert_eq!(
+        std::fs::read_to_string(employee_dir.join("prompt.md")).unwrap(),
+        "File canonical prompt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(employee_dir.join("prompt_versions").join("current.txt"))
+            .unwrap()
+            .trim(),
+        "1"
+    );
+    let versions = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/companies/{opc_id}/employees/{agent_id}/prompt/versions"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(versions.status(), StatusCode::OK);
+    let versions_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(versions.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let versions = versions_body.as_array().unwrap();
+    let version_1 = versions.iter().find(|entry| entry["version"] == 1).unwrap();
+    let version_2 = versions.iter().find(|entry| entry["version"] == 2).unwrap();
+    assert_eq!(version_1["current"], true);
+    assert_eq!(version_2["current"], false);
+
+    let company_pool =
+        coevo_store::pool::create_pool(&root.join(&opc_id).join("data.db").to_string_lossy())
+            .await
+            .unwrap();
+    let total_versions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM prompt_versions WHERE prompt_id = ?")
+            .bind(agent_id)
+            .fetch_one(&company_pool)
+            .await
+            .unwrap();
+    let published_version: i64 = sqlx::query_scalar(
+        "SELECT version_number FROM prompt_versions WHERE prompt_id = ? AND status = 'PUBLISHED'",
+    )
+    .bind(agent_id)
+    .fetch_one(&company_pool)
+    .await
+    .unwrap();
+    let db_prompt: String =
+        sqlx::query_scalar("SELECT system_prompt FROM agent_employees WHERE agent_id = ?")
+            .bind(agent_id)
+            .fetch_one(&company_pool)
+            .await
+            .unwrap();
+    let version_contents: Vec<String> = sqlx::query_scalar(
+        "SELECT content FROM prompt_versions WHERE prompt_id = ? ORDER BY version_number",
+    )
+    .bind(agent_id)
+    .fetch_all(&company_pool)
+    .await
+    .unwrap();
+    company_pool.close().await;
+    assert_eq!(total_versions, 2);
+    assert_eq!(published_version, 1);
+    assert!(db_prompt.trim().is_empty());
+    assert!(version_contents
+        .iter()
+        .all(|content| content.trim().is_empty()));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+// ============================================================================
+// Test 15: Deleting a company employee removes the file-backed workspace folder
+// ============================================================================
+#[tokio::test]
+async fn test_15_delete_company_employee_removes_employee_directory() {
+    let pool = setup().await;
+    let root = std::env::temp_dir().join(format!(
+        "coevo-acceptance-company-employee-delete-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let app = build_router(AppState::new(pool, root.clone()));
+
+    let create_company = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/companies")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "Acceptance Delete Co",
+                        "mission": "Verify employee delete removes workspace folder"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_company.status(), StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_company.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let opc_id = created["opc_id"].as_str().unwrap().to_string();
+    let agent_id = "agent-pm-01";
+
+    let seed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/companies/{opc_id}/employees/seed"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seed.status(), StatusCode::OK);
+
+    let employee_dir = root.join(&opc_id).join("employees").join(agent_id);
+    assert!(employee_dir.exists());
+
+    let delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+    assert!(!employee_dir.exists());
+
+    let get_employee = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_employee.status(), StatusCode::NOT_FOUND);
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+// ============================================================================
+// Test 16: Company employee summary endpoints expose the contracted summary shape
+// ============================================================================
+#[tokio::test]
+async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
+    let pool = setup().await;
+    let root = std::env::temp_dir().join(format!(
+        "coevo-acceptance-company-employee-summary-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let app = build_router(AppState::new(pool, root.clone()));
+
+    let create_company = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/companies")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "Acceptance Summary Co",
+                        "mission": "Verify employee summary payload shape"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_company.status(), StatusCode::OK);
+    let created_company: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(create_company.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let opc_id = created_company["opc_id"].as_str().unwrap().to_string();
+    let agent_id = "agent-pm-01";
+
+    let seed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/companies/{opc_id}/employees/seed"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seed.status(), StatusCode::OK);
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let summary = list_body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|employee| employee["agent_id"] == agent_id)
+        .unwrap();
+    assert!(summary.get("identity_md").is_none());
+    assert!(summary.get("passport").is_none());
+    assert!(summary.get("model_profile").is_none());
+    assert!(summary.get("updated_at_ms").is_none());
+    assert!(summary.get("system_prompt").is_none());
+    assert!(summary.get("tool_scopes").is_none());
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(detail.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(detail_body.get("identity_md").is_some());
+    assert!(detail_body.get("passport").is_some());
+    assert!(detail_body.get("model_profile").is_some());
+    assert!(detail_body.get("updated_at_ms").is_some());
+
+    let company_pool =
+        coevo_store::pool::create_pool(&root.join(&opc_id).join("data.db").to_string_lossy())
+            .await
+            .unwrap();
+    let mut employee = AgentEmployeeRepo::get(&company_pool, agent_id)
+        .await
+        .unwrap()
+        .unwrap();
+    company_pool.close().await;
+    employee.display_name = "Summary Shape Updated".to_string();
+
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&employee).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+    let update_body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(update.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(update_body["display_name"], "Summary Shape Updated");
+    assert!(update_body.get("identity_md").is_none());
+    assert!(update_body.get("passport").is_none());
+    assert!(update_body.get("model_profile").is_none());
+    assert!(update_body.get("updated_at_ms").is_none());
+
+    std::fs::remove_dir_all(root).ok();
 }

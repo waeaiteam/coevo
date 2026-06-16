@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use coevo_server::config::coevo_home;
 use coevo_server::config::ServerConfig;
+use coevo_server::handlers::mcp::sync_enabled_mcp_servers;
 use coevo_server::router::build_router;
 use coevo_server::state::AppState;
 use coevo_store::migrate::{
@@ -49,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build state
     let state = AppState::new(pool, coevo_home());
+    if let Err(err) = sync_enabled_mcp_servers(&state).await {
+        tracing::warn!(error = %err, "failed to sync enabled MCP servers at startup");
+    }
 
     // CORS (allow desktop app)
     let cors = CorsLayer::new()

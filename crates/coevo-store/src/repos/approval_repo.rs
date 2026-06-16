@@ -7,6 +7,7 @@ pub struct ApprovalRepo;
 impl ApprovalRepo {
     pub async fn create(
         pool: &SqlitePool,
+        opc_id: &str,
         contract_hash: &str,
         action_urn: &str,
         approval_mode: &str,
@@ -17,9 +18,10 @@ impl ApprovalRepo {
         let now = chrono::Utc::now().timestamp_millis();
         let expires_at = now + timeout_ms;
         sqlx::query(
-            "INSERT INTO approval_requests (id, contract_hash, action_urn, approval_mode, status, requested_by, requested_at_ms, expires_at_ms) VALUES (?,?,?,?,?,?,?,?)"
+            "INSERT INTO approval_requests (id, opc_id, contract_hash, action_urn, approval_mode, status, requested_by, requested_at_ms, expires_at_ms) VALUES (?,?,?,?,?,?,?,?,?)"
         )
         .bind(&id)
+        .bind(opc_id)
         .bind(contract_hash)
         .bind(action_urn)
         .bind(approval_mode)
@@ -34,35 +36,47 @@ impl ApprovalRepo {
 
     pub async fn find_by_id(
         pool: &SqlitePool,
+        opc_id: &str,
         id: &str,
     ) -> Result<Option<ApprovalRequestRow>, sqlx::Error> {
-        sqlx::query_as::<_, ApprovalRequestRow>("SELECT * FROM approval_requests WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await
+        sqlx::query_as::<_, ApprovalRequestRow>(
+            "SELECT * FROM approval_requests WHERE id = ? AND opc_id = ?",
+        )
+        .bind(id)
+        .bind(opc_id)
+        .fetch_optional(pool)
+        .await
     }
 
     pub async fn approve(
         pool: &SqlitePool,
+        opc_id: &str,
         id: &str,
         approved_by: &str,
     ) -> Result<(), sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query("UPDATE approval_requests SET status = 'approved', approved_by = ?, decided_at_ms = ? WHERE id = ?")
+        sqlx::query("UPDATE approval_requests SET status = 'approved', approved_by = ?, decided_at_ms = ? WHERE id = ? AND opc_id = ?")
             .bind(approved_by)
             .bind(now)
             .bind(id)
+            .bind(opc_id)
             .execute(pool)
             .await?;
         Ok(())
     }
 
-    pub async fn deny(pool: &SqlitePool, id: &str, denied_by: &str) -> Result<(), sqlx::Error> {
+    pub async fn deny(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+        denied_by: &str,
+    ) -> Result<(), sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
-        sqlx::query("UPDATE approval_requests SET status = 'denied', approved_by = ?, decided_at_ms = ? WHERE id = ?")
+        sqlx::query("UPDATE approval_requests SET status = 'denied', approved_by = ?, decided_at_ms = ? WHERE id = ? AND opc_id = ?")
             .bind(denied_by)
             .bind(now)
             .bind(id)
+            .bind(opc_id)
             .execute(pool)
             .await?;
         Ok(())

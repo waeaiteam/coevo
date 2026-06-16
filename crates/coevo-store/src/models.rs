@@ -187,6 +187,7 @@ pub struct LeaseRow {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ApprovalRequestRow {
     pub id: String,
+    pub opc_id: String,
     pub contract_hash: String,
     pub action_urn: String,
     pub approval_mode: String,

@@ -27,12 +27,21 @@ impl CognitiveEdgeRepo {
     }
 
     /// Get all downstream entries that depend on the given entry (target_entry_id is the dependency).
+    ///
+    /// Used by the invalidation propagation in coevo-customs: it walks these
+    /// edges and invalidates each `source_entry_id`. Entries that are already
+    /// invalid (`blackboard_entries.is_valid = 0`) are filtered out so the BFS
+    /// neither re-invalidates nor re-traverses them, and DISTINCT guards
+    /// against duplicate edge rows causing duplicate traversal.
     pub async fn find_dependents(
         pool: &SqlitePool,
         entry_id: &str,
     ) -> Result<Vec<CognitiveEdgeRow>, sqlx::Error> {
         sqlx::query_as::<_, CognitiveEdgeRow>(
-            "SELECT * FROM cognitive_edges WHERE target_entry_id = ?",
+            "SELECT DISTINCT ce.id, ce.source_entry_id, ce.target_entry_id, ce.edge_type, ce.created_at_ms \
+             FROM cognitive_edges ce \
+             JOIN blackboard_entries be ON be.id = ce.source_entry_id \
+             WHERE ce.target_entry_id = ? AND be.is_valid = 1",
         )
         .bind(entry_id)
         .fetch_all(pool)

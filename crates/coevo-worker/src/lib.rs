@@ -12,6 +12,7 @@ pub mod session;
 pub mod skill_manage;
 pub mod skill_runtime;
 pub mod state_machine;
+pub mod worker_cancel;
 pub mod tool_policy;
 pub mod tool_registry;
 pub mod tools;

@@ -1,5 +1,16 @@
-//! coevo-adapters: Mock adapters for external protocols (A2A, MCP, Identity).
+//! coevo-adapters: Adapters for external protocols (A2A, MCP, Identity).
+//!
+//! `mcp_client` is the real MCP client (JSON-RPC 2.0 over stdio / Streamable
+//! HTTP); `mcp` keeps the legacy mock adapter used by tests and the
+//! env-gated mock path.
 pub mod a2a;
 pub mod identity;
 pub mod mcp;
+pub mod mcp_client;
 pub mod traits;
+
+pub use mcp_client::{
+    integrity_hash, make_tool_urn, parse_tool_urn, McpClient, McpClientManager, McpContent,
+    McpServerConfig, McpServerInfo, McpServerRow, McpToolInfo, McpToolOutput, McpTransportConfig,
+    RealMcpClient, TransportKind, DEFAULT_TOOL_TIMEOUT,
+};

@@ -1,154 +1,218 @@
 # coevo
 
-coevo is a local-first desktop app built with Tauri and a Rust server. It organizes work around companies, employees, and governed work orders so you can create a company, add employees yourself, connect an LLM provider, and run tasks with an audit trail on your machine.
+coevo is a local-first control plane for running a governed AI company on one machine. The current product is built around a Rust HTTP server, a Tauri 2 desktop console, SQLite-backed state, company-scoped workspaces, and a worker runtime that executes WorkOrders under server-owned policy.
 
-**Status:** Alpha / internal RC  
-**Stack:** Rust + Tauri + React  
-**Backend:** Rust HTTP server with company-scoped `/companies` routes  
-**License:** Apache-2.0
+## What runs today
 
----
+- Company-scoped workspaces with local files for employees, memory, shared files, reports, meetings, work orders, and governance artifacts
+- Server-authoritative Green / Yellow / Red track classification and approval enforcement
+- MCL compilation and route planning anchors
+- Live worker event streaming over SSE, with persisted runs, steps, tool calls, traces, and audit exports
+- Model provider support for OpenAI-compatible providers and Anthropic, with DeepSeek through the OpenAI-compatible path
+- A Mock provider for development and CI only
+- MCP server registrations over `stdio` and streamable HTTP, with cached tool lists and governed use
+- External executor registry, health check, and dry-run surfaces are wired; source types include local process, HTTP runtime, Docker, and MCP-backed adapters
+- Inline approval flows in the desktop UI for approval-gated work orders
+- Canonical company-scoped HTTP routes under `/companies/{opc_id}/...`, with legacy `/opc/...` routes retained for compatibility where needed
 
-## Clean Start
+## Runtime spine
 
-This is the recommended manual setup flow for a fresh GitHub clone or download.
+The main execution path is:
 
-1. Clone or download the repository from GitHub.
-2. Install the required runtime tools:
-   - Rust 1.85+
-   - Node.js 20+
-   - SQLite 3
-   - Python 3 for the synthetic test script
-3. Install the desktop dependencies:
-   ```bash
-   cd apps/desktop
-   npm install
-   ```
-4. Start the Rust server from the repository root:
-   ```bash
-   cargo run -p coevo-server
-   ```
-5. Start the desktop development app in another terminal:
-   ```bash
-   cd apps/desktop
-   npm run dev
-   ```
-6. Open the desktop app and create your company.
-7. Add employees manually inside that company.
-8. Go to Settings and enter your LLM API key manually.
-9. Run a mission and review the resulting work order before execution.
+```text
+MissionChat or API intent
+  -> /mcl/compile
+  -> /router/route
+  -> create WorkOrder
+  -> execute WorkOrder
+  -> WorkerHarness
+  -> AgentSubHarness governed loop
+  -> model / tool / executor calls
+  -> worker event + audit persistence
+  -> SSE stream back to the desktop UI
+```
 
-There is no onboarding step that auto-creates employees. A clean start means you make the company, create the employees you want, and supply the model key yourself.
+MissionChat conversations are durable local threads. They can spawn WorkOrders, and the resulting run stays linked to the original conversation, timeline, and audit trail.
 
----
+## Governance and approvals
 
-## What It Does
+coevo treats model output as cognition, not authorization. The server decides the work track, allowed actions, restricted actions, and risk summary when a WorkOrder is created.
 
-coevo is centered on a few real product surfaces:
+- Green runs inside the governed runtime when policy allows it.
+- Yellow creates a persisted approval request and pauses until an approval receipt is present. The approval card can be handled inline in MissionChat or from the Timeline flow.
+- Red is blocked at runtime entry with an explicit reason.
 
-- Company setup and company-scoped operations
-- Manually created employees with company-owned configuration
-- Mission intake and governed work orders
-- Model provider configuration through the desktop UI
-- Local history, timeline, and audit data stored on the user machine
+Approval records are persisted. A resumed run uses the approval receipt, not mutable prompt text, as the authority signal.
 
-The app is not positioned as a general chatbot, a prompt toy, or an autonomous multi-agent demo. The key idea is that reasoning can happen locally, but actions are governed.
+## Model and MCP support
 
----
+Current model support is intentionally narrow:
 
-## Product Shape
+- OpenAI-compatible providers
+- Anthropic
+- DeepSeek through the OpenAI-compatible path
+- Mock provider for development and CI only
 
-The current shape of the app is:
+Model API keys are stored in the native credential vault on Windows and macOS. SQLite keeps a masked display value plus a `keyring:` reference. Existing legacy plaintext rows can still be read for compatibility, but new non-empty writes are vault-backed. Non-Windows vault writes for non-empty keys are unavailable.
 
-- Tauri desktop client
-- Rust server
-- Company-scoped routes under `/companies`
-- Work orders as the governed unit of execution
-- Employee management inside a company
-- Manual LLM provider setup with a pasted API key
+MCP support is real, but it is a governed integration surface rather than a free-form plugin marketplace. Enabled servers are persisted, can be connected and tested, and expose cached tool lists to the worker runtime.
 
-Typical flow:
+## Storage and workspace layout
 
-1. Create a company.
-2. Create employees manually.
-3. Configure the model provider and API key.
-4. Draft a mission.
-5. Review the resulting work order.
-6. Execute only what the system allows.
-7. Inspect the timeline and audit records afterward.
+`COEVO_HOME` is the local root for runtime state. If it is unset, the server defaults to `~/.coevo`.
 
----
+At the top level you will usually see:
 
-## Developer Commands
+- `data/coevo.db` for the global SQLite database
+- `logs/` for server and desktop logs
+- `runtime/` for launch files such as `server.port` and `server.pid`
+- `workspace/` for company-scoped workspaces
+- `companies.json` as the company index
 
-From the repository root:
+Each company lives under `workspace/{opc_id}` and includes:
+
+- `company.json` and `charter.md`
+- `employees/`
+- `memory/`
+- `shared/`
+- `reports/`
+- `meetings/`
+- `.workorders/planned`, `.workorders/running`, `.workorders/waiting`, `.workorders/completed`, `.workorders/failed`
+- `.governance/.mcl`, `.governance/.pcdt`, `.governance/.risk`, `.governance/.tracks/{green,yellow,red}`, `.governance/.resolution`, `.governance/.audit`
+- `skills/`
+
+Employee state is file-backed. The core files are `passport.json`, `prompt.md`, `prompt_versions/`, `identity.md`, `soul.md`, and `agents.md`, with additional `owner.md`, `tools.md`, and `tool_policy.json` files also present in the current workspace manager.
+
+## Desktop and server layout
+
+The backend can run on its own:
 
 ```bash
-cargo check --workspace
-cargo test --workspace
 cargo run -p coevo-server
 ```
 
-Desktop app:
+Default server address:
+
+- `http://127.0.0.1:8717`
+- OpenAPI docs: `/docs`
+- ReDoc: `/redoc`
+
+The desktop shell launches the local server sidecar automatically and talks to it over HTTP. The sidecar uses a dynamic local port, writes logs to `COEVO_HOME/logs`, and seeds runtime files under `COEVO_HOME/runtime`.
+
+`apps/desktop/src-tauri` is intentionally excluded from the root Cargo workspace and is built separately by the desktop wrapper scripts.
+
+## Repository layout
+
+```text
+apps/server                Axum HTTP server and API surface
+apps/desktop               Tauri + React desktop console
+apps/desktop/src-tauri     Desktop shell and sidecar packaging
+crates/coevo-core          Shared domain types
+crates/coevo-store         SQLite repos, migrations, workspace manager
+crates/coevo-policy        Policy helpers and governance primitives
+crates/coevo-adapters      MCP client and adapter layer
+crates/coevo-audit         Structured audit logging
+crates/coevo-mcl           Mission contract language and compilation
+crates/coevo-router        Route planning
+crates/coevo-customs       Provenance and governed fact flow
+crates/coevo-risk          Risk decisions and approval boundaries
+crates/coevo-resolution    Resolution and escalation paths
+crates/coevo-reputation    Reputation and attribution
+crates/coevo-tracks        Track-specific runtime logic
+crates/coevo-cli           Small CLI for compile / route flows
+crates/coevo-evolution     Improvement and self-upgrade generation
+crates/coevo-executors     Local process / HTTP / Docker / MCP-backed executor adapters
+crates/coevo-models        Model gateways, routing, and pricing
+crates/coevo-worker        Governed worker runtime and SSE event production
+tests/e2e                  Acceptance coverage
+```
+
+## Setup
+
+```bash
+git clone git@github.com:waeaiteam/coevo.git
+cd coevo
+cd apps/desktop
+npm install
+```
+
+Desktop commands must go through the npm wrapper scripts. Do not call `vite`, `tsc`, `vitest`, or `tauri` directly.
+
+## Run
+
+Run only the backend:
+
+```bash
+cargo run -p coevo-server
+```
+
+Run migrations and exit:
+
+```bash
+cargo run -p coevo-server -- --migrate
+```
+
+Run the desktop web surface against an already running server:
 
 ```bash
 cd apps/desktop
-npm install
 npm run dev
-npm run build
+```
+
+Run the full desktop shell with the local sidecar:
+
+```bash
+cd apps/desktop
 npm run tauri dev
 ```
 
-Project helpers:
+Build the desktop app:
 
 ```bash
-make check
-make test
-make run-server
-make dev-desktop
+cd apps/desktop
+npm run build
+npm run build:tauri
 ```
 
-Synthetic and acceptance checks:
+## Configuration
+
+Important environment variables:
+
+- `COEVO_HOME`: workspace root
+- `COEVO_BIND_ADDR`: full server bind address
+- `COEVO_PORT`: server port when `COEVO_BIND_ADDR` is not set
+- `COEVO_DATABASE_URL`: SQLite URL or path
+- `COEVO_DB_PATH`: raw SQLite path
+- `COEVO_BUILD_ARTIFACT_DIR`: optional desktop artifact root
+- `RUST_LOG`: Rust log filter
+
+The desktop sidecar also sets `COEVO_HOME`, `COEVO_PORT`, `COEVO_DB_PATH`, `COEVO_WORKSPACE_DIR`, `COEVO_PARENT_HEARTBEAT`, `COEVO_AUTH_TOKEN`, and `COEVO_LOG_DIR` when it launches the server.
+
+## Verify
+
+Backend:
 
 ```bash
-cargo test -p coevo-server --test acceptance -- --nocapture
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test --workspace -- --nocapture
+cargo test --test acceptance -- --nocapture
+```
+
+Desktop:
+
+```bash
 cd apps/desktop
-npm run test
+npm test
+npm run build
+```
+
+Optional synthetic integration test:
+
+```bash
+cd apps/desktop
 npm run test:synthetic-opc
 ```
-
----
-
-## API Surface
-
-Useful server endpoints include:
-
-- `GET /health`
-- `GET /docs`
-- `GET /redoc`
-- `GET /companies`
-- `POST /companies`
-- `GET /companies/{id}/profile/company`
-- `GET /companies/{id}/employees`
-- `POST /companies/{id}/employees`
-- `GET /companies/{id}/skills`
-- `GET /companies/{id}/work-orders`
-- `POST /companies/{id}/work-orders`
-- `POST /companies/{id}/work-orders/{work_order_id}/execute`
-- `GET /opc/models/config`
-- `POST /opc/models/test`
-
-The `/companies` routes are the main way to work with company-scoped data. Work orders are server-governed and should be treated as the source of truth for what ran, when it ran, and what was allowed.
-
----
-
-## Notes
-
-- Data is intended to stay local to the user's machine.
-- The repository includes developer and test fixtures, but those are not the onboarding path.
-- The desktop app and the Rust server are meant to be run together during local use and development.
-
----
 
 ## License
 

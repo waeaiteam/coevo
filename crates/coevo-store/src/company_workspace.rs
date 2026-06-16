@@ -1,6 +1,6 @@
-use coevo_core::skills::AgentSkillPackage;
 use crate::migrate::run_migrations;
 use crate::pool::create_pool;
+use coevo_core::skills::AgentSkillPackage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -70,15 +70,18 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_employee_passport_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("passport.json")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("passport.json")
     }
 
     pub fn company_employee_prompt_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("prompt.md")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("prompt.md")
     }
 
     pub fn company_employee_identity_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("identity.md")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("identity.md")
     }
 
     pub fn company_employee_soul_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
@@ -86,7 +89,8 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_employee_agents_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("agents.md")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("agents.md")
     }
 
     pub fn company_employee_owner_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
@@ -98,11 +102,13 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_employee_tool_policy_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("tool_policy.json")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("tool_policy.json")
     }
 
     pub fn company_employee_prompt_versions_dir(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employee_dir(opc_id, agent_id).join("prompt_versions")
+        self.company_employee_dir(opc_id, agent_id)
+            .join("prompt_versions")
     }
 
     pub fn company_employee_prompt_version_path(
@@ -146,7 +152,8 @@ impl CompanyWorkspaceManager {
         agent_id: &str,
         skill_id: &str,
     ) -> PathBuf {
-        self.company_employee_skills_dir(opc_id, agent_id).join(skill_id)
+        self.company_employee_skills_dir(opc_id, agent_id)
+            .join(skill_id)
     }
 
     pub fn company_employee_skill_markdown_path(
@@ -235,22 +242,33 @@ impl CompanyWorkspaceManager {
             self.company_employee_passport_path(opc_id, agent_id),
             serde_json::to_string_pretty(&files.passport_json).map_err(std::io::Error::other)?,
         )?;
-        std::fs::write(self.company_employee_prompt_path(opc_id, agent_id), &files.prompt_md)?;
+        std::fs::write(
+            self.company_employee_prompt_path(opc_id, agent_id),
+            &files.prompt_md,
+        )?;
         std::fs::write(
             self.company_employee_identity_path(opc_id, agent_id),
             &files.identity_md,
         )?;
-        std::fs::write(self.company_employee_soul_path(opc_id, agent_id), &files.soul_md)?;
+        std::fs::write(
+            self.company_employee_soul_path(opc_id, agent_id),
+            &files.soul_md,
+        )?;
         std::fs::write(
             self.company_employee_agents_path(opc_id, agent_id),
             &files.agents_md,
         )?;
-        std::fs::write(self.company_employee_owner_path(opc_id, agent_id), &files.owner_md)?;
-        std::fs::write(self.company_employee_tools_path(opc_id, agent_id), &files.tools_md)?;
+        std::fs::write(
+            self.company_employee_owner_path(opc_id, agent_id),
+            &files.owner_md,
+        )?;
+        std::fs::write(
+            self.company_employee_tools_path(opc_id, agent_id),
+            &files.tools_md,
+        )?;
         std::fs::write(
             self.company_employee_tool_policy_path(opc_id, agent_id),
-            serde_json::to_string_pretty(&files.tool_policy_json)
-                .map_err(std::io::Error::other)?,
+            serde_json::to_string_pretty(&files.tool_policy_json).map_err(std::io::Error::other)?,
         )?;
         Ok(())
     }
@@ -265,10 +283,16 @@ impl CompanyWorkspaceManager {
                 &self.company_employee_passport_path(opc_id, agent_id),
                 Value::Null,
             )?,
-            prompt_md: read_string_or_default(&self.company_employee_prompt_path(opc_id, agent_id))?,
-            identity_md: read_string_or_default(&self.company_employee_identity_path(opc_id, agent_id))?,
+            prompt_md: read_string_or_default(
+                &self.company_employee_prompt_path(opc_id, agent_id),
+            )?,
+            identity_md: read_string_or_default(
+                &self.company_employee_identity_path(opc_id, agent_id),
+            )?,
             soul_md: read_string_or_default(&self.company_employee_soul_path(opc_id, agent_id))?,
-            agents_md: read_string_or_default(&self.company_employee_agents_path(opc_id, agent_id))?,
+            agents_md: read_string_or_default(
+                &self.company_employee_agents_path(opc_id, agent_id),
+            )?,
             owner_md: read_string_or_default(&self.company_employee_owner_path(opc_id, agent_id))?,
             tools_md: read_string_or_default(&self.company_employee_tools_path(opc_id, agent_id))?,
             tool_policy_json: read_json_or_default(

@@ -31,7 +31,12 @@ impl ReflectionEngine {
 
         for s in steps {
             let st = s["step_type"].as_str().unwrap_or("");
-            if let Some(err) = s["error"].as_str() {
+            if let Some(err) = s["error"].as_str().filter(|err| !err.is_empty()) {
+                what_failed.push(format!("Step {}: {}", st, err));
+            } else if let Some(err) = s["output_json"]["error"]
+                .as_str()
+                .filter(|err| !err.is_empty())
+            {
                 what_failed.push(format!("Step {}: {}", st, err));
             } else {
                 what_worked.push(format!("Step {} completed", st));
@@ -90,5 +95,49 @@ impl ReflectionEngine {
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
         Ok(record)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coevo_store::{migrate::run_migrations, pool::create_test_pool};
+
+    #[tokio::test]
+    async fn reflect_marks_tool_step_output_errors_as_failures() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let steps = vec![serde_json::json!({
+            "step_type": "CallTool",
+            "error": "",
+            "output_json": {
+                "error": "File read denied"
+            }
+        })];
+
+        let reflection = ReflectionEngine::reflect(
+            &pool,
+            "run-reflect-tool-error",
+            "wo-reflect-tool-error",
+            "agent-founder-01",
+            "worker-agent-founder-01",
+            &steps,
+            &[],
+            &[],
+        )
+        .await
+        .expect("reflection should succeed");
+
+        assert_eq!(reflection.needs_human_review, true);
+        assert!(reflection
+            .what_failed_json
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|item| item
+                .as_str()
+                .unwrap_or_default()
+                .contains("File read denied")));
     }
 }

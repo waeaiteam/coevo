@@ -20,6 +20,9 @@ keyring-core.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store.workspace = true
+
 [dev-dependencies]
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite", "chrono", "uuid", "migrate"] }
 keyring-core = { workspace = true, features = ["sample"] }

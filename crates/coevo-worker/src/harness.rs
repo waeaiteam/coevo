@@ -32,7 +32,16 @@ pub struct WorkerHarnessResult {
     pub reflection_id: Option<String>,
     pub proposal_id: Option<String>,
     pub status: String,
+    pub termination_reason: String,
     pub summary: String,
+}
+
+fn workspace_root_from_env_or_cwd() -> Option<std::path::PathBuf> {
+    std::env::var("COEVO_WORKSPACE_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
 }
 
 async fn model_profiles_for_execution(
@@ -70,6 +79,7 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
         ModelCapability::Summarization,
         ModelCapability::StructuredJSON,
     ];
+    let (default_input_cost, default_output_cost) = provider_pricing(config);
     let profiles = [
         (
             config.fast_model.as_str(),
@@ -156,8 +166,8 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
             display_name,
             capabilities,
             max_context_tokens,
-            cost_per_1k_input_usd: 0.0,
-            cost_per_1k_output_usd: 0.0,
+            cost_per_1k_input_usd: default_input_cost,
+            cost_per_1k_output_usd: default_output_cost,
             avg_latency_ms: latency,
             supports_json,
             supports_tools,
@@ -172,6 +182,43 @@ fn model_profiles_from_config(config: &ModelProviderConfig) -> Vec<ModelProfile>
         profile.capabilities.dedup();
     }
     out
+}
+
+fn provider_pricing(config: &ModelProviderConfig) -> (f64, f64) {
+    let model_ids = [
+        config.default_model.as_str(),
+        config.fast_model.as_str(),
+        config.reasoning_model.as_str(),
+        config.structured_output_model.as_str(),
+    ];
+    let lower = model_ids
+        .iter()
+        .find(|id| !id.trim().is_empty())
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match config.kind {
+        ModelProviderKind::DeepSeek => {
+            if lower.contains("deepseek-v4-flash") || lower.contains("deepseek-chat") {
+                (0.00014, 0.00028)
+            } else if lower.contains("deepseek-reasoner") {
+                (0.00055, 0.00219)
+            } else {
+                (0.00014, 0.00028)
+            }
+        }
+        ModelProviderKind::OpenAICompatible => {
+            if lower.contains("deepseek-v4-flash") || lower.contains("deepseek-chat") {
+                (0.00014, 0.00028)
+            } else if lower.contains("deepseek-reasoner") {
+                (0.00055, 0.00219)
+            } else {
+                (0.0, 0.0)
+            }
+        }
+        _ => (0.0, 0.0),
+    }
 }
 
 fn sandbox_tier_from_ceiling(ceiling: AutonomyCeiling) -> SandboxTier {
@@ -256,24 +303,39 @@ impl WorkerHarness {
         work_order_id: &str,
         options: WorkerHarnessOptions,
     ) -> Result<WorkerHarnessResult, WorkerError> {
+        Self::run_work_order_with_pools(pool, pool, work_order_id, options).await
+    }
+
+    pub async fn run_work_order_with_pools(
+        pool: &SqlitePool,
+        opc_pool: &SqlitePool,
+        work_order_id: &str,
+        options: WorkerHarnessOptions,
+    ) -> Result<WorkerHarnessResult, WorkerError> {
         let now = || chrono::Utc::now().timestamp_millis();
-        let wo = work_order_repo::WorkOrderRepo::get(pool, work_order_id)
+        let wo = match work_order_repo::WorkOrderRepo::get(pool, work_order_id)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?
-            .ok_or(WorkerError::WorkOrderNotFound(work_order_id.into()))?;
+        {
+            Some(wo) => wo,
+            None if !std::ptr::eq(pool, opc_pool) => {
+                work_order_repo::WorkOrderRepo::get(opc_pool, work_order_id)
+                    .await
+                    .map_err(|e| WorkerError::Internal(e.to_string()))?
+                    .ok_or(WorkerError::WorkOrderNotFound(work_order_id.into()))?
+            }
+            None => return Err(WorkerError::WorkOrderNotFound(work_order_id.into())),
+        };
         let agent_id = wo.selected_agents.first().cloned().unwrap_or_default();
         if agent_id.is_empty() {
             return Err(WorkerError::WorkerNotFound("No agent selected".into()));
         }
 
-        // Authoritative governance gate stays in Product Harness.
-        if wo.track == "red" {
-            return Err(WorkerError::RedTrackBlocked(
-                "RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER: Alpha does not support Red Track execution."
-                    .into(),
-            ));
-        }
-        if wo.track == "yellow" && options.approval_receipt.is_none() {
+        // Authoritative governance gate stays in the Product Harness. Yellow and Red
+        // both require a human-approved receipt before execution; Green runs
+        // autonomously. High-risk (Red) work proceeds once it carries explicit
+        // approval — there is no alpha hard-block.
+        if (wo.track == "yellow" || wo.track == "red") && options.approval_receipt.is_none() {
             return Err(WorkerError::YellowApprovalRequired);
         }
         let (model_profiles, provider_config) =
@@ -294,6 +356,11 @@ impl WorkerHarness {
                 AgentWorkerRepo::upsert(
                     pool,
                     &worker_id,
+                    if wo.opc_id.trim().is_empty() {
+                        "default-opc"
+                    } else {
+                        &wo.opc_id
+                    },
                     &agent_id,
                     "Default",
                     "Assigned",
@@ -314,6 +381,7 @@ impl WorkerHarness {
         sqlx::query(
             "INSERT OR IGNORE INTO worker_sessions (
                 session_id,
+                opc_id,
                 worker_id,
                 work_order_id,
                 agent_id,
@@ -325,9 +393,14 @@ impl WorkerHarness {
                 status,
                 created_at_ms,
                 updated_at_ms
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&session_id)
+        .bind(if wo.opc_id.trim().is_empty() {
+            "default-opc"
+        } else {
+            &wo.opc_id
+        })
         .bind(&worker_id)
         .bind(work_order_id)
         .bind(&agent_id)
@@ -354,6 +427,11 @@ impl WorkerHarness {
         let run_id = format!("run-{}", uuid::Uuid::new_v4());
         WorkerRunRepo::create(
             pool,
+            if wo.opc_id.trim().is_empty() {
+                "default-opc"
+            } else {
+                &wo.opc_id
+            },
             &run_id,
             work_order_id,
             &agent_id,
@@ -370,10 +448,17 @@ impl WorkerHarness {
         .await
         .map_err(|e| WorkerError::Internal(e.to_string()))?;
 
+        let _cancellation = crate::worker_cancel::register_run(run_id.clone());
+
         WorkerQueueService::acquire(pool, &session_id, &run_id, 120_000).await?;
         AgentWorkerRepo::upsert(
             pool,
             &worker_id,
+            if wo.opc_id.trim().is_empty() {
+                "default-opc"
+            } else {
+                &wo.opc_id
+            },
             &agent_id,
             "Default",
             "Executing",
@@ -408,7 +493,7 @@ impl WorkerHarness {
             .as_ref()
             .map(|verdict| sandbox_tier_from_ceiling(verdict.effective_tier))
             .unwrap_or_else(|| {
-                SandboxProfile::from_track(&wo.track, std::env::current_dir().ok()).tier
+                SandboxProfile::from_track(&wo.track, workspace_root_from_env_or_cwd()).tier
             });
         let model_preference = wo
             .governance_proposal
@@ -428,19 +513,57 @@ impl WorkerHarness {
             plan_hash: wo.plan_hash.clone(),
             sandbox_profile: SandboxProfile::from_tier(
                 effective_tier,
-                std::env::current_dir().ok(),
+                workspace_root_from_env_or_cwd(),
             ),
             model_preference,
         };
-        let sub_result = AgentSubHarness::execute(
+        // Bind real adapters for every registered external executor so the agent
+        // loop can dispatch CallExecutor proposals to live runtimes (Docker, local
+        // process, HTTP runtimes) under governance — no more "no adapter bound".
+        let executor_passports = {
+            let mut list = coevo_store::repos_opc::executor_repo::ExecutorRepo::list(opc_pool)
+                .await
+                .unwrap_or_default();
+            if !std::ptr::eq(pool, opc_pool) {
+                if let Ok(extra) =
+                    coevo_store::repos_opc::executor_repo::ExecutorRepo::list(pool).await
+                {
+                    for passport in extra {
+                        if !list.iter().any(|e| e.executor_id == passport.executor_id) {
+                            list.push(passport);
+                        }
+                    }
+                }
+            }
+            list
+        };
+        let bound_executors: Vec<crate::r#loop::BoundExecutorAdapter> = executor_passports
+            .into_iter()
+            .filter(|p| p.status != coevo_core::opc::ExecutorStatus::Disabled)
+            .map(|p| crate::r#loop::BoundExecutorAdapter::new(p, wo.clone()))
+            .collect();
+        let external_agent_refs: Vec<&dyn crate::r#loop::ExternalAgentAdapter> = bound_executors
+            .iter()
+            .map(|b| b as &dyn crate::r#loop::ExternalAgentAdapter)
+            .collect();
+
+        let sub_result = AgentSubHarness::execute_with_opc_pool(
             pool,
+            opc_pool,
+            std::env::var("COEVO_HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(workspace_root_from_env_or_cwd)
+                .unwrap_or_else(std::env::temp_dir),
             &run_contract,
             &authorization,
             &model_profiles,
             options.max_runtime_ms,
             gateway.as_ref(),
             &provider_config,
-            &[],
+            &external_agent_refs,
+            &options.preferred_tool_ids,
         )
         .await;
         let sub_result = match sub_result {
@@ -451,6 +574,20 @@ impl WorkerHarness {
             }
         };
 
+        sqlx::query("UPDATE worker_runs SET result_json=? WHERE run_id=?")
+            .bind(
+                serde_json::to_string(&serde_json::json!({
+                    "status": &sub_result.final_status,
+                    "termination_reason": &sub_result.termination_reason,
+                    "summary": &sub_result.summary,
+                    "memory_ids": &sub_result.memory_ids,
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+            )
+            .bind(&run_id)
+            .execute(pool)
+            .await
+            .map_err(|e| WorkerError::Internal(e.to_string()))?;
         WorkerRunRepo::set_status(pool, &run_id, &sub_result.final_status)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?;
@@ -472,12 +609,22 @@ impl WorkerHarness {
             } else {
                 2.0
             };
+            // Expected outcome = the success expectation at decision time, proxied by
+            // the track's autonomy: Green read-only work is expected to succeed more
+            // often than approval-gated Yellow/Red work. Beating expectation rewards
+            // reputation; missing it penalizes — a flat 0.5 made every track identical.
+            let expected_outcome = match wo.track.as_str() {
+                "green" => 0.7,
+                "yellow" => 0.55,
+                "red" => 0.5,
+                _ => 0.6,
+            };
             if let Ok(rv) = coevo_reputation::scoring::ReputationEngine::update(
                 pool,
                 &sub_result.agent_id,
                 difficulty,
                 outcome,
-                0.5,
+                expected_outcome,
             )
             .await
             {
@@ -519,6 +666,7 @@ impl WorkerHarness {
             sub_result.reflection_id,
             sub_result.proposal_id,
             &sub_result.final_status,
+            &sub_result.termination_reason,
             sub_result.summary,
         )
         .await
@@ -533,12 +681,16 @@ impl WorkerHarness {
         reflection_id: Option<String>,
         proposal_id: Option<String>,
         status: &str,
+        termination_reason: &str,
         summary: String,
     ) -> Result<WorkerHarnessResult, WorkerError> {
         let w_steps = WorkerStepRepo::list_by_run(pool, run_id)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?;
         let w_events = WorkerEventRepo::list_by_run(pool, run_id)
+            .await
+            .map_err(|e| WorkerError::Internal(e.to_string()))?;
+        let w_runs = WorkerRunRepo::list_by_work_order(pool, wo_id)
             .await
             .map_err(|e| WorkerError::Internal(e.to_string()))?;
         let w_skills = sqlx::query("SELECT * FROM worker_skill_usage WHERE run_id=?")
@@ -578,7 +730,7 @@ impl WorkerHarness {
 
         Ok(WorkerHarnessResult {
             work_order_id: wo_id.into(),
-            worker_runs: vec![serde_json::json!({"run_id":run_id,"status":status})],
+            worker_runs: to_json(w_runs),
             worker_steps: to_json(w_steps),
             worker_events: to_json(w_events),
             skill_usage: to_json(w_skills),
@@ -587,6 +739,7 @@ impl WorkerHarness {
             reflection_id,
             proposal_id,
             status: status.into(),
+            termination_reason: termination_reason.into(),
             summary,
         })
     }
@@ -629,8 +782,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn workspace_root_prefers_env_override() {
+        let root = std::env::temp_dir().join(format!("coevo-workspace-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("COEVO_WORKSPACE_DIR", &root);
+
+        let selected = workspace_root_from_env_or_cwd().expect("workspace root should resolve");
+
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(selected, root);
+    }
+
     #[tokio::test]
-    async fn red_track_blocks_before_model_provider_resolution() {
+    async fn red_without_approval_waits_before_model_provider_resolution() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         AgentEmployeeRepo::seed(&pool).await.unwrap();
@@ -650,11 +817,9 @@ mod tests {
             },
         )
         .await
-        .expect_err("red should be blocked before provider resolution");
+        .expect_err("red should require approval before provider resolution");
 
-        assert!(err
-            .to_string()
-            .contains("RED_TRACK_BLOCKED_UNTIL_PRODUCTION_VERIFIER"));
+        assert!(err.to_string().contains("Yellow approval required"));
         let sessions =
             sqlx::query("SELECT COUNT(*) as count FROM worker_sessions WHERE work_order_id=?")
                 .bind(&wo.work_order_id)
@@ -787,6 +952,36 @@ mod tests {
         let routed = ModelRouter::route(&request, &profiles, None).expect("route should resolve");
         assert_ne!(routed.selected_model_id, "unavailable");
         assert_eq!(routed.selected_model_id, "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn deepseek_profiles_keep_non_zero_pricing_for_live_cost_rollups() {
+        let config = ModelProviderConfig {
+            provider_id: "desktop".to_string(),
+            kind: ModelProviderKind::DeepSeek,
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            default_model: "deepseek-v4-flash".to_string(),
+            fast_model: "deepseek-v4-flash".to_string(),
+            reasoning_model: "deepseek-v4-flash".to_string(),
+            structured_output_model: "deepseek-v4-flash".to_string(),
+            max_tokens: 8192,
+            temperature: 0.2,
+            timeout_ms: 30000,
+            max_cost_per_task_usd: 5.0,
+        };
+
+        let profiles = model_profiles_from_config(&config);
+        assert_eq!(profiles.len(), 1);
+        let profile = &profiles[0];
+        assert!(
+            profile.cost_per_1k_input_usd > 0.0,
+            "live provider input pricing should not remain zero"
+        );
+        assert!(
+            profile.cost_per_1k_output_usd > 0.0,
+            "live provider output pricing should not remain zero"
+        );
     }
 
     async fn configure_broken_openai_compatible(pool: &sqlx::SqlitePool) {

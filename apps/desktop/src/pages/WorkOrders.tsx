@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
-  cancelWorkOrder,
-  decideWorkOrderApproval,
-  executeWorkOrder,
-  getWorkOrderAuditExport,
-  getWorkOrderTimeline,
-  listWorkOrders,
-  submitWorkOrderFeedback,
 } from "../api/client";
+import { getActiveOpcId } from "../api/companies";
+import {
+  cancelCompanyWorkOrder,
+  decideCompanyWorkOrderApproval,
+  executeCompanyWorkOrder,
+  getCompanyWorkOrderAuditExport,
+  getCompanyWorkOrderTimeline,
+  listCompanyWorkOrders,
+  submitCompanyWorkOrderFeedback,
+} from "../api/org";
 import GovernanceTimeline, { type TimelineSpan } from "../components/GovernanceTimeline";
+import { useToast } from "../components/ToastProvider";
 import { t, useLanguage } from "../settings/i18n";
 
 type WorkOrderRecord = Record<string, unknown>;
@@ -21,6 +26,7 @@ type RowResult = {
 function friendlyStatus(status: string): string {
   if (status === "Completed") return t("workorders.status_completed");
   if (status === "Failed") return t("workorders.status_failed");
+  if (status === "Cancelled") return t("workorders.status_cancelled");
   if (status === "WaitingApproval") return t("workorders.status_waiting");
   if (status === "Running") return t("workorders.status_running");
   return t("workorders.status_ready");
@@ -67,9 +73,15 @@ function timelineToSpans(items: WorkOrderRecord[]): TimelineSpan[] {
     const hasFailure = eventType === "LifecycleError" || eventStatus === "Failed" || Boolean(payload?.error);
     const gate = outputRecord.gate && typeof outputRecord.gate === "object"
       ? outputRecord.gate as TimelineSpan["gate"]
-      : payload?.reason
-        ? { outcome: item.type === "ApprovalRequired" ? "need_approval" : item.type === "WorkerBlocked" || hasFailure ? "blocked" : "allow", reason: String(payload.reason), action_digest: String(payload.action_digest || "") }
-        : { outcome: hasFailure ? "blocked" : "allow", reason: hasFailure ? summarizeExecutionError(payload?.error) : undefined };
+      : item.type === "ApprovalRequired"
+        ? {
+            outcome: "need_approval",
+            reason: String(payload?.reason || details.reason || t("timeline.approval_desc")),
+            action_digest: String(payload?.action_digest || details.action_digest || payload?.approval_id || details.approval_id || ""),
+          }
+        : payload?.reason
+          ? { outcome: item.type === "WorkerBlocked" || hasFailure ? "blocked" : "allow", reason: String(payload.reason), action_digest: String(payload.action_digest || "") }
+          : { outcome: hasFailure ? "blocked" : "allow", reason: hasFailure ? summarizeExecutionError(payload?.error) : undefined };
     const started = Number(details.started_at_ms || item.time_ms || 0);
     const ended = Number(details.ended_at_ms || started);
     return {
@@ -118,6 +130,7 @@ function statusTone(status: string) {
 function nextActionLabel(status: string, track: string, running: boolean): string {
   if (running || status === "Running") return t("workorders.next_running");
   if (track === "red") return t("workorders.next_blocked");
+  if (status === "Cancelled") return t("workorders.next_cancelled");
   if (status === "Completed") return t("workorders.next_view_result");
   if (status === "Failed") return t("workorders.next_retry");
   if (status === "WaitingApproval") return t("workorders.next_waiting");
@@ -127,6 +140,8 @@ function nextActionLabel(status: string, track: string, running: boolean): strin
 
 export default function WorkOrders() {
   useLanguage();
+  const toast = useToast();
+  const activeOpcId = useMemo(() => getActiveOpcId(), []);
   const [orders, setOrders] = useState<WorkOrderRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -141,7 +156,7 @@ export default function WorkOrders() {
   async function load() {
     setLoading(true);
     try {
-      setOrders((await listWorkOrders()) || []);
+      setOrders((await listCompanyWorkOrders(activeOpcId)) || []);
     } catch {
       setOrders([]);
     }
@@ -149,8 +164,8 @@ export default function WorkOrders() {
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    void load();
+  }, [activeOpcId]);
 
   useEffect(() => {
     if (orders.length === 0) {
@@ -172,27 +187,34 @@ export default function WorkOrders() {
     return orders.find((order) => String(order.work_order_id || "") === selectedId) || orders[0];
   }, [orders, selectedId]);
 
-  async function act(fn: () => Promise<unknown>, label: string) {
+  async function act(fn: () => Promise<unknown>, label: string): Promise<boolean> {
     setResult("");
     try {
       const r = await fn();
       setResult(`${label}: ${JSON.stringify(r)}`);
       load();
+      return true;
     } catch (e: unknown) {
-      setResult(`${t("workorders.result_error")}: ${e instanceof Error ? e.message : String(e)}`);
+      const message = e instanceof Error ? e.message : String(e);
+      setResult(`${t("workorders.result_error")}: ${message}`);
+      toast.error(`${t("toast.workorder_action_failed")}: ${message}`);
+      return false;
     }
   }
 
   async function submitFeedback(id: string, feedback: string) {
     setResult("");
     try {
-      const r = await submitWorkOrderFeedback(id, feedback);
+      const r = await submitCompanyWorkOrderFeedback(activeOpcId, id, feedback);
       setResult(`${t("workorders.feedback")}: ${JSON.stringify(r)}`);
       setFbWoId("");
       setFbText("");
-      load();
+      void load();
+      toast.success(t("toast.workorder_feedback_sent"));
     } catch (e: unknown) {
-      setResult(`${t("workorders.result_error")}: ${e instanceof Error ? e.message : String(e)}`);
+      const message = e instanceof Error ? e.message : String(e);
+      setResult(`${t("workorders.result_error")}: ${message}`);
+      toast.error(`${t("toast.workorder_action_failed")}: ${message}`);
     }
   }
 
@@ -200,7 +222,7 @@ export default function WorkOrders() {
     setTimelineWoIds((prev) => ({ ...prev, [id]: track }));
     setTimelines((prev) => ({ ...prev, [id]: [] }));
     try {
-      const items = await getWorkOrderTimeline(id);
+      const items = await getCompanyWorkOrderTimeline(activeOpcId, id);
       setTimelines((prev) => ({ ...prev, [id]: items }));
     } catch (e: unknown) {
       setResult(`${t("workorders.result_timeline_error")}: ${e instanceof Error ? e.message : String(e)}`);
@@ -208,13 +230,19 @@ export default function WorkOrders() {
   }
 
   async function decideApproval(id: string, decision: "approve" | "reject", comment: string) {
-    const approvalId = String(rowResults[id]?.payload?.approval_id || "");
+    const approvalId =
+      String(rowResults[id]?.payload?.approval_id || "") || findApprovalId(timelines[id] || []);
     if (!approvalId) {
       setResult(`${t("workorders.result_error")}: ${t("workorders.approval_missing")}`);
+      toast.error(`${t("toast.workorder_action_failed")}: ${t("workorders.approval_missing")}`);
       return;
     }
     try {
-      const payload = await decideWorkOrderApproval(id, { approval_id: approvalId, decision, comment });
+      const payload = await decideCompanyWorkOrderApproval(activeOpcId, id, {
+        approval_id: approvalId,
+        decision,
+        comment,
+      });
       setRowResults((prev) => ({
         ...prev,
         [id]: {
@@ -224,8 +252,11 @@ export default function WorkOrders() {
       }));
       await load();
       await showTimeline(id, selectedTrack);
+      toast.success(t("toast.approval_recorded"));
     } catch (e: unknown) {
-      setResult(`${t("workorders.result_error")}: ${e instanceof Error ? e.message : String(e)}`);
+      const message = e instanceof Error ? e.message : String(e);
+      setResult(`${t("workorders.result_error")}: ${message}`);
+      toast.error(`${t("toast.workorder_action_failed")}: ${message}`);
     }
   }
 
@@ -238,7 +269,11 @@ export default function WorkOrders() {
     });
     try {
       const label = rerun ? t("workorders.run_again") : track === "yellow" ? t("workorders.submit_approval") : t("workorders.execute");
-      const payload = (await executeWorkOrder(id, rerun ? { rerun: true } : {})) as WorkOrderRecord;
+      const payload = (await executeCompanyWorkOrder(
+        activeOpcId,
+        id,
+        rerun ? { rerun: true } : {},
+      )) as WorkOrderRecord;
       if (String(payload.summary || "").includes("WorkerHarness")) {
         payload.summary = t("workorders.completed_summary");
       }
@@ -246,6 +281,7 @@ export default function WorkOrders() {
       await load();
       await showTimeline(id, track);
     } catch (e: unknown) {
+      const message = summarizeExecutionError(e instanceof Error ? e.message : String(e));
       setOrders((prev) =>
         prev.map((order) =>
           String(order.work_order_id || "") === id ? { ...order, status: "Failed" } : order,
@@ -255,10 +291,11 @@ export default function WorkOrders() {
         ...prev,
         [id]: {
           label: t("workorders.result_error"),
-          payload: { error: summarizeExecutionError(e instanceof Error ? e.message : String(e)) },
+          payload: { error: message },
         },
       }));
       await load();
+      toast.error(`${t("toast.workorder_action_failed")}: ${message}`);
     } finally {
       setRunningIds((prev) => ({ ...prev, [id]: false }));
     }
@@ -422,14 +459,14 @@ export default function WorkOrders() {
                 {(selectedCompleted || selectedFailed) && (
                   <>
                     {selectedCompleted && (
-                      <button onClick={() => showTimeline(selectedIdValue, selectedTrack)} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.view_result")}</button>
+                      <Link to={`/tasks/${encodeURIComponent(selectedIdValue)}`} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)", textDecoration: "none" }}>{t("workorders.view_result")}</Link>
                     )}
                     <button onClick={() => executeRow(selectedIdValue, selectedTrack, true)} disabled={selectedRunning || !selectedCanRerun} className="rounded border px-2 py-1 text-xs" style={{ borderColor: selectedRerunBlocked ? "var(--red)" : "var(--border-accent)", color: selectedRerunBlocked ? "var(--red)" : "var(--text-secondary)", opacity: selectedRunning || !selectedCanRerun ? 0.5 : 1 }}>{selectedRunning ? t("workorders.running") : t("workorders.run_again")}</button>
                   </>
                 )}
                 <button onClick={() => showTimeline(selectedIdValue, selectedTrack)} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.view_timeline")}</button>
-                <button onClick={() => act(() => getWorkOrderAuditExport(selectedIdValue), t("workorders.export_audit"))} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.export_audit")}</button>
-                <button onClick={() => act(() => cancelWorkOrder(selectedIdValue), t("workorders.cancel"))} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--yellow)", color: "var(--yellow)" }}>{t("workorders.cancel")}</button>
+                <button onClick={() => { void act(() => getCompanyWorkOrderAuditExport(activeOpcId, selectedIdValue), t("workorders.export_audit")).then((ok) => { if (ok) toast.success(t("toast.workorder_audit_exported")); }); }} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("workorders.export_audit")}</button>
+                <button onClick={() => { void act(() => cancelCompanyWorkOrder(activeOpcId, selectedIdValue), t("workorders.cancel")).then((ok) => { if (ok) toast.info(t("toast.workorder_cancelled")); }); }} className="rounded border px-2 py-1 text-xs" style={{ borderColor: "var(--yellow)", color: "var(--yellow)" }}>{t("workorders.cancel")}</button>
                 <input
                   placeholder={t("workorders.feedback_placeholder")}
                   value={currentFeedback}
@@ -536,4 +573,14 @@ function ExecutionSummary({ result }: { result: RowResult }) {
       </div>
     </div>
   );
+}
+
+function findApprovalId(timeline: WorkOrderRecord[]): string {
+  for (const item of timeline) {
+    const details = (item.details || {}) as Record<string, unknown>;
+    const payload = parseJson(details.payload_json) as Record<string, unknown>;
+    const approvalId = String(payload.approval_id || payload.approval_receipt || details.approval_id || "").trim();
+    if (approvalId) return approvalId;
+  }
+  return "";
 }

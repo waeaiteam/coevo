@@ -1,4 +1,11 @@
 use crate::types::*;
+use serde_json::Value;
+
+#[derive(Debug, Clone, Default)]
+pub struct FileToolPolicy {
+    pub allowed_tools: Vec<String>,
+    pub risk_ceiling: Option<f64>,
+}
 
 fn action_match(allowed: &str, supported: &str) -> bool {
     let a = allowed.to_lowercase();
@@ -142,6 +149,79 @@ impl ToolPolicyEngine {
             .filter(|t| Self::evaluate(t, track, allowed_actions, restricted_actions).allowed)
             .collect()
     }
+
+    pub fn filter_with_file_policy<'a>(
+        tools: &'a [Tool],
+        track: &str,
+        allowed_actions: &[String],
+        restricted_actions: &[String],
+        file_policy: &FileToolPolicy,
+    ) -> Vec<&'a Tool> {
+        Self::filter(tools, track, allowed_actions, restricted_actions)
+            .into_iter()
+            .filter(|tool| {
+                if let Some(limit) = file_policy.risk_ceiling {
+                    if tool.risk_ceiling > limit {
+                        return false;
+                    }
+                }
+                if file_policy.allowed_tools.is_empty() {
+                    return true;
+                }
+                file_policy.allowed_tools.iter().any(|allowed| {
+                    let allowed = allowed.trim();
+                    if allowed.is_empty() {
+                        return false;
+                    }
+                    allowed.eq_ignore_ascii_case(&tool.tool_id)
+                        || tool
+                            .supported_actions
+                            .iter()
+                            .any(|action| action_match(allowed, action))
+                        || matches_tool_scope(allowed, tool)
+                })
+            })
+            .collect()
+    }
+}
+
+fn matches_tool_scope(scope: &str, tool: &Tool) -> bool {
+    match scope {
+        "urn:coevo:tool:read" => tool
+            .supported_actions
+            .iter()
+            .all(|action| action_match("read", action) || action_match("list", action)),
+        "urn:coevo:tool:write" => tool
+            .supported_actions
+            .iter()
+            .any(|action| action_match("write", action)),
+        "urn:coevo:tool:execute" => tool
+            .supported_actions
+            .iter()
+            .any(|action| action_match("execute", action) || action_match("runshell", action)),
+        _ => false,
+    }
+}
+
+pub fn parse_file_tool_policy(value: &Value) -> FileToolPolicy {
+    let allowed_tools = value
+        .get("allowed_tools")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let risk_ceiling = value.get("risk_ceiling").and_then(|v| v.as_f64());
+    FileToolPolicy {
+        allowed_tools,
+        risk_ceiling,
+    }
 }
 
 #[cfg(test)]
@@ -214,5 +294,51 @@ mod tests {
             vec!["ReadReadme"],
         );
         assert!(!ToolPolicyEngine::evaluate(&t, "green", &[], &[]).allowed);
+    }
+
+    #[test]
+    fn file_policy_can_whitelist_specific_tool_id() {
+        let read = make_tool(
+            "file-readonly",
+            0.3,
+            true,
+            false,
+            ToolType::FileReadonly,
+            vec!["ReadFile", "ListDirectory"],
+        );
+        let github = make_tool(
+            "github-readonly",
+            0.4,
+            true,
+            false,
+            ToolType::GitHubReadonly,
+            vec!["ReadReadme"],
+        );
+        let tools = vec![read.clone(), github.clone()];
+        let filtered = ToolPolicyEngine::filter_with_file_policy(
+            &tools,
+            "green",
+            &["read".into()],
+            &[],
+            &FileToolPolicy {
+                allowed_tools: vec!["file-readonly".into()],
+                risk_ceiling: Some(0.3),
+            },
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].tool_id, "file-readonly");
+    }
+
+    #[test]
+    fn parse_file_tool_policy_extracts_allowed_tools_and_risk_ceiling() {
+        let parsed = parse_file_tool_policy(&serde_json::json!({
+            "allowed_tools": ["file-readonly", "urn:coevo:tool:read"],
+            "risk_ceiling": 0.3
+        }));
+        assert_eq!(
+            parsed.allowed_tools,
+            vec!["file-readonly", "urn:coevo:tool:read"]
+        );
+        assert_eq!(parsed.risk_ceiling, Some(0.3));
     }
 }

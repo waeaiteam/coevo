@@ -2,14 +2,14 @@
 //! BR ≤ 1, IR ≤ 1. NEGATIVE_CONSENT or EXPLICIT_APPROVAL.
 //! Per coevo whitepaper Section 11.2.
 
-use coevo_core::cognitive::{CognitiveLayer, ProvenanceEnvelope};
+use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::contract::{ApprovalMode, ContractState};
 use coevo_core::decision::{ActionProposalSpec, GateDecision};
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_customs::propose::CognitiveCustoms;
+use coevo_customs::provenance::ProvenanceSigner;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
-use coevo_policy::mock::MockPolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use coevo_router::pcdt::PcdtRouter;
 use coevo_store::repos::approval_repo::ApprovalRepo;
@@ -42,7 +42,8 @@ impl YellowTrackRunner {
         environment: &str,
     ) -> Result<YellowTrackResult, YellowTrackError> {
         let zero = "0000000000000000000000000000000000000000000000000000000000000000";
-        let policy = Box::new(MockPolicyEngine::new());
+        // Fail-closed by default: DenyAll unless tests / COEVO_ENABLE_MOCK_POLICY_ENGINE=1.
+        let policy = crate::policy_select::select_policy_engine();
         let compiler = MCLCompiler::new();
 
         // Compile
@@ -124,6 +125,7 @@ impl YellowTrackRunner {
                 };
                 let aid = ApprovalRepo::create(
                     pool,
+                    tenant_id,
                     &contract_hash,
                     &action.action_urn,
                     approval_mode,
@@ -155,24 +157,27 @@ impl YellowTrackRunner {
             "Proposer".to_string(),
         );
 
-        let provenance = ProvenanceEnvelope {
-            source_agent_id: agent_ids.first().cloned().unwrap_or_default(),
-            verification_tool_urn: "urn:mcp:tool:unit-test-runner".to_string(),
-            environmental_scope: coevo_core::cognitive::EnvironmentalScope {
-                environment: coevo_core::cognitive::Environment::Staging,
-                tenant_id: tenant_id.to_string(),
-            },
-            ttl_seconds: 7200,
-            cryptographic_signature: "yellow-track-signature".to_string(),
-            verification_report: Some(serde_json::json!({"passed": true})),
-            created_at: chrono::Utc::now(),
-        };
+        let hypothesis_value =
+            serde_json::json!({"status": "pending_approval", "decision": decision_str});
 
+        let provenance = ProvenanceSigner::new(
+            agent_ids.first().cloned().unwrap_or_default(),
+            "urn:mcp:tool:unit-test-runner",
+        )
+        .with_scope(coevo_core::cognitive::EnvironmentalScope {
+            environment: coevo_core::cognitive::Environment::Staging,
+            tenant_id: tenant_id.to_string(),
+        })
+        .with_ttl_seconds(7200)
+        .with_verification_report(serde_json::json!({"passed": true}))
+        .sign(&hypothesis_value);
+
+        // Brand-new key (fresh UUID) ⇒ expected_version = 0 per OCC.
         let receipt = CognitiveCustoms::propose(
             pool,
             &format!("yellow-result-{}", uuid::Uuid::new_v4()),
             0,
-            &serde_json::json!({"status": "pending_approval", "decision": decision_str}),
+            &hypothesis_value,
             CognitiveLayer::Hypothesis,
             &provenance,
             &meta,

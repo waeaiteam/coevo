@@ -2,9 +2,13 @@ import { useEffect, useState } from "react";
 import { t, useLanguage } from "../settings/i18n";
 import Icon from "../components/Icon";
 import { useEvaluationStore } from "../stores/evaluationStore";
-import type { EvaluationJob } from "../evaluation/evaluators";
+import {
+  evaluationManager,
+  type CustomRpcEvaluatorConfig,
+  type EvaluationJob,
+} from "../evaluation/evaluators";
 
-export default function Evaluations() {
+export default function Evaluations({ embedded = false }: { embedded?: boolean }) {
   useLanguage();
   const { evaluators, jobs, activeJobId, loadEvaluators, runEvaluation, setActiveJob } =
     useEvaluationStore();
@@ -13,6 +17,11 @@ export default function Evaluations() {
     "You are a helpful assistant. Answer the user's question clearly."
   );
   const [running, setRunning] = useState(false);
+  const [customRpcConfig, setCustomRpcConfig] = useState<CustomRpcEvaluatorConfig>({
+    endpoint: "",
+    auth_token: "",
+  });
+  const [customRpcSaved, setCustomRpcSaved] = useState(false);
 
   useEffect(() => {
     loadEvaluators();
@@ -24,8 +33,27 @@ export default function Evaluations() {
     }
   }, [evaluators, selectedEvaluator]);
 
+  const selectedEvaluatorDef = evaluators.find((evaluator) => evaluator.id === selectedEvaluator);
+  const selectedEvaluatorIsCustomRpc = selectedEvaluatorDef?.type === "custom_rpc";
+  const customRpcReady = !selectedEvaluatorIsCustomRpc || customRpcConfig.endpoint.trim().length > 0;
+
+  useEffect(() => {
+    if (selectedEvaluatorIsCustomRpc) {
+      setCustomRpcConfig(evaluationManager.getCustomRpcConfig());
+      setCustomRpcSaved(false);
+    }
+  }, [selectedEvaluatorIsCustomRpc, selectedEvaluator]);
+
+  function saveCustomRpcConfig() {
+    evaluationManager.setCustomRpcConfig(customRpcConfig);
+    setCustomRpcSaved(true);
+  }
+
   async function handleRun() {
-    if (!selectedEvaluator || running) return;
+    if (!selectedEvaluator || running || !customRpcReady) return;
+    if (selectedEvaluatorIsCustomRpc) {
+      evaluationManager.setCustomRpcConfig(customRpcConfig);
+    }
     setRunning(true);
     try {
       await runEvaluation(selectedEvaluator, "manual-target", sampleInput);
@@ -38,21 +66,25 @@ export default function Evaluations() {
   const activeJob = activeJobId ? jobs[activeJobId] : undefined;
 
   return (
-    <div className="product-page">
-      <header className="product-header">
-        <div className="min-w-0">
-          <div className="product-kicker">{t("eval.kicker")}</div>
-          <h1 className="product-title">{t("eval.title")}</h1>
-        </div>
-      </header>
+    <div className={embedded ? "space-y-4" : "product-page"}>
+      {!embedded && (
+        <header className="product-header">
+          <div className="min-w-0">
+            <div className="product-kicker">{t("eval.kicker")}</div>
+            <h1 className="product-title">{t("eval.title")}</h1>
+          </div>
+        </header>
+      )}
 
-      <section className="feature-hero">
-        <div className="feature-hero-icon"><Icon name="badge-check" /></div>
-        <div>
-          <h2>{t("eval.title")}</h2>
-          <p>{t("eval.desc")}</p>
-        </div>
-      </section>
+      {!embedded && (
+        <section className="feature-hero">
+          <div className="feature-hero-icon"><Icon name="badge-check" /></div>
+          <div>
+            <h2>{t("eval.title")}</h2>
+            <p>{t("eval.desc")}</p>
+          </div>
+        </section>
+      )}
 
       <div className="product-grid-2">
         <div className="product-panel">
@@ -82,7 +114,70 @@ export default function Evaluations() {
             onChange={(e) => setSampleInput(e.target.value)}
           />
 
-          <button className="primary-button" disabled={running || !selectedEvaluator} onClick={handleRun}>
+          {selectedEvaluatorIsCustomRpc && (
+            <div
+              className="mb-3 rounded border p-3"
+              style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}
+            >
+              <label
+                htmlFor="custom-rpc-endpoint"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {t("eval.custom_rpc_endpoint")}
+              </label>
+              <input
+                id="custom-rpc-endpoint"
+                type="url"
+                className="text-input w-full mb-3"
+                value={customRpcConfig.endpoint}
+                onChange={(e) => {
+                  setCustomRpcSaved(false);
+                  setCustomRpcConfig((current) => ({ ...current, endpoint: e.target.value }));
+                }}
+              />
+
+              <label
+                htmlFor="custom-rpc-auth-token"
+                className="block text-xs font-semibold mb-1"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {t("eval.custom_rpc_auth_token")}
+              </label>
+              <input
+                id="custom-rpc-auth-token"
+                type="password"
+                className="text-input w-full"
+                value={customRpcConfig.auth_token}
+                onChange={(e) => {
+                  setCustomRpcSaved(false);
+                  setCustomRpcConfig((current) => ({ ...current, auth_token: e.target.value }));
+                }}
+              />
+
+              <div className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                {t("eval.custom_rpc_hint")}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" className="product-link-button" onClick={saveCustomRpcConfig}>
+                  <Icon name="check" /> {t("eval.custom_rpc_save")}
+                </button>
+                {customRpcSaved && (
+                  <span className="text-xs" style={{ color: "var(--green)" }}>
+                    {t("eval.custom_rpc_saved")}
+                  </span>
+                )}
+                {!customRpcReady && (
+                  <span className="text-xs" style={{ color: "var(--yellow)" }}>
+                    {t("eval.custom_rpc_required")}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <button className="primary-button" disabled={running || !selectedEvaluator || !customRpcReady} onClick={handleRun}>
             {running ? (
               <span className="flex items-center gap-2">
                 <Icon name="spinner" className="icon-spin" /> {t("eval.running")}
@@ -164,15 +259,27 @@ function JobResultPanel({ job }: { job: EvaluationJob }) {
 
       <div className="product-list">
         {job.results.map((r) => (
-          <div key={r.metric_name} className="product-list-row static">
-            <span className="product-row-main">{r.metric_name}</span>
-            <span className="flex items-center gap-2">
-              <span className="mono-chip">{r.score}</span>
-              <Icon
-                name={r.passed ? "check" : "x"}
-                style={{ color: r.passed ? "var(--green)" : "var(--red)" }}
-              />
-            </span>
+          <div key={r.metric_name} className="product-list-row static" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span className="product-row-main">{r.metric_name}</span>
+              <span className="flex items-center gap-2">
+                <span className="mono-chip">{r.score}</span>
+                <Icon
+                  name={r.passed ? "check" : "x"}
+                  style={{ color: r.passed ? "var(--green)" : "var(--red)" }}
+                />
+              </span>
+            </div>
+            {r.details && (
+              <details style={{ marginTop: 2 }}>
+                <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-secondary)", fontWeight: 600 }}>
+                  {t("eval.judge_reasoning")}
+                </summary>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                  {r.details}
+                </div>
+              </details>
+            )}
           </div>
         ))}
       </div>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { getApiBase, getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, testModelConnection } from "../api/client";
+import { getApiBase, getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, streamWorkerRunEvents, testModelConnection } from "../api/client";
 
 describe("API Client", () => {
   beforeEach(() => {
@@ -37,13 +37,13 @@ describe("API Client", () => {
     expect(getApiBase()).toBe("http://127.0.0.1:8727");
   });
 
-  it("getApiBase lets an explicit Developer API Base override the default web runtime base", () => {
+  it("getApiBase lets the runtime API Base override a saved Developer API Base", () => {
     localStorage.setItem("coevo-api-base", "http://127.0.0.1:8717");
     localStorage.setItem("coevo-settings", JSON.stringify({
       developer: { api_base_url: "http://127.0.0.1:8727" },
     }));
 
-    expect(getApiBase()).toBe("http://127.0.0.1:8727");
+    expect(getApiBase()).toBe("http://127.0.0.1:8717");
   });
 
   it("getApiBase lets the build-time environment API Base drive isolated web dev runs", () => {
@@ -218,5 +218,61 @@ describe("API Client", () => {
         }),
       })
     );
+  });
+
+  it("streamWorkerRunEvents uses company-scoped headers and parses SSE events", async () => {
+    localStorage.setItem("coevo-opc-id", "opc-stream");
+    const encoder = new TextEncoder();
+    let chunkIndex = 0;
+    const chunks = [
+      encoder.encode('id: 1\nevent: ContentDelta\ndata: {"event_type":"ContentDelta","payload":{"delta":"Hello"}}\n\n'),
+      encoder.encode('id: 2\nevent: Done\ndata: {"event_type":"Done"}\n\n'),
+    ];
+
+    globalThis.EventSource = class {
+      close() {}
+      addEventListener() {}
+    } as unknown as typeof EventSource;
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: vi.fn(async () => {
+            if (chunkIndex >= chunks.length) {
+              return { done: true, value: undefined };
+            }
+            return { done: false, value: chunks[chunkIndex++] };
+          }),
+          releaseLock: vi.fn(),
+        }),
+      },
+    });
+
+    const seen: Array<Record<string, unknown>> = [];
+    const cleanup = streamWorkerRunEvents("run-stream-1", (event) => {
+      seen.push(event);
+    });
+
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+    cleanup();
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:8717/opc/workers/runs/run-stream-1/events/stream",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "x-coevo-opc-id": "opc-stream",
+        }),
+      }),
+    );
+    expect(seen[0]).toEqual({
+      event_type: "ContentDelta",
+      payload: { delta: "Hello" },
+    });
+    expect(seen[1]).toEqual({
+      event_type: "Done",
+    });
   });
 });

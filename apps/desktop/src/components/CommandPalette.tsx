@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme, type ThemeMode } from "../hooks/useTheme";
+import { getActiveOpcId } from "../api/companies";
 import { t, useLanguage } from "../settings/i18n";
 import Icon, { type IconName } from "./Icon";
 
@@ -27,9 +28,7 @@ const pages = [
   { id: "skills", labelKey: "adv.skills", hintKey: "adv.skills_desc", path: "/skills", initials: "skills jn", icon: "puzzle" as IconName },
   { id: "executors", labelKey: "adv.external_executors", hintKey: "adv.external_executors_desc", path: "/executors", initials: "executors zxq", icon: "external" as IconName },
   { id: "contracts", labelKey: "adv.contracts", hintKey: "adv.contracts_desc", path: "/contracts", initials: "contracts hy", icon: "file-text" as IconName },
-  { id: "plans", labelKey: "adv.plans", hintKey: "adv.plans_desc", path: "/plans", initials: "plans jh", icon: "calendar" as IconName },
   { id: "customs", labelKey: "adv.cognitive_customs", hintKey: "adv.cognitive_customs_desc", path: "/customs", initials: "customs rg", icon: "badge-check" as IconName },
-  { id: "risk", labelKey: "adv.risk_gate", hintKey: "adv.risk_gate_desc", path: "/risk", initials: "risk gate fx", icon: "shield-check" as IconName },
   { id: "resolution", labelKey: "adv.resolution", hintKey: "adv.resolution_desc", path: "/resolution", initials: "resolution jj", icon: "git-branch" as IconName },
   { id: "audit", labelKey: "nav.audit", hintKey: "cmd.audit_hint", path: "/audit", initials: "audit sj hd", icon: "clipboard" as IconName },
   { id: "evaluations", labelKey: "eval.title", hintKey: "eval.desc", path: "/evaluations", initials: "evaluations eval pg pinggu", icon: "badge-check" as IconName },
@@ -37,6 +36,7 @@ const pages = [
   { id: "workflows", labelKey: "workflows.title", hintKey: "workflows.desc", path: "/workflows", initials: "workflows dag gongzuoliu bianpai", icon: "git-branch" as IconName },
   { id: "performance", labelKey: "perf.title", hintKey: "perf.desc", path: "/performance", initials: "performance perf xingneng sandbox shapan", icon: "gauge" as IconName },
   { id: "model", labelKey: "settings.model_provider", hintKey: "cmd.model_hint", path: "/settings/model_provider", initials: "model mx llm", icon: "brain" as IconName },
+  { id: "mcp", labelKey: "settings.mcp_servers", hintKey: "settings.mcp_servers_desc", path: "/settings/mcp_servers", initials: "mcp servers tools jsonrpc stdio http", icon: "puzzle" as IconName },
   { id: "data", labelKey: "settings.data_management", hintKey: "adv.data_management_desc", path: "/settings/data_management", initials: "data sj", icon: "database" as IconName },
 ];
 
@@ -63,6 +63,20 @@ export default function CommandPalette() {
       icon: page.icon,
       run: () => navigate(page.path),
     }));
+    const opc = getActiveOpcId();
+    const orgCommands = ([
+      ["org-meetings", "org.meetings", "meet.subtitle", "meetings huiyi hys debate", "/meetings", "users"],
+      ["org-performance", "org.performance", "kpi.subtitle", "performance kpi jixiao", "/performance", "gauge"],
+      ["org-reports", "org.reports", "report.subtitle", "reports briefings jianbao ribao yuebao", "/reports", "file-text"],
+      ["org-cost", "org.cost", "cost.subtitle", "cost budget chengben token", "/cost", "database"],
+    ] as const).map(([id, labelKey, hintKey, initials, suffix, icon]) => ({
+      id,
+      label: t(labelKey),
+      hint: t(hintKey),
+      initials,
+      icon: icon as IconName,
+      run: () => navigate(`/companies/${encodeURIComponent(opc)}${suffix}`),
+    }));
     const themeCommands = ([
       ["theme-system", "cmd.theme_system", "cmd.theme_system_hint", "system xt", "system", "monitor"],
       ["theme-light", "cmd.theme_light", "cmd.theme_light_hint", "light qs", "light", "sun"],
@@ -75,7 +89,7 @@ export default function CommandPalette() {
       icon: icon as IconName,
       run: () => setMode(mode as ThemeMode),
     }));
-    return [...navCommands, ...themeCommands];
+    return [...navCommands, ...orgCommands, ...themeCommands];
   }, [navigate, setMode, language]);
 
   const filtered = commands.filter((command) => matches(command, query));

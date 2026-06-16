@@ -497,8 +497,7 @@ describe("Desktop onboarding", () => {
     expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
   });
 
-  it("reports missing active company clearly after a successful connection test", async () => {
-    vi.spyOn(companiesApi, "ensureActiveCompany").mockResolvedValue(null);
+  it("saves the model provider even when no active company exists", async () => {
     api.updateModelConfig.mockResolvedValue({});
     api.testModelConnection.mockResolvedValue({
       model: "gpt-4o",
@@ -515,13 +514,15 @@ describe("Desktop onboarding", () => {
       </MemoryRouter>
     );
 
+    fireEvent.change(screen.getByLabelText(/API Key/i), { target: { value: "sk-live-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Test / Discover Models" }));
 
-    await screen.findByText(
-      /Connection failed: No company is available yet\. Create or select a company before saving the model provider\./i,
-      { selector: "span" },
-    );
-    expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue to Mission Chat" })).toBeInTheDocument());
+    expect(screen.getByLabelText(/API Key/i)).toHaveValue("");
+    expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true");
+    expect(api.updateModelConfig).toHaveBeenCalledWith(expect.objectContaining({
+      api_key: "sk-live-secret",
+    }));
   });
 
   it("Model Provider hides advanced transport and token fields by default", () => {

@@ -21,9 +21,23 @@ use coevo_tracks::red::RedTrackRunner;
 use coevo_tracks::yellow::YellowTrackRunner;
 
 async fn setup() -> sqlx::SqlitePool {
+    // Track runners now fail closed by default (DenyAll policy engine). These
+    // acceptance scenarios exercise the governed-but-permitted paths, so opt
+    // into the keyword MockPolicyEngine the same way production dev/test does.
+    std::env::set_var("COEVO_ENABLE_MOCK_POLICY_ENGINE", "1");
     let pool = create_test_pool().await.unwrap();
     coevo_store::migrate::run_migrations(&pool).await.unwrap();
     pool
+}
+
+/// Produce the real monitoring + diagnostic Ed25519 dual-sign signatures that
+/// `LeaseManager::grant` now requires, bound to `agent_id` + `scope`.
+fn dual_sign(agent_id: &str, scope: &[String]) -> (String, String) {
+    use coevo_risk::lease::{LeaseManager, LEASE_ROLE_DIAGNOSTIC, LEASE_ROLE_MONITORING};
+    (
+        LeaseManager::sign_attestation(agent_id, scope, LEASE_ROLE_MONITORING),
+        LeaseManager::sign_attestation(agent_id, scope, LEASE_ROLE_DIAGNOSTIC),
+    )
 }
 
 /// Insert a minimal valid contract row so FK constraints are satisfied.
@@ -278,14 +292,16 @@ async fn test_06_lease_scope_budget_enforced() {
     insert_test_contract(&pool, "test-contract-2").await;
 
     // Grant lease with budget 2
+    let scope = vec!["urn:coevo:action:test".to_string()];
+    let (mon, diag) = dual_sign("test-agent", &scope);
     let lease = LeaseManager::grant(
         &pool,
         "test-contract",
         "test-agent",
-        vec!["urn:coevo:action:test".to_string()],
+        scope.clone(),
         2,
-        "mon-sig:test",
-        "diag-sig:test",
+        &mon,
+        &diag,
     )
     .await
     .expect("lease grant must succeed");
@@ -308,14 +324,16 @@ async fn test_06_lease_scope_budget_enforced() {
     );
 
     // Out of scope
+    let scope2 = vec!["urn:coevo:action:test".to_string()];
+    let (mon2, diag2) = dual_sign("test-agent-2", &scope2);
     let new_lease = LeaseManager::grant(
         &pool,
         "test-contract-2",
         "test-agent-2",
-        vec!["urn:coevo:action:test".to_string()],
+        scope2,
         5,
-        "mon-sig:test",
-        "diag-sig:test",
+        &mon2,
+        &diag2,
     )
     .await
     .expect("lease grant must succeed");
@@ -461,14 +479,18 @@ async fn test_10_red_with_identity_generates_lease() {
     .await
     .unwrap();
 
+    // The Red track grants a production-write lease for the first agent; sign
+    // the real monitoring + diagnostic vouches over that (agent, scope).
+    let red_scope = vec!["urn:coevo:action:production:write".to_string()];
+    let (mon, diag) = dual_sign("agent-red-1", &red_scope);
     let result = RedTrackRunner::run(
         &pool,
         "Emergency fix for production database connection pool exhaustion causing P1 outage",
         vec!["agent-red-1".to_string()],
         "red-tenant",
         Some("mock-signature:agent-red-1"),
-        Some("mon-sig:prometheus-alert-12345"),
-        Some("diag-sig:top-10-diagnostic-agent"),
+        Some(&mon),
+        Some(&diag),
     )
     .await;
 

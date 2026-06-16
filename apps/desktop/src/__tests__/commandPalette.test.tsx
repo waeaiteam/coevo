@@ -38,6 +38,20 @@ describe("CommandPalette", () => {
     });
 
     expect(screen.getByRole("button", { name: /Company Memory/i })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "plans" },
+    });
+
+    expect(screen.getByText("No results")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Plans/i })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "risk gate" },
+    });
+
+    expect(screen.getByText("No results")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Risk Gate/i })).not.toBeInTheDocument();
   });
 
   it("uses the theme context to switch data-theme", () => {

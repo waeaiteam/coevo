@@ -1,10 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import WorkOrders from "../pages/WorkOrders";
 
 const api = vi.hoisted(() => ({
   cancelWorkOrder: vi.fn(),
+  decideWorkOrderApproval: vi.fn(),
   executeWorkOrder: vi.fn(),
   getWorkOrderAuditExport: vi.fn(),
   getWorkOrderTimeline: vi.fn(),
@@ -12,14 +14,47 @@ const api = vi.hoisted(() => ({
   submitWorkOrderFeedback: vi.fn(),
 }));
 
+const org = vi.hoisted(() => ({
+  cancelCompanyWorkOrder: vi.fn(),
+  decideCompanyWorkOrderApproval: vi.fn(),
+  executeCompanyWorkOrder: vi.fn(),
+  getCompanyWorkOrderAuditExport: vi.fn(),
+  getCompanyWorkOrderTimeline: vi.fn(),
+  listCompanyWorkOrders: vi.fn(),
+  submitCompanyWorkOrderFeedback: vi.fn(),
+}));
+
 vi.mock("../api/client", () => ({
   cancelWorkOrder: api.cancelWorkOrder,
+  decideWorkOrderApproval: api.decideWorkOrderApproval,
   executeWorkOrder: api.executeWorkOrder,
   getWorkOrderAuditExport: api.getWorkOrderAuditExport,
   getWorkOrderTimeline: api.getWorkOrderTimeline,
   listWorkOrders: api.listWorkOrders,
   submitWorkOrderFeedback: api.submitWorkOrderFeedback,
 }));
+
+vi.mock("../api/org", () => ({
+  cancelCompanyWorkOrder: org.cancelCompanyWorkOrder,
+  decideCompanyWorkOrderApproval: org.decideCompanyWorkOrderApproval,
+  executeCompanyWorkOrder: org.executeCompanyWorkOrder,
+  getCompanyWorkOrderAuditExport: org.getCompanyWorkOrderAuditExport,
+  getCompanyWorkOrderTimeline: org.getCompanyWorkOrderTimeline,
+  listCompanyWorkOrders: org.listCompanyWorkOrders,
+  submitCompanyWorkOrderFeedback: org.submitCompanyWorkOrderFeedback,
+}));
+
+vi.mock("../api/companies", () => ({
+  getActiveOpcId: () => "opc-live",
+}));
+
+function renderWorkOrders() {
+  render(
+    <MemoryRouter>
+      <WorkOrders />
+    </MemoryRouter>,
+  );
+}
 
 function workOrder(overrides: Record<string, unknown>) {
   return {
@@ -38,11 +73,20 @@ function workOrder(overrides: Record<string, unknown>) {
 describe("WorkOrders", () => {
   beforeEach(() => {
     api.cancelWorkOrder.mockResolvedValue({ ok: true });
+    api.decideWorkOrderApproval.mockResolvedValue({ ok: true });
     api.executeWorkOrder.mockResolvedValue({ ok: true, status: "Completed" });
     api.getWorkOrderAuditExport.mockResolvedValue({ schema_version: "coevo.audit_export.v1" });
     api.getWorkOrderTimeline.mockResolvedValue([]);
     api.listWorkOrders.mockResolvedValue([]);
     api.submitWorkOrderFeedback.mockResolvedValue({ ok: true });
+
+    org.cancelCompanyWorkOrder.mockResolvedValue({ ok: true });
+    org.decideCompanyWorkOrderApproval.mockResolvedValue({ ok: true });
+    org.executeCompanyWorkOrder.mockResolvedValue({ ok: true, status: "Completed" });
+    org.getCompanyWorkOrderAuditExport.mockResolvedValue({ schema_version: "coevo.audit_export.v1" });
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([]);
+    org.listCompanyWorkOrders.mockResolvedValue([]);
+    org.submitCompanyWorkOrderFeedback.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
@@ -51,30 +95,70 @@ describe("WorkOrders", () => {
   });
 
   it("disables Red Track execution in the UI", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     const button = await screen.findByRole("button", { name: "Execute (Blocked)" });
     expect(button).toBeDisabled();
   });
 
+  it("loads tasks through the active company-scoped work-order API", async () => {
+    org.listCompanyWorkOrders.mockResolvedValue([]);
+    org.listCompanyWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-company", mission_intent: "Canonical company task" }),
+    ]);
+
+    renderWorkOrders();
+
+    expect(await screen.findAllByText("Canonical company task")).not.toHaveLength(0);
+    expect(org.listCompanyWorkOrders).toHaveBeenCalledWith("opc-live");
+    expect(api.listWorkOrders).not.toHaveBeenCalled();
+  });
+
+  it("executes and reloads timeline through the company-scoped work-order API", async () => {
+    const planned = workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Planned" });
+    const completed = workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Completed" });
+    org.listCompanyWorkOrders.mockResolvedValue([planned, completed]);
+    org.listCompanyWorkOrders
+      .mockResolvedValueOnce([planned])
+      .mockResolvedValueOnce([completed]);
+    org.executeCompanyWorkOrder.mockResolvedValue({
+      ok: true,
+      status: "Completed",
+      summary: "WorkerHarness Completed execution.",
+      worker_runs: [{ run_id: "run-1", status: "Completed" }],
+    });
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([{ type: "LifecycleEnd", title: "Completed" }]);
+
+    renderWorkOrders();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    await waitFor(() =>
+      expect(org.executeCompanyWorkOrder).toHaveBeenCalledWith("opc-live", "wo-green", {}),
+    );
+    await waitFor(() =>
+      expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-green"),
+    );
+  });
+
   it("does not show ordinary Execute for completed rows", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-done", mission_intent: "Analyze README", status: "Completed" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
-    expect(await screen.findByRole("button", { name: "View Result" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "View Result" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run again" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
   });
 
   it("keeps completed red rows blocked from runnable re-execution", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({
         work_order_id: "wo-red-completed",
         mission_intent: "Delete production data",
@@ -83,21 +167,21 @@ describe("WorkOrders", () => {
       }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     const runAgainButton = await screen.findByRole("button", { name: "Run again" });
     expect(runAgainButton).toBeDisabled();
   });
 
   it("renders Green execution result inline and auto-loads the row timeline", async () => {
-    api.listWorkOrders
+    org.listCompanyWorkOrders
       .mockResolvedValueOnce([
         workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Planned" }),
       ])
       .mockResolvedValueOnce([
         workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", status: "Completed" }),
       ]);
-    api.executeWorkOrder.mockResolvedValue({
+    org.executeCompanyWorkOrder.mockResolvedValue({
       ok: true,
       status: "Completed",
       summary: "WorkerHarness Completed execution.",
@@ -106,113 +190,167 @@ describe("WorkOrders", () => {
       worker_steps: [{ step_id: "s-1" }, { step_id: "s-2" }],
       tool_calls: [{ tool_id: "file-readonly", success: true }],
     });
-    api.getWorkOrderTimeline.mockResolvedValue([{ type: "LifecycleEnd", title: "Completed" }]);
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([{ type: "LifecycleEnd", title: "Completed" }]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
 
-    await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-green", {}));
+    await waitFor(() => expect(org.executeCompanyWorkOrder).toHaveBeenCalledWith("opc-live", "wo-green", {}));
     expect(await screen.findByText("Task completed and recorded in local timeline and memory.")).toBeInTheDocument();
     expect(screen.getByText(/Memory/)).toHaveTextContent("tm-1");
-    await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-green"));
+    await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-green"));
     expect(screen.getByText("Processing completed")).toBeInTheDocument();
   });
 
   it("submits Yellow work for approval instead of implying direct execution", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft announcement", track: "yellow" }),
     ]);
-    api.executeWorkOrder.mockResolvedValue({ ok: true, status: "WaitingApproval" });
+    org.executeCompanyWorkOrder.mockResolvedValue({ ok: true, status: "WaitingApproval" });
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "Submit for Approval" }));
 
-    await waitFor(() => expect(api.executeWorkOrder).toHaveBeenCalledWith("wo-yellow", {}));
+    await waitFor(() => expect(org.executeCompanyWorkOrder).toHaveBeenCalledWith("opc-live", "wo-yellow", {}));
     expect(screen.getByText(/Waiting confirmation/)).toBeInTheDocument();
   });
 
   it("explains that blocked work has no execution timeline", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
 
-    await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-red"));
+    await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-red"));
     expect(screen.getByText(/no execution timeline will be produced/)).toBeInTheDocument();
   });
 
   it("renders timeline loading errors", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green" }),
     ]);
-    api.getWorkOrderTimeline.mockRejectedValue(new Error("timeline unavailable"));
+    org.getCompanyWorkOrderTimeline.mockRejectedValue(new Error("timeline unavailable"));
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
 
     await waitFor(() => expect(screen.getByText(/Timeline error: timeline unavailable/)).toBeInTheDocument());
   });
 
+  it("refreshes a missing approval id from the timeline before deciding", async () => {
+    org.listCompanyWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft announcement", track: "yellow", status: "WaitingApproval" }),
+    ]);
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([
+      {
+        type: "ApprovalRequired",
+        details: {
+          payload_json: JSON.stringify({
+            approval_id: "approval-123",
+            reason: "Need confirmation before proceeding",
+            action_digest: "digest-123",
+          }),
+        },
+      },
+    ]);
+    org.decideCompanyWorkOrderApproval.mockResolvedValue({ ok: true, approval_receipt: "approval-123" });
+
+    renderWorkOrders();
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
+    await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-yellow"));
+    fireEvent.click(await screen.findByRole("button", { name: /Approval Required|需要审批/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Approve|批准/i }));
+
+    await waitFor(() =>
+      expect(org.decideCompanyWorkOrderApproval).toHaveBeenCalledWith("opc-live", "wo-yellow", {
+        approval_id: "approval-123",
+        decision: "approve",
+        comment: "",
+      }),
+    );
+  });
+
   it("exports an audit package from the audit export endpoint", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "Export Audit" }));
 
-    await waitFor(() => expect(api.getWorkOrderAuditExport).toHaveBeenCalledWith("wo-green"));
+    await waitFor(() => expect(org.getCompanyWorkOrderAuditExport).toHaveBeenCalledWith("opc-live", "wo-green"));
     expect(document.body.textContent).toContain("Export Audit");
     expect(document.body.textContent).toContain("coevo.audit_export.v1");
   });
 
+  it("surfaces cancelled work as non-runnable founder-readable state after cancel", async () => {
+    org.listCompanyWorkOrders
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Planned" }),
+      ])
+      .mockResolvedValueOnce([
+        workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Cancelled" }),
+      ]);
+
+    renderWorkOrders();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(org.cancelCompanyWorkOrder).toHaveBeenCalledWith("opc-live", "wo-green"));
+    await waitFor(() => expect(org.listCompanyWorkOrders).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("This task was cancelled")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run again" })).not.toBeInTheDocument();
+  });
+
   it("does not submit stale feedback after selecting a different task", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-a", mission_intent: "Analyze onboarding feedback", track: "green" }),
       workOrder({ work_order_id: "wo-b", mission_intent: "Draft customer notification", track: "yellow" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     const feedbackInput = await screen.findByPlaceholderText("Feedback...");
     fireEvent.change(feedbackInput, { target: { value: "looks good" } });
     fireEvent.click(screen.getByRole("button", { name: /Draft customer notification/i }));
     fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
 
-    expect(api.submitWorkOrderFeedback).not.toHaveBeenCalled();
+    expect(org.submitCompanyWorkOrderFeedback).not.toHaveBeenCalled();
   });
 
   it("clears the feedback input after successful submit", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-a", mission_intent: "Analyze onboarding feedback", track: "green" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     const feedbackInput = await screen.findByPlaceholderText("Feedback...");
     fireEvent.change(feedbackInput, { target: { value: "approved with notes" } });
     fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
 
-    await waitFor(() => expect(api.submitWorkOrderFeedback).toHaveBeenCalledWith("wo-a", "approved with notes"));
+    await waitFor(() => expect(org.submitCompanyWorkOrderFeedback).toHaveBeenCalledWith("opc-live", "wo-a", "approved with notes"));
     expect(feedbackInput).toHaveValue("");
   });
 
   it("presents a founder-readable Task Center with selected task details, next action, timeline, and audit actions", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze onboarding feedback", track: "green", status: "Completed" }),
       workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft customer notification", track: "yellow", status: "WaitingApproval" }),
       workOrder({ work_order_id: "wo-red", mission_intent: "Delete production data", track: "red", status: "Planned" }),
     ]);
-    api.getWorkOrderTimeline.mockResolvedValue([{ type: "ApprovalRequested", label: "Human approval requested" }]);
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([{ type: "ApprovalRequested", label: "Human approval requested" }]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     expect(await screen.findByText("Task Center")).toBeInTheDocument();
     expect(screen.getByText("3 all tasks")).toBeInTheDocument();
@@ -228,16 +366,16 @@ describe("WorkOrders", () => {
     expect(screen.getByRole("button", { name: "Export Audit" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "View Timeline" }));
-    await waitFor(() => expect(api.getWorkOrderTimeline).toHaveBeenCalledWith("wo-yellow"));
+    await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-yellow"));
     expect(screen.getAllByText("Task Timeline").length).toBeGreaterThan(0);
     expect(screen.getByText("Human approval requested")).toBeInTheDocument();
   });
 
   it("shows failed timeline events as founder-readable attention items", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Failed" }),
     ]);
-    api.getWorkOrderTimeline.mockResolvedValue([
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([
       {
         type: "LifecycleError",
         title: "LifecycleError",
@@ -248,7 +386,7 @@ describe("WorkOrders", () => {
       },
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
 
@@ -258,12 +396,12 @@ describe("WorkOrders", () => {
   });
 
   it("shows friendly execute errors and avoids raw `ok` output", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green" }),
     ]);
-    api.executeWorkOrder.mockRejectedValue(new Error("ok"));
+    org.executeCompanyWorkOrder.mockRejectedValue(new Error("ok"));
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
 
@@ -273,11 +411,11 @@ describe("WorkOrders", () => {
   });
 
   it("hides raw technical fields by default and keeps them under advanced details", async () => {
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Planned" }),
     ]);
 
-    render(<WorkOrders />);
+    renderWorkOrders();
 
     expect(await screen.findByText("Task Center")).toBeInTheDocument();
     expect(screen.getByText("Advanced settings")).toBeInTheDocument();
@@ -290,35 +428,35 @@ describe("WorkOrders", () => {
   });
 
   it("marks task as failed and offers a non-Red retry after execution error", async () => {
-    api.listWorkOrders
+    org.listCompanyWorkOrders
       .mockResolvedValueOnce([
         workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Planned" }),
       ])
       .mockResolvedValueOnce([
         workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Failed" }),
       ]);
-    api.executeWorkOrder.mockRejectedValue(new Error("MODEL_ROUTE_UNAVAILABLE: deepseek route failed"));
+    org.executeCompanyWorkOrder.mockRejectedValue(new Error("MODEL_ROUTE_UNAVAILABLE: deepseek route failed"));
 
-    render(<WorkOrders />);
+    renderWorkOrders();
     fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
 
     await waitFor(() => expect(screen.getAllByText("Needs attention").length).toBeGreaterThan(0));
     expect(screen.getByText("Model execution is unavailable right now. Please check model settings and try again.")).toBeInTheDocument();
     expect(screen.queryByText(/MODEL_ROUTE_UNAVAILABLE/)).not.toBeInTheDocument();
-    await waitFor(() => expect(api.listWorkOrders).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(org.listCompanyWorkOrders).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("button", { name: /^Execute$/ })).not.toBeInTheDocument();
     const runAgainButton = screen.getByRole("button", { name: "Run again" });
 
-    api.executeWorkOrder.mockResolvedValue({
+    org.executeCompanyWorkOrder.mockResolvedValue({
       ok: true,
       status: "Completed",
       summary: "Recovered on retry.",
     });
-    api.listWorkOrders.mockResolvedValue([
+    org.listCompanyWorkOrders.mockResolvedValue([
       workOrder({ work_order_id: "wo-green", mission_intent: "Analyze README", track: "green", status: "Completed" }),
     ]);
     fireEvent.click(runAgainButton);
 
-    await waitFor(() => expect(api.executeWorkOrder).toHaveBeenLastCalledWith("wo-green", { rerun: true }));
+    await waitFor(() => expect(org.executeCompanyWorkOrder).toHaveBeenLastCalledWith("opc-live", "wo-green", { rerun: true }));
   });
 });

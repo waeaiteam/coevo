@@ -84,6 +84,13 @@ pub enum AdapterError {
     A2aError(String),
     #[error("MCP tool error: {0}")]
     McpError(String),
+    /// A JSON-RPC error object returned by an MCP server.
+    #[error("MCP JSON-RPC error (code {code}): {message}")]
+    McpRpc {
+        code: i64,
+        message: String,
+        data: Option<serde_json::Value>,
+    },
     #[error("Identity verification failed: {0}")]
     IdentityError(String),
     #[error("Adapter timeout")]

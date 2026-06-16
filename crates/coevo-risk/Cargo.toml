@@ -16,3 +16,6 @@ uuid.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }

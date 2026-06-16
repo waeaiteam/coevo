@@ -46,7 +46,16 @@ impl ToolRegistry {
     }
     pub fn default_registry() -> Self {
         let mut r = Self::new();
-        r.register(
+        for (tool, handler) in default_tool_specs() {
+            r.register(tool, handler);
+        }
+        r
+    }
+}
+
+fn default_tool_specs() -> Vec<(Tool, Box<dyn ToolHandler>)> {
+    vec![
+        (
             Tool {
                 tool_id: "github-readonly".into(),
                 name: "GitHub Readonly".into(),
@@ -57,75 +66,103 @@ impl ToolRegistry {
                     "ReadReadme".into(),
                     "ListRecentCommits".into(),
                 ],
-                permission_boundary_json: serde_json::json!({}),
+                permission_boundary_json: serde_json::json!({
+                    "scope": "repository-readonly",
+                    "writes": false,
+                }),
                 requires_credential: false,
                 credential_ref: None,
                 enabled: true,
             },
             Box::new(GitHubReadonlyTool),
-        );
-        r.register(
+        ),
+        (
             Tool {
                 tool_id: "file-readonly".into(),
                 name: "File Readonly".into(),
                 tool_type: ToolType::FileReadonly,
                 risk_ceiling: 0.3,
                 supported_actions: vec!["ReadFile".into(), "ListDirectory".into()],
-                permission_boundary_json: serde_json::json!({}),
+                permission_boundary_json: serde_json::json!({
+                    "scope": "workspace-files-readonly",
+                    "writes": false,
+                }),
                 requires_credential: false,
                 credential_ref: None,
                 enabled: true,
             },
             Box::new(FileReadonlyTool),
-        );
-        r.register(
+        ),
+        (
             Tool {
                 tool_id: "http-get".into(),
                 name: "HTTP GET".into(),
                 tool_type: ToolType::GitHubReadonly,
                 risk_ceiling: 0.3,
                 supported_actions: vec!["HttpGet".into()],
-                permission_boundary_json: serde_json::json!({}),
+                permission_boundary_json: serde_json::json!({
+                    "scope": "network-readonly",
+                    "writes": false,
+                }),
                 requires_credential: false,
                 credential_ref: None,
                 enabled: true,
             },
             Box::new(HttpGetTool),
-        );
-        r.register(
+        ),
+        (
             Tool {
                 tool_id: "workspace-write-file".into(),
                 name: "Workspace Write File".into(),
                 tool_type: ToolType::LocalProcessSandbox,
                 risk_ceiling: 0.6,
                 supported_actions: vec!["WriteFile".into()],
-                permission_boundary_json: serde_json::json!({}),
+                permission_boundary_json: serde_json::json!({
+                    "scope": "workspace-files-write",
+                    "writes": true,
+                }),
                 requires_credential: false,
                 credential_ref: None,
                 enabled: true,
             },
             Box::new(WorkspaceWriteFileTool),
-        );
-        r.register(
+        ),
+        (
             Tool {
                 tool_id: "workspace-shell".into(),
                 name: "Workspace Shell".into(),
                 tool_type: ToolType::LocalProcessSandbox,
                 risk_ceiling: 0.6,
                 supported_actions: vec!["RunShell".into()],
-                permission_boundary_json: serde_json::json!({}),
+                permission_boundary_json: serde_json::json!({
+                    "scope": "workspace-shell",
+                    "writes": true,
+                }),
                 requires_credential: false,
                 credential_ref: None,
                 enabled: true,
             },
             Box::new(WorkspaceShellTool),
-        );
-        r
-    }
+        ),
+    ]
 }
 
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_registry_exposes_real_supported_actions() {
+        let registry = ToolRegistry::default_registry();
+        let shell = registry.get("workspace-shell").unwrap();
+
+        assert_eq!(shell.supported_actions, vec!["RunShell"]);
+        assert_eq!(shell.permission_boundary_json["scope"], "workspace-shell");
     }
 }

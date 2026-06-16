@@ -48,6 +48,18 @@ impl WorkOrderRepo {
             .await?;
         Ok(rows.iter().map(|r| Self::from_row(r)).collect())
     }
+    pub async fn list_by_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+    ) -> Result<Vec<WorkOrder>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT * FROM work_orders WHERE opc_id=? ORDER BY created_at_ms DESC LIMIT 100",
+        )
+        .bind(opc_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows.iter().map(|r| Self::from_row(r)).collect())
+    }
     pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<WorkOrder>, sqlx::Error> {
         let row = sqlx::query("SELECT * FROM work_orders WHERE work_order_id=?")
             .bind(id)
@@ -212,5 +224,44 @@ mod tests {
             saved.conversation_id.as_deref(),
             Some("conv-product-feedback")
         );
+    }
+
+    #[tokio::test]
+    async fn update_status_allows_blocked_work_orders() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let work_order = WorkOrder {
+            work_order_id: "wo-status-blocked".to_string(),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "persist blocked work order status".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec!["delete".to_string()],
+            risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+        WorkOrderRepo::update_status(&pool, &work_order.work_order_id, "Blocked")
+            .await
+            .unwrap();
+
+        let saved = WorkOrderRepo::get(&pool, &work_order.work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, WorkOrderStatus::Blocked);
     }
 }

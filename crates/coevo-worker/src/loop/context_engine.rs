@@ -71,6 +71,7 @@ pub trait ContextEngine: Send + Sync {
                     history.len(),
                     content.chars().take(2000).collect::<String>()
                 ),
+                ..Default::default()
             },
             provenance: vec!["compaction:memory-budget-v1".to_string()],
             dropped_message_count: history.len(),
@@ -99,13 +100,15 @@ impl ContextEngine for MemoryBudgetContextEngine {
             .allowed_tools
             .iter()
             .map(|tool| {
+                let permission_boundary =
+                    enrich_tool_permission_boundary(tool, &ctx.authorization.sandbox_profile);
                 serde_json::json!({
                     "tool_id": tool.tool_id,
                     "name": tool.name,
                     "tool_type": tool.tool_type,
                     "risk_ceiling": tool.risk_ceiling,
                     "supported_actions": tool.supported_actions,
-                    "permission_boundary": tool.permission_boundary_json,
+                    "permission_boundary": permission_boundary,
                 })
             })
             .collect::<Vec<_>>();
@@ -113,8 +116,11 @@ impl ContextEngine for MemoryBudgetContextEngine {
             "user_profile_loaded": ctx.memory_context.user_profile.is_some(),
             "company_profile": ctx.memory_context.company_profile,
             "company_memory": ctx.memory_context.company_memory,
+            "company_shared_files": ctx.memory_context.company_shared_files,
+            "employee_persona_files": ctx.memory_context.employee_persona_files,
             "agent_memory": ctx.memory_context.agent_memory,
             "task_memory": ctx.memory_context.task_memory,
+            "relevant_skill_memory": ctx.memory_context.relevant_skill_memory,
             "excluded_revoked_count": ctx.memory_context.excluded_revoked_count,
             "excluded_fact_without_provenance": ctx.memory_context.fact_without_provenance,
         });
@@ -124,7 +130,7 @@ impl ContextEngine for MemoryBudgetContextEngine {
             "required_skills": ctx.run_contract.required_skills,
             "available_tools": tool_manifest,
             "memory_context": memory_summary,
-            "required_output": "Return JSON matching ReasoningOutput. Choose exactly one proposal: call_tool, call_executor, ask_human, or finish.",
+            "required_output": "Use native tool calls whenever a tool is needed. After observations, return JSON matching ReasoningOutput with exactly one proposal: call_tool, call_executor, ask_human, or finish. For file-readonly and workspace tools, stay inside sandbox_profile.workspace_root and permission_boundary.allowed_paths; do not invent paths outside that workspace.",
         });
         if let Some(observation) = ctx.observation {
             user_payload["previous_observation"] = serde_json::json!(observation);
@@ -132,6 +138,7 @@ impl ContextEngine for MemoryBudgetContextEngine {
         let mut stable_prefix = vec![ModelMessage {
             role: "system".to_string(),
             content: governance_prefix.to_string(),
+            ..Default::default()
         }];
         // Inject the employee's system prompt (its role/charter) right after the
         // governance prefix, so the agent knows who it is on every execution.
@@ -140,6 +147,7 @@ impl ContextEngine for MemoryBudgetContextEngine {
             stable_prefix.push(ModelMessage {
                 role: "system".to_string(),
                 content: ctx.system_prompt.to_string(),
+                ..Default::default()
             });
         }
         // Inject active skill prompt directives so approved skill/prompt
@@ -165,11 +173,13 @@ impl ContextEngine for MemoryBudgetContextEngine {
                     "note": "Follow these skill directives where they apply to the mission.",
                 })
                 .to_string(),
+                ..Default::default()
             });
         }
         let volatile_suffix = vec![ModelMessage {
             role: "user".to_string(),
             content: user_payload.to_string(),
+            ..Default::default()
         }];
         let prefix_fingerprint = fingerprint_messages(&stable_prefix);
         let estimated_tokens = estimate_tokens(&stable_prefix, &volatile_suffix);
@@ -184,6 +194,33 @@ impl ContextEngine for MemoryBudgetContextEngine {
     fn engine_version(&self) -> String {
         "memory-budget-v1".to_string()
     }
+}
+
+fn enrich_tool_permission_boundary(
+    tool: &Tool,
+    sandbox_profile: &crate::r#loop::SandboxProfile,
+) -> serde_json::Value {
+    let mut boundary = tool.permission_boundary_json.clone();
+    if matches!(
+        tool.tool_id.as_str(),
+        "file-readonly" | "workspace-write-file" | "workspace-shell"
+    ) {
+        if let Some(root) = sandbox_profile.workspace_root.as_ref() {
+            let root = root.to_string_lossy().to_string();
+            if let Some(obj) = boundary.as_object_mut() {
+                obj.entry("workspace_root".to_string())
+                    .or_insert_with(|| serde_json::json!(root.clone()));
+                obj.entry("allowed_paths".to_string())
+                    .or_insert_with(|| serde_json::json!([root.clone()]));
+            } else {
+                boundary = serde_json::json!({
+                    "workspace_root": root.clone(),
+                    "allowed_paths": [root],
+                });
+            }
+        }
+    }
+    boundary
 }
 
 fn fingerprint_messages(messages: &[ModelMessage]) -> String {
@@ -209,12 +246,16 @@ fn estimate_tokens(stable_prefix: &[ModelMessage], volatile_suffix: &[ModelMessa
 mod tests {
     use super::*;
     use crate::r#loop::SandboxProfile;
+    use crate::types::{Tool, ToolType};
+    use std::path::PathBuf;
 
     fn memory_context() -> MemoryContext {
         MemoryContext {
             user_profile: None,
             company_profile: vec![],
             company_memory: vec![],
+            company_shared_files: vec![],
+            employee_persona_files: vec![],
             agent_memory: vec![],
             task_memory: vec![],
             relevant_skill_memory: vec![],
@@ -253,6 +294,20 @@ mod tests {
         }
     }
 
+    fn file_tool() -> Tool {
+        Tool {
+            tool_id: "file-readonly".to_string(),
+            name: "File Readonly".to_string(),
+            tool_type: ToolType::FileReadonly,
+            risk_ceiling: 0.3,
+            supported_actions: vec!["ReadFile".to_string(), "ListDirectory".to_string()],
+            permission_boundary_json: serde_json::json!({}),
+            requires_credential: false,
+            credential_ref: None,
+            enabled: true,
+        }
+    }
+
     #[tokio::test]
     async fn context_prefix_contains_track_actions_and_sandbox() {
         let engine = MemoryBudgetContextEngine;
@@ -267,8 +322,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
-            skill_directives: &[],
-            system_prompt: "",
+                skill_directives: &[],
+                system_prompt: "",
             })
             .await
             .unwrap();
@@ -278,6 +333,84 @@ mod tests {
         assert!(prefix.contains("\"allowed_actions\":[\"read\"]"));
         assert!(prefix.contains("\"restricted_actions\":[\"delete\"]"));
         assert!(prefix.contains("\"tier\":\"read_only\""));
+    }
+
+    #[tokio::test]
+    async fn prompt_includes_workspace_root_boundary_for_file_tools() {
+        let engine = MemoryBudgetContextEngine;
+        let memory = memory_context();
+        let contract = contract();
+        let mut auth = auth();
+        auth.sandbox_profile =
+            SandboxProfile::from_track("green", Some(PathBuf::from(r"C:\sandbox\workspace")));
+        let file_tool = file_tool();
+        let allowed_tools = vec![&file_tool];
+        let prompt = engine
+            .build_prompt(&LoopContext {
+                run_contract: &contract,
+                authorization: &auth,
+                memory_context: &memory,
+                allowed_tools: &allowed_tools,
+                observation: None,
+                skill_directives: &[],
+                system_prompt: "",
+            })
+            .await
+            .unwrap();
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&prompt.volatile_suffix[0].content).unwrap();
+        assert!(
+            payload["required_output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("native tool"),
+            "required_output should explicitly instruct native tool calling: {payload}"
+        );
+        assert_eq!(
+            payload["available_tools"][0]["permission_boundary"]["workspace_root"],
+            serde_json::json!(r"C:\sandbox\workspace")
+        );
+        assert_eq!(
+            payload["available_tools"][0]["permission_boundary"]["allowed_paths"],
+            serde_json::json!([r"C:\sandbox\workspace"])
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_includes_company_shared_files_in_memory_context() {
+        let engine = MemoryBudgetContextEngine;
+        let mut memory = memory_context();
+        memory.company_shared_files.push(serde_json::json!({
+            "path": "playbooks/launch.md",
+            "content_md": "# Launch\n\nShared checklist"
+        }));
+        let contract = contract();
+        let auth = auth();
+        let allowed_tools = vec![];
+        let prompt = engine
+            .build_prompt(&LoopContext {
+                run_contract: &contract,
+                authorization: &auth,
+                memory_context: &memory,
+                allowed_tools: &allowed_tools,
+                observation: None,
+                skill_directives: &[],
+                system_prompt: "",
+            })
+            .await
+            .unwrap();
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&prompt.volatile_suffix[0].content).unwrap();
+        assert_eq!(
+            payload["memory_context"]["company_shared_files"][0]["path"],
+            serde_json::json!("playbooks/launch.md")
+        );
+        assert_eq!(
+            payload["memory_context"]["company_shared_files"][0]["content_md"],
+            serde_json::json!("# Launch\n\nShared checklist")
+        );
     }
 
     #[tokio::test]
@@ -294,8 +427,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
-            skill_directives: &[],
-            system_prompt: "",
+                skill_directives: &[],
+                system_prompt: "",
             })
             .await
             .unwrap();
@@ -306,8 +439,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: Some("Tool result"),
-            skill_directives: &[],
-            system_prompt: "",
+                skill_directives: &[],
+                system_prompt: "",
             })
             .await
             .unwrap();
@@ -325,6 +458,7 @@ mod tests {
         let history = vec![ModelMessage {
             role: "user".to_string(),
             content: "x".repeat(200),
+            ..Default::default()
         }];
 
         let compacted = engine.maybe_compact(&history, 1).await.unwrap().unwrap();
@@ -351,14 +485,15 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: None,
-            skill_directives: &[],
-            system_prompt: "",
+                skill_directives: &[],
+                system_prompt: "",
             })
             .await
             .unwrap();
         let history = vec![ModelMessage {
             role: "assistant".to_string(),
             content: "large prior observation".repeat(40),
+            ..Default::default()
         }];
         let compacted = engine.maybe_compact(&history, 1).await.unwrap().unwrap();
         let after = engine
@@ -368,8 +503,8 @@ mod tests {
                 memory_context: &memory,
                 allowed_tools: &allowed_tools,
                 observation: Some(&compacted.summary.content),
-            skill_directives: &[],
-            system_prompt: "",
+                skill_directives: &[],
+                system_prompt: "",
             })
             .await
             .unwrap();

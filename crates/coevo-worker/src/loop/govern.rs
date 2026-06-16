@@ -9,6 +9,7 @@ use coevo_core::contract::{
 };
 use coevo_core::decision::{ActionProposalSpec, GateDecision};
 use coevo_policy::mock::MockPolicyEngine;
+use coevo_policy::traits::{PolicyEngine, PolicyEngineError, PolicyResult, PolicyViolation};
 use coevo_risk::decision_tree::RiskGate;
 use sha2::{Digest, Sha256};
 
@@ -38,8 +39,13 @@ impl GovernGate {
     }
 
     pub fn default_for_authorization(auth: &RunAuthorization) -> Self {
+        let policy_engine: Box<dyn PolicyEngine> = if mock_policy_engine_enabled() {
+            Box::new(MockPolicyEngine::default())
+        } else {
+            Box::new(DenyAllPolicyEngine)
+        };
         Self::new(
-            RiskGate::new(Box::new(MockPolicyEngine::default())),
+            RiskGate::new(policy_engine),
             risk_contract_from_authorization(auth),
         )
     }
@@ -185,6 +191,14 @@ impl GovernGate {
     }
 }
 
+fn mock_policy_engine_enabled() -> bool {
+    cfg!(debug_assertions)
+        || matches!(
+            std::env::var("COEVO_ENABLE_MOCK_POLICY_ENGINE"),
+            Ok(value) if value == "1"
+        )
+}
+
 fn action_proposal_spec(proposal: &ActionProposal, tool: &Tool) -> ActionProposalSpec {
     let (action_name, parameters) = match proposal {
         ActionProposal::CallTool { input, .. } => (
@@ -218,6 +232,7 @@ fn risk_factors_for_tool(tool: &Tool) -> (u8, u8, u8, u8) {
             (0, 0, 0, 0)
         }
         crate::types::ToolType::BrowserMock | crate::types::ToolType::MCPMock => (1, 1, 1, 1),
+        crate::types::ToolType::Mcp | crate::types::ToolType::Browser => (1, 1, 1, 1),
         crate::types::ToolType::LocalProcessSandbox | crate::types::ToolType::ExternalExecutor => {
             (2, 2, 1, 2)
         }
@@ -299,6 +314,72 @@ fn allowed_action_modes(allowed_actions: &[String]) -> Vec<ActionMode> {
         modes.push(ActionMode::CommitReady);
     }
     modes
+}
+
+struct DenyAllPolicyEngine;
+
+#[async_trait::async_trait]
+impl PolicyEngine for DenyAllPolicyEngine {
+    async fn validate_contract(
+        &self,
+        _contract: &MCLSpec,
+    ) -> Result<PolicyResult, PolicyEngineError> {
+        Ok(PolicyResult {
+            passed: false,
+            violations: vec![PolicyViolation {
+                policy_urn: "urn:coevo:policy:unavailable".to_string(),
+                description: "policy engine unavailable".to_string(),
+                remediation: Some("set COEVO_ENABLE_MOCK_POLICY_ENGINE=1 for dev/test".to_string()),
+            }],
+            policy_version: "unavailable".to_string(),
+            policies_checked: vec!["urn:coevo:policy:unavailable".to_string()],
+        })
+    }
+
+    async fn dry_run(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError> {
+        self.validate_contract(contract).await
+    }
+
+    fn policy_version(&self) -> String {
+        "unavailable".to_string()
+    }
+
+    async fn evaluate_action(
+        &self,
+        action_urn: &str,
+        _contract: &MCLSpec,
+    ) -> Result<PolicyResult, PolicyEngineError> {
+        Ok(PolicyResult {
+            passed: false,
+            violations: vec![PolicyViolation {
+                policy_urn: action_urn.to_string(),
+                description: "policy engine unavailable".to_string(),
+                remediation: Some("set COEVO_ENABLE_MOCK_POLICY_ENGINE=1 for dev/test".to_string()),
+            }],
+            policy_version: "unavailable".to_string(),
+            policies_checked: vec![action_urn.to_string()],
+        })
+    }
+
+    async fn diff_policies(
+        &self,
+        _old_version: &str,
+        _new_version: &str,
+    ) -> Result<coevo_policy::traits::PolicyDiff, PolicyEngineError> {
+        Err(PolicyEngineError::Internal(
+            "policy engine unavailable".to_string(),
+        ))
+    }
+
+    async fn health_check(&self) -> Result<bool, PolicyEngineError> {
+        Ok(false)
+    }
+
+    async fn rollback(&mut self, _target_version: &str) -> Result<(), PolicyEngineError> {
+        Err(PolicyEngineError::Internal(
+            "policy engine unavailable".to_string(),
+        ))
+    }
 }
 
 #[cfg(test)]

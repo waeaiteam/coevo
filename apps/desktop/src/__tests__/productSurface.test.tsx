@@ -32,6 +32,13 @@ const api = vi.hoisted(() => ({
   seedEmployees: vi.fn(),
   listSkills: vi.fn(),
   seedSkills: vi.fn(),
+  listMcpServers: vi.fn(),
+  createMcpServer: vi.fn(),
+  updateMcpServer: vi.fn(),
+  deleteMcpServer: vi.fn(),
+  testMcpServer: vi.fn(),
+  connectMcpServer: vi.fn(),
+  listMcpServerTools: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
@@ -56,6 +63,13 @@ vi.mock("../api/client", () => ({
   seedEmployees: api.seedEmployees,
   listSkills: api.listSkills,
   seedSkills: api.seedSkills,
+  listMcpServers: api.listMcpServers,
+  createMcpServer: api.createMcpServer,
+  updateMcpServer: api.updateMcpServer,
+  deleteMcpServer: api.deleteMcpServer,
+  testMcpServer: api.testMcpServer,
+  connectMcpServer: api.connectMcpServer,
+  listMcpServerTools: api.listMcpServerTools,
 }));
 
 vi.mock("../components/BootPage", () => ({
@@ -85,6 +99,13 @@ describe("ordinary user product surface", () => {
     api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active" }]);
     api.seedEmployees.mockResolvedValue({ ok: true });
     api.seedSkills.mockResolvedValue({ ok: true });
+    api.listMcpServers.mockResolvedValue([]);
+    api.createMcpServer.mockResolvedValue({ ok: true });
+    api.updateMcpServer.mockResolvedValue({ ok: true });
+    api.deleteMcpServer.mockResolvedValue({ ok: true });
+    api.testMcpServer.mockResolvedValue({ ok: true });
+    api.connectMcpServer.mockResolvedValue({ ok: true });
+    api.listMcpServerTools.mockResolvedValue({ server_id: "srv", tools: [] });
   });
 
   afterEach(() => {
@@ -110,10 +131,9 @@ describe("ordinary user product surface", () => {
       "AI Employees",
       "Skills",
       "External Executors",
+      "MCP Servers",
       "Contracts",
-      "Plans",
       "Cognitive Customs",
-      "Risk Gate",
       "Resolution",
       "Data Management",
       "Developer Mode",
@@ -234,6 +254,36 @@ describe("ordinary user product surface", () => {
     expect(within(nav).queryByRole("link", { name: /^Skills$/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Executors/i })).not.toBeInTheDocument();
     expect(within(nav).queryByRole("link", { name: /Risk Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("routes legacy Plans and Risk Gate URLs to the real work surfaces", async () => {
+    localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");
+
+    render(
+      <MemoryRouter initialEntries={["/plans"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
+
+    expect(await screen.findByRole("heading", { name: /Task Center/i })).toBeInTheDocument();
+    expect(screen.queryByText("Execution Plans")).not.toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    localStorage.setItem(MODEL_PROVIDER_CONFIGURED_KEY, "true");
+
+    render(
+      <MemoryRouter initialEntries={["/risk"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Boot Ready" }));
+
+    expect(await screen.findByRole("heading", { name: /Risk rules/i })).toBeInTheDocument();
+    expect(screen.queryByText("Risk Gate")).not.toBeInTheDocument();
   });
 
   it("routes the Timeline entry to the company timeline page", async () => {

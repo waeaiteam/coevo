@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Opt-in deterministic mock adapter for dev/test callers. Off by default so a
+# release build never compiles or constructs a mock executor. Also auto-enabled
+# under `cfg(test)` for this crate's own tests.
+mock-adapters = []
+
 [dependencies]
 coevo-core.workspace = true
 serde.workspace = true
@@ -13,3 +19,7 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+tokio.workspace = true
+# Same version/features as coevo-models & coevo-adapters to avoid a duplicate
+# HTTP/TLS stack across the workspace.
+reqwest = { version = "0.12", features = ["json"] }

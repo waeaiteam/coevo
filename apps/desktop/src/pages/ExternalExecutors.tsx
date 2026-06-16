@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { disableExecutor, executorDryRun, executorHealth, listExecutors, listWorkOrders, registerExecutor } from "../api/client";
+import { disableExecutor, executorHealth, listExecutors, registerExecutor, listWorkOrders, executorDryRun } from "../api/client";
+import { useToast } from "../components/ToastProvider";
 import { t, useLanguage } from "../settings/i18n";
 
 const SOURCE_TYPES = ["Hermes", "OpenClaw", "MCP", "Local302AI", "Browser", "LocalProcess", "Docker"];
 
 export default function ExternalExecutors() {
   useLanguage();
+  const toast = useToast();
   const [execs, setExecs] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [showReg, setShowReg] = useState(false);
@@ -13,6 +15,7 @@ export default function ExternalExecutors() {
   const [workOrders, setWorkOrders] = useState<Record<string, unknown>[]>([]);
   const [dryRunId, setDryRunId] = useState("");
   const [dryRunResult, setDryRunResult] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function load() {
     setLoading(true);
@@ -58,19 +61,44 @@ export default function ExternalExecutors() {
         updated_at_ms: Date.now(),
       });
       setShowReg(false);
+      setNotice("");
       await load();
+      toast.success(t("toast.executor_registered"));
     } catch (e: unknown) {
-      alert(String(e));
+      setNotice(e instanceof Error ? e.message : String(e));
+      toast.error(`${t("toast.executor_register_failed")}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   async function dryRun(executorId: string, workOrderId: string) {
     setDryRunResult("");
+    setNotice("");
     try {
       const response = await executorDryRun(executorId, workOrderId);
       setDryRunResult(JSON.stringify(response));
+      toast.success(t("toast.executor_dry_run_done"));
     } catch (e: unknown) {
-      setDryRunResult("Error: " + (e instanceof Error ? e.message : String(e)));
+      setNotice("Dry run failed: " + (e instanceof Error ? e.message : String(e)));
+      toast.error(`${t("toast.executor_action_failed")}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function runHealth(executorId: string) {
+    try {
+      await executorHealth(executorId);
+      toast.success(t("toast.executor_health_ok"));
+    } catch (e: unknown) {
+      toast.error(`${t("toast.executor_action_failed")}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function runDisable(executorId: string) {
+    try {
+      await disableExecutor(executorId);
+      await load();
+      toast.info(t("toast.executor_disabled"));
+    } catch (e: unknown) {
+      toast.error(`${t("toast.executor_action_failed")}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -84,6 +112,9 @@ export default function ExternalExecutors() {
         <button onClick={() => setShowReg(!showReg)} className="px-3 py-1.5 text-xs rounded-md text-white" style={{ background: "var(--accent)" }}>+ {t("executors.register_new")}</button>
       </div>
       <div className="text-xs p-3 rounded" style={{ background: "var(--accent-dim)", color: "var(--accent)" }}>{t("executors.desc")}</div>
+      <div className="text-xs p-3 rounded" style={{ background: "var(--yellow-dim)", color: "var(--yellow)" }}>
+        {t("executors.alpha_note")}
+      </div>
 
       {showReg && (
         <div className="card space-y-2">
@@ -99,6 +130,7 @@ export default function ExternalExecutors() {
       )}
 
       {loading && <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("executors.loading")}</div>}
+      {notice && <div className="text-xs p-3 rounded" style={{ background: "var(--red-dim)", color: "var(--red)" }}>{notice}</div>}
       <div className="grid gap-2 md:grid-cols-2">
         {execs.map((executor, index) => (
           <div key={String(executor.executor_id || index)} className="card">
@@ -110,8 +142,8 @@ export default function ExternalExecutors() {
               <div>Type: {executor.source_type as string} | Sandbox: {executor.sandbox_level as string} | Risk: {String(executor.risk_ceiling)}</div>
               <div className="font-mono text-xs" style={{ color: "var(--accent)" }}>{executor.executor_id as string}</div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button onClick={() => executorHealth(executor.executor_id as string)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("executors.health")}</button>
-                <button onClick={() => disableExecutor(executor.executor_id as string).then(load)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{t("executors.disable")}</button>
+                <button onClick={() => runHealth(executor.executor_id as string)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("executors.health")}</button>
+                <button onClick={() => runDisable(executor.executor_id as string)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{t("executors.disable")}</button>
                 <select value={dryRunId} onChange={(event) => setDryRunId(event.target.value)} className="text-xs px-1 py-1 rounded border" style={{ borderColor: "var(--border-accent)", color: "var(--text-secondary)" }}>
                   <option value="">{t("executors.select_work_order")}</option>
                   {workOrders.map((workOrder, itemIndex) => <option key={itemIndex} value={workOrder.work_order_id as string}>{(workOrder.mission_intent as string || "").slice(0, 30)}</option>)}

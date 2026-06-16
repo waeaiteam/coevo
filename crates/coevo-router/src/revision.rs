@@ -61,14 +61,39 @@ impl PlanRevision {
             .cloned()
             .collect();
 
+        // Namespace the rebuilt steps' blackboard keys with the revised plan's
+        // parent hash (= the current plan's hash, a stable per-plan id known
+        // before the new hash is computed). Without a prefix, rebuilt steps emit
+        // bare `step-{i}-output` keys that collide with every other plan's
+        // outputs on the shared blackboard; prefixing keeps each revision's
+        // outputs in their own namespace. Preserved configs are copied verbatim
+        // so they retain the exact output keys already written.
+        let revision_scope_id = scope_id(&current_plan.plan_hash);
+        let key_for = |step: u32| format!("{revision_scope_id}:step-{step}-output");
+
         let remaining_start = new_configs.len() as u32;
+        // The first rebuilt step consumes the last preserved step's output; use
+        // that preserved config's actual (already-prefixed) output key so the
+        // cross-reference resolves, rather than a fabricated bare key.
+        let boundary_input: Option<String> = remaining_start
+            .checked_sub(1)
+            .and_then(|idx| new_configs.get(idx as usize))
+            .and_then(|c| c.output_keys.first().cloned());
+
         for (i, agent_id) in remaining_agents.iter().enumerate() {
+            let step = remaining_start + i as u32;
+            let input_keys = if i == 0 {
+                // Bridge into the preserved tail (if any).
+                boundary_input.clone().into_iter().collect()
+            } else {
+                vec![key_for(step - 1)]
+            };
             new_configs.push(coevo_core::plan::AgentSlotConfig {
                 agent_id: agent_id.clone(),
                 role: "Synthesizer".to_string(),
-                step_index: remaining_start + i as u32,
-                input_keys: vec![format!("step-{}-output", remaining_start as i32 - 1)],
-                output_keys: vec![format!("step-{}-output", remaining_start + i as u32)],
+                step_index: step,
+                input_keys,
+                output_keys: vec![key_for(step)],
                 timeout_ms: 30_000,
             });
         }
@@ -111,4 +136,14 @@ pub enum RevisionError {
     NoAgentsAvailable,
     #[error("serialization error: {0}")]
     Serialization(String),
+}
+
+/// Short, stable blackboard-key namespace derived from a plan hash. Matches the
+/// 16-hex-char convention used by [`crate::pcdt::PcdtRouter`] so revised and
+/// original plans namespace their step outputs the same way.
+fn scope_id(plan_hash: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(plan_hash.as_bytes());
+    let full = hex::encode(hasher.finalize());
+    full[..16].to_string()
 }

@@ -5,10 +5,11 @@
 //! CRITICAL: Green Track CANNOT bypass CognitiveCustoms.
 //! All writes MUST go through Propose with provenance envelopes.
 
-use coevo_core::cognitive::{CognitiveLayer, ProvenanceEnvelope};
+use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::contract::ContractState;
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_customs::propose::CognitiveCustoms;
+use coevo_customs::provenance::ProvenanceSigner;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
 use coevo_router::pcdt::PcdtRouter;
@@ -142,21 +143,24 @@ impl GreenTrackRunner {
             "agent": agent_ids.first().cloned().unwrap_or_default(),
         });
 
-        // Build provenance envelope for the Hypothesis
-        let provenance = ProvenanceEnvelope {
-            source_agent_id: agent_ids.first().cloned().unwrap_or_default(),
-            verification_tool_urn: "urn:mcp:tool:unit-test-runner".to_string(),
-            environmental_scope: coevo_core::cognitive::EnvironmentalScope {
-                environment: coevo_core::cognitive::Environment::Development,
-                tenant_id: tenant_id.to_string(),
-            },
-            ttl_seconds: 3600,
-            cryptographic_signature: "green-track-signature".to_string(),
-            verification_report: Some(serde_json::json!({"passed": true})),
-            created_at: chrono::Utc::now(),
-        };
+        // Build a real, Ed25519-signed provenance envelope for the Hypothesis
+        // (no more literal "green-track-signature" placeholder). The signature
+        // is bound to `hypothesis_value`, so it would also pass cryptographic
+        // verification if this entry were ever promoted to a Fact/Decision.
+        let provenance = ProvenanceSigner::new(
+            agent_ids.first().cloned().unwrap_or_default(),
+            "urn:mcp:tool:unit-test-runner",
+        )
+        .with_scope(coevo_core::cognitive::EnvironmentalScope {
+            environment: coevo_core::cognitive::Environment::Development,
+            tenant_id: tenant_id.to_string(),
+        })
+        .with_ttl_seconds(3600)
+        .with_verification_report(serde_json::json!({"passed": true}))
+        .sign(&hypothesis_value);
 
         // MUST go through CognitiveCustoms.Propose — cannot bypass.
+        // Brand-new key (fresh UUID) ⇒ expected_version = 0 is correct per OCC.
         let receipt = CognitiveCustoms::propose(
             pool,
             &hypothesis_key,

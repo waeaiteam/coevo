@@ -30,7 +30,14 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
 
 /// Create an in-memory pool for testing.
 pub async fn create_test_pool() -> Result<SqlitePool, sqlx::Error> {
-    create_pool("sqlite::memory:").await
+    let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
 }
 
 #[cfg(test)]

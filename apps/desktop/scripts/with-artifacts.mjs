@@ -1,8 +1,11 @@
 import { spawn } from "child_process";
 import { mkdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
-const defaultArtifactRoot = `D:\\${"\u7f16\u8bd1\u4ea7\u7269"}\\coevo`;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..", "..");
+const defaultArtifactRoot = join(repoRoot, ".artifacts");
 const artifactRoot = process.env.COEVO_BUILD_ARTIFACT_DIR || defaultArtifactRoot;
 const args = process.argv.slice(2);
 const localBinDir = join(process.cwd(), "node_modules", ".bin");
@@ -21,7 +24,24 @@ if (args.length === 0) {
 const cargoTargetDir = process.env.CARGO_TARGET_DIR || join(artifactRoot, "cargo-target");
 const npmCacheDir = process.env.npm_config_cache || join(artifactRoot, "npm-cache");
 const nodeBinDir = dirname(process.execPath);
-const rustToolchain = process.env.COEVO_RUST_TOOLCHAIN || process.env.RUSTUP_TOOLCHAIN || "1.96.0-x86_64-pc-windows-msvc";
+// Default toolchain is platform-aware so non-Windows hosts (macOS / Linux) do
+// not try to invoke a Windows MSVC toolchain that does not exist. Override with
+// COEVO_RUST_TOOLCHAIN / RUSTUP_TOOLCHAIN when you need a specific channel.
+const defaultToolchainForHost = () => {
+  const v = "1.96.0";
+  if (process.platform === "win32") return `${v}-x86_64-pc-windows-msvc`;
+  if (process.platform === "darwin")
+    return process.arch === "arm64"
+      ? `${v}-aarch64-apple-darwin`
+      : `${v}-x86_64-apple-darwin`;
+  return process.arch === "arm64"
+    ? `${v}-aarch64-unknown-linux-gnu`
+    : `${v}-x86_64-unknown-linux-gnu`;
+};
+const rustToolchain =
+  process.env.COEVO_RUST_TOOLCHAIN ||
+  process.env.RUSTUP_TOOLCHAIN ||
+  defaultToolchainForHost();
 
 for (const dir of [
   artifactRoot,

@@ -56,7 +56,7 @@ const spanIcons: Record<string, IconName> = {
 function normalizeEventLabel(type: string, fallback?: string) {
   const mapped = t(`timeline.event.${type}`);
   if (mapped !== `timeline.event.${type}`) return mapped;
-  return fallback || type;
+  return (fallback || type).replace(/([a-z0-9])([A-Z])/g, "$1 $2");
 }
 
 function eventToSpan(event: TimelineEvent): TimelineSpan {
@@ -144,6 +144,7 @@ export default function GovernanceTimeline({
                 <button
                   type="button"
                   className="span-summary"
+                  aria-label={span.type === "ApprovalRequired" ? t("timeline.approval_title") : normalizeEventLabel(span.type, span.label || span.type)}
                   onClick={() => setExpanded((prev) => ({ ...prev, [span.id]: !isOpen }))}
                 >
                   <span className="span-icon" aria-hidden="true">{spanIcons[span.type] || "•"}</span>
@@ -229,8 +230,8 @@ function ApprovalCard({
         onChange={(event) => onComment(event.target.value)}
       />
       <div className="approval-actions">
-        <button type="button" onClick={onApprove}>{t("timeline.approval_approve")}</button>
-        <button type="button" onClick={onReject}>{t("timeline.approval_reject")}</button>
+        <button type="button" aria-label={t("timeline.approval_approve")} onClick={onApprove}>{t("timeline.approval_approve")}</button>
+        <button type="button" aria-label={t("timeline.approval_reject")} onClick={onReject}>{t("timeline.approval_reject")}</button>
       </div>
     </div>
   );

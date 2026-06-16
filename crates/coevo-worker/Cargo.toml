@@ -6,11 +6,15 @@ license.workspace = true
 
 [dependencies]
 coevo-core.workspace = true
+coevo-evolution.workspace = true
 coevo-store.workspace = true
 coevo-models.workspace = true
 coevo-policy.workspace = true
 coevo-risk.workspace = true
 coevo-reputation.workspace = true
+coevo-executors.workspace = true
+coevo-adapters.workspace = true
+coevo-audit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -20,6 +24,7 @@ chrono.workspace = true
 uuid.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 reqwest = { version = "0.12", features = ["json"] }
 url.workspace = true
 sha2.workspace = true

@@ -68,31 +68,37 @@ impl MemoryRepo {
                 "Fact memory requires provenance".to_string(),
             ));
         }
-        sqlx::query("INSERT INTO memory_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&m.memory_id)
-            .bind(memory_scope_to_db(m.scope))
-            .bind(&m.owner_id)
-            .bind(&m.title)
-            .bind(&m.content)
-            .bind(serde_json::to_string(&m.tags).unwrap())
-            .bind(&m.source)
-            .bind(&m.provenance)
-            .bind(m.confidence)
-            .bind(m.ttl_seconds)
-            .bind(m.created_at_ms as i64)
-            .bind(m.updated_at_ms as i64)
-            .bind(&m.access_policy)
-            .bind(memory_status_to_db(m.status))
-            .bind(
-                serde_json::to_string(&m.cognitive_layer)
-                    .unwrap()
-                    .trim_matches('"'),
-            )
-            .bind(&m.linked_contract_hash)
-            .bind(&m.linked_plan_hash)
-            .bind(&m.linked_adr_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO memory_records (\
+                memory_id, scope, owner_id, title, content, tags_json, source, provenance, \
+                confidence, ttl_seconds, created_at_ms, updated_at_ms, access_policy, status, \
+                cognitive_layer, linked_contract_hash, linked_plan_hash, linked_adr_id\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(&m.memory_id)
+        .bind(memory_scope_to_db(m.scope))
+        .bind(&m.owner_id)
+        .bind(&m.title)
+        .bind(&m.content)
+        .bind(serde_json::to_string(&m.tags).unwrap())
+        .bind(&m.source)
+        .bind(&m.provenance)
+        .bind(m.confidence)
+        .bind(m.ttl_seconds)
+        .bind(m.created_at_ms as i64)
+        .bind(m.updated_at_ms as i64)
+        .bind(&m.access_policy)
+        .bind(memory_status_to_db(m.status))
+        .bind(
+            serde_json::to_string(&m.cognitive_layer)
+                .unwrap()
+                .trim_matches('"'),
+        )
+        .bind(&m.linked_contract_hash)
+        .bind(&m.linked_plan_hash)
+        .bind(&m.linked_adr_id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 

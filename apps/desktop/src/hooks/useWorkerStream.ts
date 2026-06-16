@@ -3,6 +3,20 @@ import { streamWorkerRunEvents } from '../api/client';
 
 export type StreamState = 'idle' | 'connecting' | 'streaming' | 'completed' | 'error';
 
+export interface ToolExecution {
+  index: number;
+  tool_name: string;
+  arguments: string;
+  status: 'running' | 'completed' | 'failed';
+  result?: string;
+  duration_ms?: number;
+}
+
+export interface StreamUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 export interface UseWorkerStreamOptions {
   runId: string;
   onDelta?: (text: string) => void;
@@ -14,10 +28,29 @@ export interface UseWorkerStreamOptions {
 export interface StreamController {
   state: StreamState;
   content: string;
+  reasoning: string;
+  toolCalls: Array<{ index: number; arguments: string }>;
+  toolExecutions: ToolExecution[];
+  usage: StreamUsage | null;
   error: Error | null;
+  reconnecting: boolean;
+  reconnectAttempt: number;
   start: () => void;
   stop: () => void;
   retry: () => void;
+}
+
+function parsePayload(event: Record<string, unknown>): Record<string, unknown> {
+  const payload = event.payload;
+  if (payload && typeof payload === 'object') return payload as Record<string, unknown>;
+  const raw = String(event.payload_json || '');
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 export function useWorkerStream({
@@ -29,9 +62,22 @@ export function useWorkerStream({
 }: UseWorkerStreamOptions): StreamController {
   const [state, setState] = useState<StreamState>('idle');
   const [content, setContent] = useState('');
+  const [reasoning, setReasoning] = useState('');
+  const [toolCalls, setToolCalls] = useState<Array<{ index: number; arguments: string }>>([]);
+  const [toolExecutions, setToolExecutions] = useState<ToolExecution[]>([]);
+  const [usage, setUsage] = useState<StreamUsage | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const closeRef = useRef<(() => void) | null>(null);
+  const stateRef = useRef<StreamState>('idle');
   const contentRef = useRef('');
+  const reasoningRef = useRef('');
+  const toolCallsRef = useRef<Array<{ index: number; arguments: string }>>([]);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const stop = useCallback(() => {
     if (closeRef.current) {
@@ -42,38 +88,123 @@ export function useWorkerStream({
   }, []);
 
   const start = useCallback(() => {
-    if (state === 'streaming' || state === 'connecting') return;
+    if (stateRef.current === 'streaming' || stateRef.current === 'connecting') return;
 
     setState('connecting');
     setError(null);
+    setReconnecting(false);
+    setReconnectAttempt(0);
     contentRef.current = '';
+    reasoningRef.current = '';
+    toolCallsRef.current = [];
     setContent('');
+    setReasoning('');
+    setToolCalls([]);
+    setToolExecutions([]);
+    setUsage(null);
 
     const cleanup = streamWorkerRunEvents(
       runId,
       (event) => {
-        if (event.event_type === 'AssistantDelta') {
-          const delta = String(event.delta || '');
-          contentRef.current += delta;
-          setContent(contentRef.current);
-          setState('streaming');
-          onDelta?.(delta);
-        } else if (event.event_type === 'LifecycleEnd') {
-          setState('completed');
-          onComplete?.(contentRef.current);
-          closeRef.current = null;
+        const eventType = String(event.event_type || '');
+        const payload = parsePayload(event);
+
+        switch (eventType) {
+          case 'AssistantDelta':
+          case 'ContentDelta': {
+            const delta = String(payload.delta ?? event.delta ?? '');
+            contentRef.current += delta;
+            setContent(contentRef.current);
+            setState('streaming');
+            onDelta?.(delta);
+            break;
+          }
+          case 'ReasoningDelta': {
+            const delta = String(payload.delta ?? event.delta ?? '');
+            reasoningRef.current += delta;
+            setReasoning(reasoningRef.current);
+            setState('streaming');
+            break;
+          }
+          case 'ToolCallDelta': {
+            const idx = Number(payload.index ?? 0);
+            const argDelta = String(payload.arguments ?? '');
+            const existing = toolCallsRef.current.find((tc) => tc.index === idx);
+            if (existing) {
+              existing.arguments += argDelta;
+            } else {
+              toolCallsRef.current.push({ index: idx, arguments: argDelta });
+            }
+            setToolCalls([...toolCallsRef.current]);
+            setState('streaming');
+            break;
+          }
+          case 'ToolStart': {
+            const exec: ToolExecution = {
+              index: toolCallsRef.current.length,
+              tool_name: String(payload.tool_name ?? payload.name ?? ''),
+              arguments: String(payload.arguments ?? ''),
+              status: 'running',
+            };
+            setToolExecutions((prev) => [...prev, exec]);
+            setState('streaming');
+            break;
+          }
+          case 'ToolEnd': {
+            const toolName = String(payload.tool_name ?? payload.name ?? '');
+            setToolExecutions((prev) =>
+              prev.map((te) =>
+                te.tool_name === toolName && te.status === 'running'
+                  ? {
+                      ...te,
+                      status: (payload.error ? 'failed' : 'completed') as ToolExecution['status'],
+                      result: String(payload.result ?? payload.output ?? ''),
+                      duration_ms: Number(payload.duration_ms ?? 0),
+                    }
+                  : te,
+              ),
+            );
+            break;
+          }
+          case 'Usage': {
+            setUsage({
+              prompt_tokens: Number(payload.prompt_tokens ?? 0),
+              completion_tokens: Number(payload.completion_tokens ?? 0),
+            });
+            break;
+          }
+          case 'Done':
+          case 'LifecycleEnd': {
+            setState('completed');
+            if (reasoningRef.current) setReasoning(reasoningRef.current);
+            onComplete?.(contentRef.current);
+            closeRef.current = null;
+            break;
+          }
+          default:
+            break;
         }
       },
       () => {
         const err = new Error('SSE connection failed, falling back to polling');
         setError(err);
         setState('error');
+        setReconnecting(false);
         onError?.(err);
-      }
+      },
+      {
+        onReconnecting: (attempt) => {
+          setReconnecting(true);
+          setReconnectAttempt(attempt);
+        },
+        onReconnected: () => {
+          setReconnecting(false);
+        },
+      },
     );
 
     closeRef.current = cleanup;
-  }, [runId, state, onDelta, onComplete, onError]);
+  }, [runId, onDelta, onComplete, onError]);
 
   const retry = useCallback(() => {
     stop();
@@ -85,9 +216,13 @@ export function useWorkerStream({
       start();
     }
     return () => {
-      stop();
+      if (closeRef.current) {
+        closeRef.current();
+        closeRef.current = null;
+      }
+      stateRef.current = 'idle';
     };
-  }, [autoStart, start, stop]);
+  }, [autoStart, runId, start]);
 
-  return { state, content, error, start, stop, retry };
+  return { state, content, reasoning, toolCalls, toolExecutions, usage, error, reconnecting, reconnectAttempt, start, stop, retry };
 }

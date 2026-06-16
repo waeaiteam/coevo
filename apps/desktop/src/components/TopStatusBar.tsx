@@ -4,43 +4,33 @@ import { t, useLanguage } from "../settings/i18n";
 
 export default function TopStatusBar() {
   useLanguage();
-  const [status, setStatus] = useState({ ok: false, version: "-", latency: 0 });
-  const [now, setNow] = useState(() => new Date());
+  const [status, setStatus] = useState({ ok: false, version: "-" });
 
   useEffect(() => {
     let mounted = true;
     async function check() {
-      const start = Date.now();
       try {
         const h = await getHealth();
-        if (mounted) setStatus({ ok: h.status === "ok", version: h.version, latency: Date.now() - start });
+        if (mounted) setStatus({ ok: h.status === "ok", version: h.version });
       } catch {
-        if (mounted) setStatus({ ok: false, version: "-", latency: 0 });
+        if (mounted) setStatus({ ok: false, version: "-" });
       }
     }
     check();
-    const healthTimer = setInterval(check, 15000);
-    const clockTimer = setInterval(() => setNow(new Date()), 1000);
+    const timer = setInterval(check, 30000);
     return () => {
       mounted = false;
-      clearInterval(healthTimer);
-      clearInterval(clockTimer);
+      clearInterval(timer);
     };
   }, []);
 
   return (
-    <div className="top-status flex items-center gap-4 px-5 py-2 text-xs">
-      <div className="flex items-center gap-1.5">
-        <span className={`status-dot ${status.ok ? "online pulse" : "offline"}`} />
-        <span className={status.ok ? "status-online" : "status-offline"}>
-          {status.ok ? t("top.online") : t("top.offline")}
-        </span>
-      </div>
-      <span className="hidden sm:inline">{t("top.local_runtime")}</span>
-      <span>v{status.version}</span>
-      <span>{status.latency}ms</span>
-      <div className="flex-1" />
-      <span>{now.toLocaleTimeString()}</span>
+    <div className="top-status flex items-center gap-3 px-4 py-1.5 text-[11px]" data-tauri-drag-region="">
+      <div className="flex-1" data-tauri-drag-region="" />
+      <span className={`status-dot ${status.ok ? "online" : "offline"}`} />
+      <span style={{ color: status.ok ? "var(--green)" : "var(--red)" }}>
+        {status.ok ? t("top.online") : t("top.offline")}
+      </span>
     </div>
   );
 }

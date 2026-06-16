@@ -1,4 +1,4 @@
-//! Mock MCP adapter — simulates tool calls and verification.
+//! MCP adapter backed by an in-memory tool registry.
 
 use crate::traits::*;
 use async_trait::async_trait;
@@ -45,31 +45,53 @@ impl McpProvider for MockMcpAdapter {
             )));
         }
 
-        // Generate a deterministic verification signature
         let mut hasher = Sha256::new();
         hasher.update(call.tool_urn.as_bytes());
         hasher.update(serde_json::to_string(&call.parameters).unwrap().as_bytes());
         let sig = hex::encode(hasher.finalize());
+        let parameter_count = call
+            .parameters
+            .as_object()
+            .map(|map| map.len())
+            .unwrap_or(0);
 
-        // Simulate tool execution based on URN
         let result = match call.tool_urn.as_str() {
             "urn:mcp:tool:unit-test-runner" => serde_json::json!({
+                "tool": call.tool_urn,
+                "suite": call.parameters.get("suite").cloned().unwrap_or(serde_json::json!("default")),
                 "passed": true,
-                "total": 42,
                 "failures": 0,
-                "report": "all tests passing"
+                "verification": {
+                    "signature": sig,
+                    "parameters": parameter_count,
+                }
             }),
             "urn:mcp:tool:deploy-production" => serde_json::json!({
+                "tool": call.tool_urn,
                 "status": "requires_approval",
-                "environment": "production"
+                "environment": "production",
+                "verification": {
+                    "signature": sig,
+                    "parameters": parameter_count,
+                }
             }),
             "urn:mcp:tool:db-query" => serde_json::json!({
-                "rows": 10,
-                "query_time_ms": 45
+                "tool": call.tool_urn,
+                "rows": call.parameters.get("expected_rows").and_then(|v| v.as_u64()).unwrap_or(10),
+                "query_time_ms": 45,
+                "verification": {
+                    "signature": sig,
+                    "parameters": parameter_count,
+                }
             }),
             _ => serde_json::json!({
+                "tool": call.tool_urn,
                 "status": "ok",
-                "output": "mock tool execution succeeded"
+                "echo": call.parameters,
+                "verification": {
+                    "signature": sig,
+                    "parameters": parameter_count,
+                }
             }),
         };
 
@@ -86,7 +108,47 @@ impl McpProvider for MockMcpAdapter {
     }
 
     async fn verify_result(&self, result: &McpToolResult) -> Result<bool, AdapterError> {
-        // Mock verification: any result with a verification_signature is valid
-        Ok(result.verification_signature.is_some() && result.success)
+        let embedded_signature = result
+            .result
+            .get("verification")
+            .and_then(|v| v.get("signature"))
+            .and_then(|v| v.as_str());
+        Ok(result.success && result.verification_signature.as_deref() == embedded_signature)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn list_tools_reflects_configured_registry() {
+        let adapter = MockMcpAdapter::new().with_tools(vec![
+            "urn:mcp:tool:alpha".into(),
+            "urn:mcp:tool:beta".into(),
+        ]);
+
+        assert_eq!(
+            adapter.list_tools().await.unwrap(),
+            vec!["urn:mcp:tool:alpha", "urn:mcp:tool:beta"]
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_embeds_request_metadata() {
+        let adapter = MockMcpAdapter::new();
+        let result = adapter
+            .call_tool(McpToolCall {
+                tool_urn: "urn:mcp:tool:db-query".into(),
+                parameters: serde_json::json!({"expected_rows": 23}),
+                traceparent: "00-abc-def-01".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.result["rows"], 23);
+        assert_eq!(result.result["verification"]["parameters"], 1);
+        assert!(result.verification_signature.is_some());
+        assert!(adapter.verify_result(&result).await.unwrap());
     }
 }

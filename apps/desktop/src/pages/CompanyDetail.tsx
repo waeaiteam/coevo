@@ -100,6 +100,31 @@ export default function CompanyDetail() {
             </div>
           </section>
 
+          <section className="product-panel">
+            <div className="product-panel-heading">
+              <h2>{t("company.brief")}</h2>
+            </div>
+            <p className="product-prose" style={{ marginTop: -4 }}>{t("company.brief_hint")}</p>
+            <div className="product-grid-2 mt-3">
+              <Link to={`/companies/${encodeURIComponent(opcId)}/meetings`} className="product-card-row">
+                <strong><Icon name="users" /> {t("org.meetings")}</strong>
+                <span>{t("meet.subtitle")}</span>
+              </Link>
+              <Link to={`/companies/${encodeURIComponent(opcId)}/performance`} className="product-card-row">
+                <strong><Icon name="gauge" /> {t("org.performance")}</strong>
+                <span>{t("kpi.subtitle")}</span>
+              </Link>
+              <Link to={`/companies/${encodeURIComponent(opcId)}/reports`} className="product-card-row">
+                <strong><Icon name="file-text" /> {t("org.reports")}</strong>
+                <span>{t("report.subtitle")}</span>
+              </Link>
+              <Link to={`/companies/${encodeURIComponent(opcId)}/cost`} className="product-card-row">
+                <strong><Icon name="database" /> {t("org.cost")}</strong>
+                <span>{t("cost.subtitle")}</span>
+              </Link>
+            </div>
+          </section>
+
           <section className="product-metrics-grid" aria-label={t("companies.title")}>
             <div className="product-metric">
               <div className="product-metric-value">{detail?.employee_count ?? 0}</div>

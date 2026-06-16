@@ -73,6 +73,11 @@ pub enum WorkerEventType {
     LifecycleEnd,
     LifecycleError,
     AssistantDelta,
+    ReasoningDelta,
+    ContentDelta,
+    ToolCallDelta,
+    Usage,
+    Done,
     ToolStart,
     ToolUpdate,
     ToolEnd,
@@ -91,6 +96,25 @@ pub enum ToolType {
     MCPMock,
     LocalProcessSandbox,
     ExternalExecutor,
+    Mcp,
+    Browser,
+}
+
+impl ToolType {
+    /// Canonical string persisted in `worker_tool_calls.tool_type` (kept in sync
+    /// with the CHECK constraint in migration 052).
+    pub fn db_value(&self) -> &'static str {
+        match self {
+            ToolType::GitHubReadonly => "GitHubReadonly",
+            ToolType::FileReadonly => "FileReadonly",
+            ToolType::BrowserMock => "BrowserMock",
+            ToolType::MCPMock => "MCPMock",
+            ToolType::LocalProcessSandbox => "LocalProcessSandbox",
+            ToolType::ExternalExecutor => "ExternalExecutor",
+            ToolType::Mcp => "MCP",
+            ToolType::Browser => "Browser",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +266,8 @@ pub struct MemoryContext {
     pub user_profile: Option<serde_json::Value>,
     pub company_profile: Vec<serde_json::Value>,
     pub company_memory: Vec<serde_json::Value>,
+    pub company_shared_files: Vec<serde_json::Value>,
+    pub employee_persona_files: Vec<serde_json::Value>,
     pub agent_memory: Vec<serde_json::Value>,
     pub task_memory: Vec<serde_json::Value>,
     pub relevant_skill_memory: Vec<serde_json::Value>,

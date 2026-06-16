@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { getWorkOrderTimeline, listWorkOrders } from "../api/client";
+import { getActiveOpcId } from "../api/companies";
+import { getCompanyWorkOrderTimeline, listCompanyWorkOrders } from "../api/org";
 import GovernanceTimeline, { type TimelineSpan } from "../components/GovernanceTimeline";
+import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import { t, useLanguage } from "../settings/i18n";
+import { extractWorkOrderResult } from "../utils/workOrderResult";
 import {
   extractProjectNameFromText,
   shortText,
@@ -58,9 +61,18 @@ function nextAction(status: string, track: string): string {
   return t("tasks.next_execute");
 }
 
+function taskExplain(status: string, track: string): string {
+  if (track === "red") return t("tasks.blocked_explain");
+  if (status === "Completed") return t("tasks.completed_explain");
+  if (track === "yellow" || status === "WaitingApproval") return t("tasks.confirm_explain");
+  if (status === "Failed") return t("tasks.failed_explain");
+  return t("tasks.ready_explain");
+}
+
 export default function TaskDetail() {
   useLanguage();
   const params = useParams();
+  const activeOpcId = useMemo(() => getActiveOpcId(), []);
   const [tasks, setTasks] = useState<ProductRow[]>([]);
   const [timeline, setTimeline] = useState<ProductRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +82,7 @@ export default function TaskDetail() {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    void listWorkOrders()
+    void listCompanyWorkOrders(activeOpcId)
       .then((rows) => {
         if (alive) setTasks(Array.isArray(rows) ? rows as ProductRow[] : []);
       })
@@ -83,7 +95,7 @@ export default function TaskDetail() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [activeOpcId]);
 
   const task = useMemo(
     () => tasks.find((row) => stringField(row, "work_order_id") === requestedId) || tasks[0],
@@ -94,12 +106,13 @@ export default function TaskDetail() {
   const track = stringField(task, "track");
   const project = extractProjectNameFromText(stringField(task, "mission_intent")) || t("projects.general_workspace");
   const spans = useMemo(() => timelineRowsToSpans(timeline), [timeline]);
+  const result = useMemo(() => extractWorkOrderResult(timeline), [timeline]);
 
   useEffect(() => {
     if (!taskId) return;
     let alive = true;
     setTimelineLoading(true);
-    void getWorkOrderTimeline(taskId)
+    void getCompanyWorkOrderTimeline(activeOpcId, taskId)
       .then((rows) => {
         if (alive) setTimeline(Array.isArray(rows) ? rows as ProductRow[] : []);
       })
@@ -112,7 +125,7 @@ export default function TaskDetail() {
     return () => {
       alive = false;
     };
-  }, [taskId]);
+  }, [activeOpcId, taskId]);
 
   if (!task && !loading) {
     return (
@@ -147,7 +160,7 @@ export default function TaskDetail() {
             <div>
               <span className={`product-pill ${taskStatusTone(status, track)}`}>{taskStatusLabel(status)}</span>
               <h2>{nextAction(status, track)}</h2>
-              <p>{track === "red" ? t("tasks.blocked_explain") : track === "yellow" || status === "WaitingApproval" ? t("tasks.confirm_explain") : t("tasks.ready_explain")}</p>
+              <p>{taskExplain(status, track)}</p>
             </div>
             <div className="task-hero-actions">
               {track === "red" ? (
@@ -157,7 +170,7 @@ export default function TaskDetail() {
               ) : status === "Completed" ? (
                 <a href="#task-result" className="primary-button product-action">{t("workorders.view_result")}</a>
               ) : (
-                <Link to="/work-orders" className="primary-button product-action">{t("workorders.execute")}</Link>
+                <Link to="/work-orders" className="primary-button product-action">{t("mission.start_task")}</Link>
               )}
             </div>
           </section>
@@ -180,7 +193,7 @@ export default function TaskDetail() {
           <section id="task-result" className="product-panel">
             <div className="product-panel-heading">
               <h2>{t("tasks.result")}</h2>
-              <span>{timeline.length} {t("workorders.events")}</span>
+              <span>{result.eventCount || timeline.length} {t("workorders.events")}</span>
             </div>
             <p className="product-prose">
               {status === "Completed"
@@ -191,6 +204,18 @@ export default function TaskDetail() {
                     ? t("tasks.result_failed")
                     : t("tasks.result_pending")}
             </p>
+            {result.finalText && (
+              <div className="task-result-body">
+                <SimpleMarkdown content={result.finalText} className="product-prose" />
+              </div>
+            )}
+            {status === "Completed" && result.totalTokens > 0 && (
+              <div className="task-result-metrics">
+                <span className="mono-chip">{result.totalTokens.toLocaleString()} tokens</span>
+                <span className="mono-chip">{t("stream.prompt_tokens")}: {result.promptTokens.toLocaleString()}</span>
+                <span className="mono-chip">{t("stream.completion_tokens")}: {result.completionTokens.toLocaleString()}</span>
+              </div>
+            )}
           </section>
 
           <section className="product-panel timeline-panel">

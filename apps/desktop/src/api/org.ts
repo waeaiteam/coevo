@@ -1,0 +1,416 @@
+import {
+  get,
+  post,
+  put,
+  decideWorkOrderApproval,
+  listEmployees,
+  listMemory,
+  listWorkOrders,
+  listConversations,
+  createConversation,
+  listConversationMessages,
+  appendConversationMessage,
+  getCompanyProfile,
+  getAgentGrowth,
+  approveSkillProposal,
+} from "./client";
+
+const companyPath = (opcId: string) => `/companies/${encodeURIComponent(opcId)}`;
+
+type Row = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Row {
+  return typeof value === "object" && value !== null;
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : value == null ? fallback : String(value);
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export type MeetingSummary = {
+  meeting_id: string;
+  topic: string;
+  status: string;
+  created_at_ms: number;
+};
+
+export type MeetingTurn = {
+  agent_id: string;
+  stance: string;
+  text: string;
+};
+
+export type MeetingDetail = {
+  meeting_id: string;
+  topic: string;
+  status: string;
+  agenda: string;
+  transcript: MeetingTurn[];
+  resolution_md: string;
+  responsibility_anchor: string;
+  created_at_ms: number;
+};
+
+export type KpiRecord = {
+  work_order_id: string;
+  scores: Record<string, number>;
+  reviewer: string;
+  comment?: string;
+  created_at_ms: number;
+};
+
+export type ReportSummary = {
+  report_id: string;
+  period: string;
+  created_at_ms: number;
+};
+
+export type ReportAlert = {
+  severity: "info" | "warning" | "critical";
+  message: string;
+};
+
+export type ReportDetail = {
+  report_id: string;
+  period: string;
+  report_md: string;
+  kpi_summary: Array<{ department: string; score: number }>;
+  token_usage: Array<{ department: string; tokens: number; cost_usd: number }>;
+  alerts: ReportAlert[];
+  created_at_ms: number;
+};
+
+export type CostDepartment = {
+  dept: string;
+  tokens: number;
+  cost_usd: number;
+  quota?: number;
+};
+
+export type CostOverview = {
+  by_department: CostDepartment[];
+  total: number;
+};
+
+export type CompanyAuditEvent = {
+  id: string;
+  event_type: string;
+  contract_hash?: string | null;
+  agent_id?: string | null;
+  traceparent?: string | null;
+  tenant_id: string;
+  event_data_json: string;
+  recorded_at_ms: number;
+};
+
+export async function listCompanyEmployees(opcId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/employees`));
+  } catch {
+    return asArray<Row>(await listEmployees());
+  }
+}
+
+export async function listCompanySkills(opcId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/skills`));
+  } catch {
+    return [];
+  }
+}
+
+export async function getCompanyEmployee(
+  opcId: string,
+  agentId: string,
+): Promise<Row | null> {
+  try {
+    const detail = await get<Row>(`${companyPath(opcId)}/employees/${encodeURIComponent(agentId)}`);
+    return isRecord(detail) ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCompanyProfileById(opcId: string): Promise<Row> {
+  try {
+    const detail = await get<Row>(`${companyPath(opcId)}/profile/company`);
+    return isRecord(detail) ? detail : {};
+  } catch {
+    try {
+      const legacy = await getCompanyProfile();
+      return isRecord(legacy) ? legacy : {};
+    } catch {
+      return { opc_id: opcId };
+    }
+  }
+}
+
+export async function listCompanyConversations(opcId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/conversations`));
+  } catch {
+    return asArray<Row>(await listConversations());
+  }
+}
+
+export async function createCompanyConversation(
+  opcId: string,
+  payload: Row,
+): Promise<Row> {
+  try {
+    const created = await post<Row>(`${companyPath(opcId)}/conversations`, payload);
+    return isRecord(created) ? created : {};
+  } catch {
+    const legacy = await createConversation(payload);
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function listCompanyConversationMessages(
+  opcId: string,
+  conversationId: string,
+): Promise<Row[]> {
+  try {
+    return asArray<Row>(
+      await get<Row[]>(
+        `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+      ),
+    );
+  } catch {
+    return asArray<Row>(await listConversationMessages(conversationId));
+  }
+}
+
+export async function appendCompanyConversationMessage(
+  opcId: string,
+  conversationId: string,
+  payload: Row,
+): Promise<Row> {
+  try {
+    const appended = await post<Row>(
+      `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+      payload,
+    );
+    return isRecord(appended) ? appended : {};
+  } catch {
+    const legacy = await appendConversationMessage(conversationId, payload);
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function createCompanyWorkOrder(opcId: string, payload: Row): Promise<Row> {
+  const created = await post<Row>(`${companyPath(opcId)}/work-orders`, payload);
+  return isRecord(created) ? created : {};
+}
+
+export async function listMeetings(opcId: string): Promise<MeetingSummary[]> {
+  const rows = await get<MeetingSummary[]>(`${companyPath(opcId)}/meetings`);
+  return asArray<MeetingSummary>(rows);
+}
+
+export async function getMeeting(opcId: string, meetingId: string): Promise<MeetingDetail | null> {
+  const detail = await get<MeetingDetail>(`${companyPath(opcId)}/meetings/${encodeURIComponent(meetingId)}`);
+  return detail && detail.meeting_id ? detail : null;
+}
+
+export async function startMeeting(
+  opcId: string,
+  req: { topic: string; participants: string[]; close_mode: "vote" | "chair" },
+): Promise<{ meeting_id: string; status: string }> {
+  return post<{ meeting_id: string; status: string }>(`${companyPath(opcId)}/meetings`, req);
+}
+
+export async function listKpi(opcId: string, agentId: string): Promise<KpiRecord[]> {
+  const rows = await get<KpiRecord[]>(
+    `${companyPath(opcId)}/employees/${encodeURIComponent(agentId)}/kpi`,
+  );
+  return asArray<KpiRecord>(rows);
+}
+
+export async function listReports(opcId: string): Promise<ReportSummary[]> {
+  const rows = await get<ReportSummary[]>(`${companyPath(opcId)}/reports`);
+  return asArray<ReportSummary>(rows);
+}
+
+export async function getReport(opcId: string, reportId: string): Promise<ReportDetail | null> {
+  const detail = await get<ReportDetail>(
+    `${companyPath(opcId)}/reports/${encodeURIComponent(reportId)}`,
+  );
+  return detail && detail.report_id ? detail : null;
+}
+
+export async function generateReport(
+  opcId: string,
+  period: "daily" | "monthly",
+): Promise<{ report_id: string }> {
+  return post<{ report_id: string }>(`${companyPath(opcId)}/reports/generate`, { period });
+}
+
+export async function getCost(opcId: string): Promise<CostOverview> {
+  const res = await get<CostOverview>(`${companyPath(opcId)}/cost`);
+  return res && Array.isArray(res.by_department) ? res : { by_department: [], total: 0 };
+}
+
+export async function setCostQuota(
+  opcId: string,
+  department: string,
+  tokenQuota: number,
+): Promise<{ ok: boolean }> {
+  return put<{ ok: boolean }>(`${companyPath(opcId)}/cost/quota`, {
+    department,
+    token_quota: tokenQuota,
+  });
+}
+
+export async function listCompanyWorkOrders(opcId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/work-orders`));
+  } catch {
+    return asArray<Row>(await listWorkOrders());
+  }
+}
+
+export async function executeCompanyWorkOrder(
+  opcId: string,
+  workOrderId: string,
+  payload: Row = {},
+): Promise<Row> {
+  try {
+    const result = await post<Row>(
+      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/execute`,
+      payload,
+    );
+    return isRecord(result) ? result : {};
+  } catch {
+    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/execute`, payload);
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function decideCompanyWorkOrderApproval(
+  opcId: string,
+  workOrderId: string,
+  payload: { approval_id: string; decision: "approve" | "reject"; comment?: string },
+): Promise<Row> {
+  try {
+    const result = await post<Row>(
+      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/approval`,
+      payload,
+    );
+    return isRecord(result) ? result : {};
+  } catch {
+    const legacy = await decideWorkOrderApproval(workOrderId, payload);
+    return isRecord(legacy as Row) ? (legacy as Row) : {};
+  }
+}
+
+export async function cancelCompanyWorkOrder(opcId: string, workOrderId: string): Promise<Row> {
+  try {
+    const result = await post<Row>(
+      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/cancel`,
+      {},
+    );
+    return isRecord(result) ? result : {};
+  } catch {
+    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/cancel`, {});
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function submitCompanyWorkOrderFeedback(
+  opcId: string,
+  workOrderId: string,
+  feedback: string,
+  agentId?: string,
+): Promise<Row> {
+  const payload = { feedback, agent_id: agentId };
+  try {
+    const result = await post<Row>(
+      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/feedback`,
+      payload,
+    );
+    return isRecord(result) ? result : {};
+  } catch {
+    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/feedback`, payload);
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function getCompanyWorkOrderTimeline(opcId: string, workOrderId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(
+      await get<Row[]>(`${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/timeline`),
+    );
+  } catch {
+    return [];
+  }
+}
+
+export async function getCompanyWorkOrderAuditExport(
+  opcId: string,
+  workOrderId: string,
+): Promise<Row> {
+  try {
+    const result = await get<Row>(
+      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/audit-export`,
+    );
+    return isRecord(result) ? result : {};
+  } catch {
+    const legacy = await get<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/audit-export`);
+    return isRecord(legacy) ? legacy : {};
+  }
+}
+
+export async function listCompanyAuditEvents(
+  opcId: string,
+  options?: { limit?: number; workOrderId?: string; runId?: string },
+): Promise<CompanyAuditEvent[]> {
+  const params = new URLSearchParams();
+  if (options?.limit != null) params.set("limit", String(options.limit));
+  if (options?.workOrderId) params.set("work_order_id", options.workOrderId);
+  if (options?.runId) params.set("run_id", options.runId);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+
+  try {
+    return asArray<CompanyAuditEvent>(
+      await get<CompanyAuditEvent[]>(`${companyPath(opcId)}/audit${suffix}`),
+    );
+  } catch {
+    return asArray<CompanyAuditEvent>(
+      await get<CompanyAuditEvent[]>(`/opc/audit/${encodeURIComponent(opcId)}${suffix}`),
+    );
+  }
+}
+
+export async function listCompanyMemory(opcId: string): Promise<Row[]> {
+  try {
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/memory`));
+  } catch {
+    return asArray<Row>(await listMemory({ scope: "company" }));
+  }
+}
+
+export async function getCompanyGrowth(agentId: string) {
+  return getAgentGrowth(agentId);
+}
+
+export async function approveCompanyImprovement(proposalId: string) {
+  return approveSkillProposal(proposalId);
+}
+
+export function normalizeMeetingSummary(row: Row): MeetingSummary {
+  return {
+    meeting_id: stringValue(row.meeting_id),
+    topic: stringValue(row.topic),
+    status: stringValue(row.status),
+    created_at_ms: numberValue(row.created_at_ms),
+  };
+}

@@ -16,6 +16,43 @@ pub enum CognitiveLayer {
     RevokedFact,
 }
 
+/// Error returned when a stored cognitive-layer string is not recognized.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown cognitive layer: {0:?}")]
+pub struct UnknownCognitiveLayer(pub String);
+
+impl CognitiveLayer {
+    /// The canonical database/wire string for this layer (PascalCase).
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            CognitiveLayer::Hypothesis => "Hypothesis",
+            CognitiveLayer::Fact => "Fact",
+            CognitiveLayer::Suggestion => "Suggestion",
+            CognitiveLayer::Decision => "Decision",
+            CognitiveLayer::StaleFact => "StaleFact",
+            CognitiveLayer::RevokedFact => "RevokedFact",
+        }
+    }
+}
+
+impl std::str::FromStr for CognitiveLayer {
+    type Err = UnknownCognitiveLayer;
+
+    /// Parse a cognitive layer from its canonical PascalCase string. Returns an
+    /// error (never a silent default) on any unrecognized value.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Hypothesis" => Ok(CognitiveLayer::Hypothesis),
+            "Fact" => Ok(CognitiveLayer::Fact),
+            "Suggestion" => Ok(CognitiveLayer::Suggestion),
+            "Decision" => Ok(CognitiveLayer::Decision),
+            "StaleFact" => Ok(CognitiveLayer::StaleFact),
+            "RevokedFact" => Ok(CognitiveLayer::RevokedFact),
+            other => Err(UnknownCognitiveLayer(other.to_string())),
+        }
+    }
+}
+
 /// Provenance envelope — mandatory metadata wrapping any fact-layer write.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceEnvelope {
@@ -39,6 +76,41 @@ pub struct ProvenanceEnvelope {
 pub struct EnvironmentalScope {
     pub environment: Environment,
     pub tenant_id: String,
+}
+
+impl ProvenanceEnvelope {
+    /// Build the deterministic canonical bytes that the `cryptographic_signature`
+    /// signs over.
+    ///
+    /// The signature binds the envelope to the **content** it vouches for plus
+    /// the provenance identity fields, so a signature cannot be replayed onto a
+    /// different value, agent, tool, or timestamp.
+    ///
+    /// Signed payload (canonical JSON, keys sorted lexicographically by
+    /// [`crate::crypto::canonical_bytes`]):
+    /// ```json
+    /// {
+    ///   "content_hash": "<sha256 hex of the entry value's canonical bytes>",
+    ///   "created_at":   "<RFC3339 / ISO-8601 UTC>",
+    ///   "purpose":      "coevo:provenance:v1",
+    ///   "source_agent_id": "<agent id>",
+    ///   "verification_tool_urn": "<urn>"
+    /// }
+    /// ```
+    pub fn signing_payload(&self, content_hash: &str) -> serde_json::Value {
+        serde_json::json!({
+            "purpose": "coevo:provenance:v1",
+            "content_hash": content_hash,
+            "source_agent_id": self.source_agent_id,
+            "verification_tool_urn": self.verification_tool_urn,
+            "created_at": self.created_at.to_rfc3339(),
+        })
+    }
+
+    /// Canonical signing bytes for this envelope over the given content hash.
+    pub fn signing_bytes(&self, content_hash: &str) -> Vec<u8> {
+        crate::crypto::canonical_bytes(&self.signing_payload(content_hash))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

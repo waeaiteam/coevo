@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { ensureActiveCompany } from "../api/companies";
 import NumberField from "../components/NumberField";
 import PasswordField from "../components/PasswordField";
 import SelectField from "../components/SelectField";
@@ -9,20 +8,37 @@ import SettingsLayout from "../components/SettingsLayout";
 import SettingsSection from "../components/SettingsSection";
 import TextField from "../components/TextField";
 import ToggleField from "../components/ToggleField";
-import { discoverModels, getApiBase, testModelConnection, updateModelConfig } from "../api/client";
+import {
+  connectMcpServer,
+  createMcpServer,
+  deleteMcpServer,
+  discoverModels,
+  disconnectMcpServer,
+  getApiBase,
+  listMcpServerTools,
+  listMcpServers,
+  testMcpServer,
+  testModelConnection,
+  updateMcpServer,
+  updateModelConfig,
+  type McpServerRecord,
+  type McpServerUpsertRequest,
+} from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
 import { SettingsProvider, useSettings } from "../hooks/useSettings";
 import { setLanguage, t, useLanguage } from "../settings/i18n";
 import { chooseModelRoles, isKnownProvider, presetFor, providerOptions, type DiscoveredModel } from "../settings/modelPresets";
 import { markModelProviderConfigured } from "../settings/onboarding";
 import type { PolicyEngineType, ProviderType } from "../settings/types";
+import { useToast } from "../components/ToastProvider";
 
-const CATEGORIES = ["general", "appearance", "model_provider", "agent_runtime", "governance", "risk_gate", "cognitive_customs", "policy_engine", "privacy", "developer", "data_management"];
+const CATEGORIES = ["general", "appearance", "model_provider", "mcp_servers", "agent_runtime", "governance", "risk_gate", "cognitive_customs", "policy_engine", "privacy", "developer", "data_management"];
 
 const panels: Record<string, React.FC> = {
   general: GeneralPanel,
   appearance: AppearancePanel,
   model_provider: ModelProviderPanel,
+  mcp_servers: McpServersPanel,
   agent_runtime: AgentRuntimePanel,
   governance: GovernancePanel,
   risk_gate: RiskGatePanel,
@@ -134,10 +150,6 @@ function ModelProviderPanel() {
       const finalPatch = { default_model: roles.default_model, fast_model: roles.fast_model, reasoning_model: roles.reasoning_model, structured_output_model: roles.structured_output_model, max_tokens: roles.max_tokens };
       const persistedSettings = { ...settings, model_provider: { ...settings.model_provider, ...finalPatch, api_key: "" } };
       await updateModelConfig(configFromCurrent(finalPatch));
-      const activeCompany = await ensureActiveCompany();
-      if (!activeCompany) {
-        throw new Error("No company is available yet. Create or select a company before saving the model provider.");
-      }
       replaceAndMarkSaved(persistedSettings);
       markModelProviderConfigured();
       const finalModel = finalPatch.default_model || m.default_model || "";
@@ -173,6 +185,418 @@ function ModelProviderPanel() {
           <SettingRow label={t("settings.max_cost_per_task")}><NumberField value={m.max_cost_per_task_usd} onChange={(v) => update("model_provider", { max_cost_per_task_usd: v })} min={0} max={100} step={0.1} /></SettingRow>
         </>
       )}
+    </SettingsSection>
+  );
+}
+
+type McpToolRow = {
+  name?: string;
+  description?: string;
+  urn?: string;
+};
+
+function parseMcpTools(raw: unknown): McpToolRow[] {
+  if (Array.isArray(raw)) return raw as McpToolRow[];
+  if (typeof raw === "string") {
+    try {
+      return parseMcpTools(JSON.parse(raw));
+    } catch {
+      return [];
+    }
+  }
+  if (raw && typeof raw === "object" && Array.isArray((raw as { tools?: unknown[] }).tools)) {
+    return (raw as { tools: McpToolRow[] }).tools;
+  }
+  return [];
+}
+
+function McpServersPanel() {
+  useLanguage();
+  const toast = useToast();
+  const [servers, setServers] = useState<McpServerRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [testingId, setTestingId] = useState("");
+  const [connectingId, setConnectingId] = useState("");
+  const [disconnectingId, setDisconnectingId] = useState("");
+  const [toolsByServer, setToolsByServer] = useState<Record<string, McpToolRow[]>>({});
+  const [form, setForm] = useState<McpServerUpsertRequest>({
+    id: "",
+    name: "",
+    transport: "stdio",
+    command: "",
+    args_json: "[]",
+    env_json: "{}",
+    url: "",
+    headers_json: "{}",
+    enabled: true,
+  });
+
+  async function load() {
+    setLoading(true);
+    try {
+      const rows = await listMcpServers();
+      const normalizedRows = Array.isArray(rows) ? rows : [];
+      setServers(normalizedRows);
+      setToolsByServer((prev) => {
+        const next = { ...prev };
+        for (const row of normalizedRows) {
+          const cachedTools = parseMcpTools(row.tools_json);
+          if (cachedTools.length > 0) {
+            next[row.id] = cachedTools;
+          }
+        }
+        return next;
+      });
+    } catch (error: unknown) {
+      setServers([]);
+      toast.error(String(error instanceof Error ? error.message : error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  function resetForm() {
+    setForm({
+      id: "",
+      name: "",
+      transport: "stdio",
+      command: "",
+      args_json: "[]",
+      env_json: "{}",
+      url: "",
+      headers_json: "{}",
+      enabled: true,
+    });
+  }
+
+  function fillFromServer(server: McpServerRecord) {
+    setForm({
+      id: server.id,
+      name: server.name,
+      transport: server.transport,
+      command: server.command || "",
+      args_json: server.args_json || "[]",
+      env_json: server.env_json || "{}",
+      url: server.url || "",
+      headers_json: server.headers_json || "{}",
+      enabled: server.enabled,
+    });
+  }
+
+  async function saveServer() {
+    if (!form.id.trim() || !form.name.trim()) return;
+    const payload: McpServerUpsertRequest = {
+      ...form,
+      id: form.id.trim(),
+      name: form.name.trim(),
+      command: form.transport === "stdio" ? String(form.command || "").trim() : null,
+      url: form.transport === "http" ? String(form.url || "").trim() : null,
+      args_json: form.args_json || "[]",
+      env_json: form.env_json || "{}",
+      headers_json: form.headers_json || "{}",
+      enabled: Boolean(form.enabled),
+    };
+    try {
+      const exists = servers.some((server) => server.id === payload.id);
+      if (exists) await updateMcpServer(payload.id, payload);
+      else await createMcpServer(payload);
+      await load();
+      resetForm();
+      toast.success(t("settings.mcp_saved"));
+    } catch (error: unknown) {
+      toast.error(
+        `${t("settings.mcp_save_failed")}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async function runTest() {
+    if (!form.id.trim() || !form.name.trim()) return;
+    setTestingId(form.id);
+    try {
+      await testMcpServer({
+        ...form,
+        id: form.id.trim(),
+        name: form.name.trim(),
+      });
+      toast.success(t("settings.mcp_test_ok"));
+    } catch (error: unknown) {
+      toast.error(
+        `${t("settings.mcp_test_failed")}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setTestingId("");
+    }
+  }
+
+  async function removeServer(id: string) {
+    try {
+      await deleteMcpServer(id);
+      setToolsByServer((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      await load();
+      if (form.id === id) resetForm();
+      toast.info(t("settings.mcp_deleted"));
+    } catch (error: unknown) {
+      toast.error(
+        `${t("settings.mcp_delete_failed")}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async function connectAndLoadTools(server: McpServerRecord) {
+    setConnectingId(server.id);
+    try {
+      await connectMcpServer(server.id);
+      const tools = parseMcpTools(await listMcpServerTools(server.id));
+      setToolsByServer((prev) => ({ ...prev, [server.id]: tools }));
+      await load();
+      toast.success(t("settings.mcp_connect_ok"));
+    } catch (error: unknown) {
+      toast.error(
+        `${t("settings.mcp_connect_failed")}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setConnectingId("");
+    }
+  }
+
+  async function disconnectServer(server: McpServerRecord) {
+    setDisconnectingId(server.id);
+    try {
+      await disconnectMcpServer(server.id);
+      await load();
+      toast.info(t("settings.mcp_disconnect_ok"));
+    } catch (error: unknown) {
+      toast.error(
+        `${t("settings.mcp_disconnect_failed")}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setDisconnectingId("");
+    }
+  }
+
+  return (
+    <SettingsSection title={t("settings.mcp_servers")} desc={t("settings.mcp_servers_desc")}>
+      <SettingRow label={t("settings.mcp_id")} htmlFor="mcp-id">
+        <TextField
+          id="mcp-id"
+          monospace
+          value={form.id}
+          onChange={(value) => setForm((prev) => ({ ...prev, id: value }))}
+        />
+      </SettingRow>
+      <SettingRow label={t("settings.mcp_name")} htmlFor="mcp-name">
+        <TextField
+          id="mcp-name"
+          value={form.name}
+          onChange={(value) => setForm((prev) => ({ ...prev, name: value }))}
+        />
+      </SettingRow>
+      <SettingRow label={t("settings.mcp_transport")} htmlFor="mcp-transport">
+        <SelectField
+          id="mcp-transport"
+          value={form.transport}
+          options={[
+            { value: "stdio", label: "stdio" },
+            { value: "http", label: "http" },
+          ]}
+          onChange={(value) => setForm((prev) => ({ ...prev, transport: value }))}
+        />
+      </SettingRow>
+      {form.transport === "stdio" ? (
+        <>
+          <SettingRow label={t("settings.mcp_command")} htmlFor="mcp-command">
+            <TextField
+              id="mcp-command"
+              monospace
+              value={form.command || ""}
+              onChange={(value) => setForm((prev) => ({ ...prev, command: value }))}
+            />
+          </SettingRow>
+          <SettingRow label={t("settings.mcp_args_json")} htmlFor="mcp-args">
+            <TextField
+              id="mcp-args"
+              monospace
+              value={form.args_json || "[]"}
+              onChange={(value) => setForm((prev) => ({ ...prev, args_json: value }))}
+            />
+          </SettingRow>
+          <SettingRow label={t("settings.mcp_env_json")} htmlFor="mcp-env">
+            <TextField
+              id="mcp-env"
+              monospace
+              value={form.env_json || "{}"}
+              onChange={(value) => setForm((prev) => ({ ...prev, env_json: value }))}
+            />
+          </SettingRow>
+        </>
+      ) : (
+        <>
+          <SettingRow label={t("settings.mcp_url")} htmlFor="mcp-url">
+            <TextField
+              id="mcp-url"
+              monospace
+              value={form.url || ""}
+              onChange={(value) => setForm((prev) => ({ ...prev, url: value }))}
+            />
+          </SettingRow>
+          <SettingRow label={t("settings.mcp_headers_json")} htmlFor="mcp-headers">
+            <TextField
+              id="mcp-headers"
+              monospace
+              value={form.headers_json || "{}"}
+              onChange={(value) => setForm((prev) => ({ ...prev, headers_json: value }))}
+            />
+          </SettingRow>
+        </>
+      )}
+      <SettingRow label={t("settings.mcp_enabled")}>
+        <ToggleField
+          checked={Boolean(form.enabled)}
+          onChange={(value) => setForm((prev) => ({ ...prev, enabled: value }))}
+        />
+      </SettingRow>
+      <SettingRow label={t("settings.connection")}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={saveServer}
+            className="px-3 py-1.5 text-xs rounded-md border"
+            style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+          >
+            {t("settings.mcp_save")}
+          </button>
+          <button
+            type="button"
+            onClick={runTest}
+            disabled={testingId === form.id}
+            className="px-3 py-1.5 text-xs rounded-md border"
+            style={{ borderColor: "var(--border-accent)", color: "var(--text-secondary)" }}
+          >
+            {testingId === form.id ? t("settings.loading") : t("settings.mcp_test")}
+          </button>
+          <button
+            type="button"
+            onClick={resetForm}
+            className="px-3 py-1.5 text-xs rounded-md border"
+            style={{ borderColor: "var(--border-subtle)", color: "var(--text-muted)" }}
+          >
+            {t("settings.reset")}
+          </button>
+        </div>
+      </SettingRow>
+      <div className="border-t px-4 py-3" style={{ borderColor: "var(--border-subtle)" }}>
+        <div className="mb-2 text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+          {t("settings.mcp_saved_servers")}
+        </div>
+        {loading ? (
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {t("settings.loading")}
+          </div>
+        ) : servers.length === 0 ? (
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {t("settings.mcp_empty")}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {servers.map((server) => (
+              <div
+                key={server.id}
+                className="rounded-md border p-3"
+                style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">{server.name}</div>
+                    <div className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>
+                      {server.id}
+                    </div>
+                    <div className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                      {server.transport}
+                      {server.transport === "stdio"
+                        ? server.command
+                          ? ` · ${server.command}`
+                          : ""
+                        : server.url
+                          ? ` · ${server.url}`
+                          : ""}
+                    </div>
+                    <div className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                      {server.status || "unknown"}
+                      {server.last_error ? ` · ${server.last_error}` : ""}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <button
+                      type="button"
+                      onClick={() => fillFromServer(server)}
+                      className="px-2 py-1 text-xs rounded-md border"
+                      style={{ borderColor: "var(--border-accent)", color: "var(--text-secondary)" }}
+                    >
+                      {t("settings.mcp_edit")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        server.status === "connected"
+                          ? void disconnectServer(server)
+                          : void connectAndLoadTools(server)
+                      }
+                      disabled={connectingId === server.id || disconnectingId === server.id}
+                      className="px-2 py-1 text-xs rounded-md border"
+                      style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+                    >
+                      {connectingId === server.id || disconnectingId === server.id
+                        ? t("settings.loading")
+                        : server.status === "connected"
+                          ? t("settings.mcp_disconnect")
+                          : t("settings.mcp_connect")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeServer(server.id)}
+                      className="px-2 py-1 text-xs rounded-md border"
+                      style={{ borderColor: "var(--red)", color: "var(--red)" }}
+                    >
+                      {t("settings.mcp_delete")}
+                    </button>
+                  </div>
+                </div>
+                {toolsByServer[server.id]?.length ? (
+                  <div className="mt-3 rounded-md border p-2" style={{ borderColor: "var(--border-subtle)" }}>
+                    <div className="mb-2 text-[11px] font-semibold" style={{ color: "var(--text-primary)" }}>
+                      {t("settings.mcp_tools")}
+                    </div>
+                    <div className="space-y-2">
+                      {toolsByServer[server.id].map((tool, index) => (
+                        <div key={`${server.id}-tool-${index}`} className="text-xs">
+                          <div className="font-semibold">{tool.name || t("settings.mcp_tool_unnamed")}</div>
+                          {tool.urn && (
+                            <div className="font-mono" style={{ color: "var(--accent)" }}>
+                              {tool.urn}
+                            </div>
+                          )}
+                          {tool.description && (
+                            <div style={{ color: "var(--text-muted)" }}>{tool.description}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </SettingsSection>
   );
 }

@@ -37,22 +37,29 @@ impl OPCProfileRepo {
         Ok(row.as_ref().map(|r| Self::from_row(r)))
     }
     pub async fn upsert(pool: &SqlitePool, p: &OPCProfile) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT OR REPLACE INTO opc_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&p.opc_id)
-            .bind(&p.founder_user_id)
-            .bind(&p.name)
-            .bind(&p.mission)
-            .bind(&p.current_strategy)
-            .bind(serde_json::to_string(&p.operating_principles).unwrap())
-            .bind(serde_json::to_string(&p.active_projects).unwrap())
-            .bind(serde_json::to_string(&p.asset_indexes).unwrap())
-            .bind(&p.policy_profile)
-            .bind(serde_json::to_string(&p.memory_policy).unwrap())
-            .bind(serde_json::to_string(&p.default_departments).unwrap())
-            .bind(p.created_at_ms as i64)
-            .bind(p.updated_at_ms as i64)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO opc_profiles (\
+                opc_id, founder_user_id, name, mission, current_strategy, \
+                operating_principles_json, active_projects_json, asset_indexes_json, \
+                policy_profile, memory_policy_json, default_departments_json, \
+                created_at_ms, updated_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(&p.opc_id)
+        .bind(&p.founder_user_id)
+        .bind(&p.name)
+        .bind(&p.mission)
+        .bind(&p.current_strategy)
+        .bind(serde_json::to_string(&p.operating_principles).unwrap())
+        .bind(serde_json::to_string(&p.active_projects).unwrap())
+        .bind(serde_json::to_string(&p.asset_indexes).unwrap())
+        .bind(&p.policy_profile)
+        .bind(serde_json::to_string(&p.memory_policy).unwrap())
+        .bind(serde_json::to_string(&p.default_departments).unwrap())
+        .bind(p.created_at_ms as i64)
+        .bind(p.updated_at_ms as i64)
+        .execute(pool)
+        .await?;
         Ok(())
     }
 }

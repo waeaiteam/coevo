@@ -5,8 +5,8 @@
     clippy::unnecessary_lazy_evaluations
 )]
 
-pub(crate) mod enum_db;
 pub mod company_workspace;
+pub(crate) mod enum_db;
 pub mod migrate;
 pub mod models;
 pub mod pool;

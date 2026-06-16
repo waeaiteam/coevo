@@ -25,7 +25,14 @@ impl ModelConfigRepo {
                 })?;
                 keyring_core::set_default_store(store);
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "macos")]
+            {
+                let store = apple_native_keyring_store::keychain::Store::new().map_err(|e| {
+                    sqlx::Error::Protocol(format!("CREDENTIAL_VAULT_UNAVAILABLE: {}", e))
+                })?;
+                keyring_core::set_default_store(store);
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             {
                 return Err(sqlx::Error::Protocol(
                     "CREDENTIAL_VAULT_UNAVAILABLE: native keyring store is not configured for this platform".to_string(),
@@ -131,38 +138,6 @@ impl ModelConfigRepo {
         }
     }
 
-    pub async fn seed_mock_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-        let count: i64 = sqlx::query("SELECT COUNT(*) as c FROM model_provider_configs")
-            .fetch_one(pool)
-            .await?
-            .get("c");
-        if count == 0 {
-            let now = chrono::Utc::now().timestamp_millis();
-            sqlx::query(
-                "INSERT INTO model_provider_configs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            )
-            .bind("mock-default")
-            .bind("Mock")
-            .bind("")
-            .bind("")
-            .bind("")
-            .bind("mock-model")
-            .bind("mock-model")
-            .bind("mock-model")
-            .bind("mock-model")
-            .bind(4096)
-            .bind(0.7)
-            .bind(30000)
-            .bind(0.0)
-            .bind(0)
-            .bind(now)
-            .bind(now)
-            .execute(pool)
-            .await?;
-        }
-        Ok(())
-    }
-
     pub async fn get_active_config(
         pool: &SqlitePool,
     ) -> Result<Option<ModelProviderConfig>, sqlx::Error> {
@@ -175,10 +150,16 @@ impl ModelConfigRepo {
         }
     }
 
+    /// Deprecated: prefer [`Self::get_active_config`] and handle `None`
+    /// explicitly (e.g. with a MODEL_PROVIDER_NOT_CONFIGURED error).
+    ///
+    /// Kept as a thin alias for legacy call sites. It no longer auto-seeds a
+    /// Mock provider on empty databases; an unconfigured database now yields
+    /// `Err(sqlx::Error::RowNotFound)`, exactly as the old version did after
+    /// seeding an inactive Mock row.
     pub async fn get_active_config_or_seed(
         pool: &SqlitePool,
     ) -> Result<ModelProviderConfig, sqlx::Error> {
-        Self::seed_mock_if_empty(pool).await?;
         Self::get_active_config(pool)
             .await?
             .ok_or(sqlx::Error::RowNotFound)
@@ -251,6 +232,17 @@ mod tests {
     use std::sync::Mutex;
 
     static KEYRING_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    async fn init_credential_store_keeps_existing_default_store() {
+        let _lock = KEYRING_LOCK.lock().unwrap();
+        keyring_core::set_default_store(keyring_core::sample::Store::new().unwrap());
+
+        ModelConfigRepo::init_credential_store().unwrap();
+
+        assert!(keyring_core::get_default_store().is_some());
+        keyring_core::unset_default_store();
+    }
 
     #[tokio::test]
     async fn upsert_config_stores_api_key_in_keyring_not_sqlite_plaintext() {
@@ -452,22 +444,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seed_mock_if_empty_keeps_mock_provider_inactive() {
+    async fn fresh_database_is_not_auto_seeded_and_reports_not_configured() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        ModelConfigRepo::seed_mock_if_empty(&pool).await.unwrap();
-
-        let active_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM model_provider_configs WHERE kind='Mock' AND is_active=1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(active_count, 0);
         assert!(ModelConfigRepo::get_active_config(&pool)
             .await
             .unwrap()
             .is_none());
+        assert!(matches!(
+            ModelConfigRepo::get_active_config_or_seed(&pool).await,
+            Err(sqlx::Error::RowNotFound)
+        ));
+
+        let provider_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM model_provider_configs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(provider_count, 0);
     }
 }

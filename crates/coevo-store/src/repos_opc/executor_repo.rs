@@ -58,15 +58,35 @@ impl ExecutorRepo {
         pool: &SqlitePool,
         p: &ExternalExecutorPassport,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT OR REPLACE INTO external_executors VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&p.executor_id).bind(&p.display_name).bind(executor_source_type_to_db(p.source_type)).bind(&p.runtime_endpoint)
-            .bind(serde_json::to_string(&p.capabilities).unwrap()).bind(serde_json::to_string(&p.required_credentials).unwrap())
-            .bind(serde_json::to_string(&p.permission_boundary).unwrap()).bind(serde_json::to_string(&p.file_scope).unwrap())
-            .bind(serde_json::to_string(&p.network_scope).unwrap()).bind(memory_scope_to_db(p.memory_scope))
-            .bind(p.risk_ceiling).bind(serde_json::to_string(&p.supported_actions).unwrap())
-            .bind(sandbox_level_to_db(p.sandbox_level)).bind(&p.health_check_url).bind(&p.audit_callback_url)
-            .bind(executor_status_to_db(p.status)).bind(p.created_at_ms as i64).bind(p.updated_at_ms as i64)
-            .execute(pool).await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO external_executors (\
+                executor_id, display_name, source_type, runtime_endpoint, capabilities_json, \
+                required_credentials_json, permission_boundary_json, file_scope_json, \
+                network_scope_json, memory_scope, risk_ceiling, supported_actions_json, \
+                sandbox_level, health_check_url, audit_callback_url, status, \
+                created_at_ms, updated_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(&p.executor_id)
+        .bind(&p.display_name)
+        .bind(executor_source_type_to_db(p.source_type))
+        .bind(&p.runtime_endpoint)
+        .bind(serde_json::to_string(&p.capabilities).unwrap())
+        .bind(serde_json::to_string(&p.required_credentials).unwrap())
+        .bind(serde_json::to_string(&p.permission_boundary).unwrap())
+        .bind(serde_json::to_string(&p.file_scope).unwrap())
+        .bind(serde_json::to_string(&p.network_scope).unwrap())
+        .bind(memory_scope_to_db(p.memory_scope))
+        .bind(p.risk_ceiling)
+        .bind(serde_json::to_string(&p.supported_actions).unwrap())
+        .bind(sandbox_level_to_db(p.sandbox_level))
+        .bind(&p.health_check_url)
+        .bind(&p.audit_callback_url)
+        .bind(executor_status_to_db(p.status))
+        .bind(p.created_at_ms as i64)
+        .bind(p.updated_at_ms as i64)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn disable(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {

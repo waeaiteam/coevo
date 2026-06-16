@@ -44,6 +44,18 @@ impl PcdtRouter {
             .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000")
             .to_string();
 
+        // Derive a stable per-plan scope id BEFORE building agent configs, so it
+        // can prefix the blackboard output keys. Without this, every plan uses
+        // bare `step-{i}-output` keys, which collide across re-routes: a
+        // re-routed plan would overwrite the prior plan's step outputs on the
+        // shared blackboard. The id is a hash of the inputs that define this
+        // plan (contract + agent roster + parent plan), so two distinct
+        // routings get distinct key namespaces while a deterministic re-compute
+        // of the same plan stays stable. It is computed from inputs only (not
+        // from the agent configs) to avoid a hash-includes-the-keys cycle.
+        let plan_scope_id = Self::plan_scope_id(contract, &primary_path, &parent);
+        let key_for = |step: usize| format!("{plan_scope_id}:step-{step}-output");
+
         // Build agent configs
         let agent_configs: Vec<AgentSlotConfig> = primary_path
             .iter()
@@ -58,12 +70,8 @@ impl PcdtRouter {
                     "Critic".to_string()
                 },
                 step_index: i as u32,
-                input_keys: if i == 0 {
-                    vec![]
-                } else {
-                    vec![format!("step-{}-output", i - 1)]
-                },
-                output_keys: vec![format!("step-{}-output", i)],
+                input_keys: if i == 0 { vec![] } else { vec![key_for(i - 1)] },
+                output_keys: vec![key_for(i)],
                 timeout_ms: 30_000,
             })
             .collect();
@@ -120,6 +128,37 @@ impl PcdtRouter {
             });
         }
         Ok(())
+    }
+
+    /// Stable, collision-resistant namespace for a plan's blackboard keys.
+    ///
+    /// Hashes the plan-defining inputs (contract identity + agent roster +
+    /// parent plan hash) into a short hex id. Deterministic for identical
+    /// inputs; distinct for any change, so re-routed plans never share a key
+    /// namespace with a prior plan. Returns the first 16 hex chars (64 bits) —
+    /// enough to make accidental collisions across plans negligible while
+    /// keeping keys readable.
+    fn plan_scope_id(
+        contract: &MCLSpec,
+        primary_path: &[String],
+        parent_plan_hash: &str,
+    ) -> String {
+        let mut hasher = Sha256::new();
+        // Bind to the contract's institution policy hash (its stable identity in
+        // routing) plus the goal-tree root id; both are part of what makes this
+        // a distinct plan.
+        hasher.update(contract.institution_policy_hash.as_bytes());
+        hasher.update(b"|");
+        hasher.update(contract.goal_tree.root.id.as_bytes());
+        hasher.update(b"|");
+        hasher.update(parent_plan_hash.as_bytes());
+        hasher.update(b"|");
+        for agent in primary_path {
+            hasher.update(agent.as_bytes());
+            hasher.update(b",");
+        }
+        let full = hex::encode(hasher.finalize());
+        full[..16].to_string()
     }
 }
 

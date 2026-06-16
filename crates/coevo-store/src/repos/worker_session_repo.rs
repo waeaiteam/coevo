@@ -4,6 +4,7 @@ pub struct WorkerSessionRepo;
 impl WorkerSessionRepo {
     pub async fn create(
         pool: &SqlitePool,
+        opc_id: &str,
         session_id: &str,
         work_order_id: &str,
         agent_id: &str,
@@ -14,8 +15,8 @@ impl WorkerSessionRepo {
         mem: &str,
         started: i64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO worker_sessions (session_id, work_order_id, agent_id, worker_id, loaded_skill_ids_json, tool_call_ids_json, context_memory_ids_json, status, created_at_ms, updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)")
-            .bind(session_id).bind(work_order_id).bind(agent_id).bind(worker_id).bind(skills).bind(tools).bind(mem).bind(status).bind(started).bind(started).execute(pool).await?;
+        sqlx::query("INSERT INTO worker_sessions (session_id, opc_id, work_order_id, agent_id, worker_id, loaded_skill_ids_json, tool_call_ids_json, context_memory_ids_json, status, created_at_ms, updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+            .bind(session_id).bind(opc_id).bind(work_order_id).bind(agent_id).bind(worker_id).bind(skills).bind(tools).bind(mem).bind(status).bind(started).bind(started).execute(pool).await?;
         Ok(())
     }
     pub async fn get(
@@ -70,6 +71,7 @@ mod tests {
 
         WorkerSessionRepo::create(
             &pool,
+            "default-opc",
             "session-store-test",
             "wo-store-test",
             "agent-founder-01",
@@ -96,5 +98,41 @@ mod tests {
             "session-store-test"
         );
         assert_eq!(sessions[0].get::<String, _>("status"), "Completed");
+    }
+
+    #[tokio::test]
+    async fn update_status_allows_blocked_and_timed_out_session_states() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        WorkerSessionRepo::create(
+            &pool,
+            "default-opc",
+            "session-store-status-upgrade",
+            "wo-store-status-upgrade",
+            "agent-founder-01",
+            "worker-agent-founder-01",
+            "Running",
+            "[]",
+            "[]",
+            "[]",
+            now,
+        )
+        .await
+        .unwrap();
+
+        WorkerSessionRepo::update_status(&pool, "session-store-status-upgrade", "Blocked")
+            .await
+            .unwrap();
+        WorkerSessionRepo::update_status(&pool, "session-store-status-upgrade", "TimedOut")
+            .await
+            .unwrap();
+
+        let saved = WorkerSessionRepo::get(&pool, "session-store-status-upgrade")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.get::<String, _>("status"), "TimedOut");
     }
 }

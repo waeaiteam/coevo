@@ -74,6 +74,28 @@ impl AuditLogger {
         .await?;
         Ok(())
     }
+
+    pub async fn log_json(
+        pool: &SqlitePool,
+        event_type: &str,
+        contract_hash: Option<&str>,
+        agent_id: Option<&str>,
+        traceparent: Option<&str>,
+        tenant_id: &str,
+        event_data: &serde_json::Value,
+    ) -> Result<(), AuditError> {
+        AuditRepo::insert(
+            pool,
+            event_type,
+            contract_hash,
+            agent_id,
+            traceparent,
+            tenant_id,
+            &serde_json::to_string(event_data).unwrap_or_default(),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

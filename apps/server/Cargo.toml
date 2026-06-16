@@ -9,6 +9,7 @@ coevo-tracks.workspace = true
 coevo-core.workspace = true
 coevo-store.workspace = true
 coevo-adapters.workspace = true
+coevo-audit.workspace = true
 coevo-customs.workspace = true
 coevo-mcl.workspace = true
 coevo-policy.workspace = true
@@ -38,6 +39,7 @@ rand.workspace = true
 sha2.workspace = true
 async-stream = "0.3"
 futures-core = "0.3"
+async-trait.workspace = true
 
 [dev-dependencies]
 coevo-customs.workspace = true
@@ -47,3 +49,5 @@ coevo-resolution.workspace = true
 coevo-reputation.workspace = true
 coevo-risk.workspace = true
 coevo-router.workspace = true
+http-body-util = "0.1"
+keyring-core = { workspace = true, features = ["sample"] }

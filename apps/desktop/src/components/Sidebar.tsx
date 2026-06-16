@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { listConversations } from "../api/client";
+import { getActiveOpcId } from "../api/companies";
+import { listCompanyConversations } from "../api/org";
+import { getLocalIdentity } from "../settings/identity";
 import { t, useLanguage } from "../settings/i18n";
+import { clearMissionSession, writeActiveConversationId } from "../utils/missionSession";
 import { formatRelativeTime, shortText, stringField, type ProductRow } from "../utils/productSurface";
-
-const ACTIVE_CONVERSATION_KEY = "coevo-active-conversation-id";
 
 type IconName = "new-chat" | "company" | "market" | "projects" | "tasks" | "timeline" | "settings" | "advanced" | "workflows";
 
@@ -95,10 +96,12 @@ function NavIcon({ name }: { name: IconName }) {
 export default function Sidebar() {
   const language = useLanguage();
   const [conversations, setConversations] = useState<ProductRow[]>([]);
+  const identity = getLocalIdentity();
+  const activeOpcId = getActiveOpcId();
 
   useEffect(() => {
     let alive = true;
-    listConversations()
+    listCompanyConversations(activeOpcId)
       .then((rows) => {
         if (alive) setConversations(Array.isArray(rows) ? rows as ProductRow[] : []);
       })
@@ -108,28 +111,26 @@ export default function Sidebar() {
     return () => {
       alive = false;
     };
-  }, [language]);
+  }, [activeOpcId, language]);
 
   function rememberConversation(id: string) {
-    try {
-      localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-    } catch {
-      // Ignore local persistence failures.
-    }
+    writeActiveConversationId(activeOpcId, identity.userId, id);
+  }
+
+  function startNewChat() {
+    clearMissionSession(activeOpcId, identity.userId);
   }
 
   return (
     <aside className="sidebar-shell product-sidebar flex min-w-0 flex-col">
       <div className="sidebar-brand">
-        <Link to="/company" className="mb-1 flex items-center gap-2">
+        <Link to="/" className="flex items-center gap-2">
           <span className="sidebar-logo">c</span>
-          <span className="sidebar-text truncate text-sm font-bold tracking-tight">{t("app.name")}</span>
         </Link>
-        <div className="sidebar-tagline truncate text-xs muted">{t("app.tagline")}</div>
       </div>
 
-      <div className="px-2 py-3">
-        <NavLink to="/" end className={({ isActive }) => `nav-item product-new-chat ${isActive ? "active" : ""}`}>
+      <div className="px-2 py-2">
+        <NavLink to="/" end onClick={startNewChat} className={({ isActive }) => `nav-item product-new-chat ${isActive ? "active" : ""}`}>
           <span className="nav-icon" aria-hidden="true"><NavIcon name="new-chat" /></span>
           <span className="sidebar-text truncate">{t("nav.new_chat")}</span>
         </NavLink>

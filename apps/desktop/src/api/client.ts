@@ -1,22 +1,26 @@
 import type { HealthResponse, ContractResponse } from "../types";
-import { getTenantId } from "../settings/identity";
+import { getTenantId, getLocalIdentity } from "../settings/identity";
 
 export type { HealthResponse, ContractResponse } from "../types";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8717";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function getApiBase(): string {
   try {
     const envBase = String(import.meta.env.COEVO_API_BASE || "").trim();
     if (envBase) return envBase;
+    const runtimeBase = localStorage.getItem("coevo-api-base");
+    if (runtimeBase) return runtimeBase;
     const saved = localStorage.getItem("coevo-settings");
     if (saved) {
       const parsed = JSON.parse(saved) as { developer?: { api_base_url?: unknown } };
       const savedBase = String(parsed.developer?.api_base_url || "").trim();
       if (savedBase && savedBase !== DEFAULT_API_BASE) return savedBase;
     }
-    const runtimeBase = localStorage.getItem("coevo-api-base");
-    if (runtimeBase) return runtimeBase;
   } catch {
     /* use default */
   }
@@ -24,11 +28,52 @@ export function getApiBase(): string {
 }
 export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-base", url); } catch {} }
 
+// === Auth token (optional x-coevo-token) ===
+// The Tauri sidecar generates a per-launch token and exposes it via the
+// `get_api_token` command. We cache it here so the synchronous `headers()`
+// helper (and the SSE/health fetches) can attach `x-coevo-token` to every
+// request. In plain browser dev (no Tauri) the token stays empty and no
+// header is sent.
+let cachedApiToken = "";
+
+export function getApiToken(): string {
+  return cachedApiToken;
+}
+
+export function setApiToken(token: string) {
+  cachedApiToken = String(token || "");
+}
+
+/**
+ * Fetch the API token from the Tauri sidecar once and cache it. Safe to call
+ * in browser dev mode (no Tauri) — it resolves to "" and sends no header.
+ * Idempotent: returns the cached token on subsequent calls.
+ */
+export async function ensureApiToken(): Promise<string> {
+  if (cachedApiToken) return cachedApiToken;
+  try {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (typeof invoke === "function") {
+      const token = await invoke<string>("get_api_token");
+      cachedApiToken = String(token || "");
+    }
+  } catch {
+    /* no token available — browser dev or command missing */
+  }
+  return cachedApiToken;
+}
+
 export function headers(): Record<string, string> {
-  return {
+  // Read active OPC ID (same source as companies.ts::getActiveOpcId) without circular import
+  let opcId = "";
+  try { opcId = localStorage.getItem("coevo-opc-id") || ""; } catch { /* ignore */ }
+  if (!opcId) opcId = getLocalIdentity().opcId;
+
+  const base: Record<string, string> = {
     "Content-Type": "application/json",
     "x-coevo-tenant-id": getTenantId(),
     "x-coevo-actor-role": "Admin",
+    "x-coevo-opc-id": opcId,
     "x-coevo-contract-hash": "0".repeat(64),
     "x-coevo-policy-version": "0".repeat(64),
     "x-coevo-execution-plan-hash": "0".repeat(64),
@@ -39,6 +84,9 @@ export function headers(): Record<string, string> {
     "x-coevo-timestamp": String(Date.now()),
     traceparent: `00-${crypto.randomUUID().replace(/-/g, "")}-${Array.from({length:16},()=>Math.floor(Math.random()*16).toString(16)).join("")}-01`,
   };
+  // Attach optional auth token when the sidecar provided one (Tauri only).
+  if (cachedApiToken) base["x-coevo-token"] = cachedApiToken;
+  return base;
 }
 
 export class ApiError extends Error {
@@ -143,7 +191,7 @@ export interface AgentGrowth {
   total_usage: number;
   total_cost_usd: number;
   trend: Array<{ at: number; score: number; task_count: number }>;
-  pending_improvements: Array<{ proposal_id: string; diagnosis: string; status: string; risk: string }>;
+  pending_improvements: Array<{ proposal_id: string; diagnosis: string; proposed_changes?: string; expected_benefit?: string; status: string; risk: string }>;
 }
 export async function getAgentGrowth(agentId: string): Promise<AgentGrowth> { return get(`/opc/agents/employees/${agentId}/growth`); }
 export async function listExecutors(): Promise<Record<string,unknown>[]> { return get("/opc/executors"); }
@@ -164,6 +212,12 @@ export async function verifySkillProposal(id: string) { return post(`/opc/skills
 export async function approveSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/approve`, {}); }
 export async function rejectSkillProposal(id: string) { return post(`/opc/skills/evolution/proposals/${id}/reject`, {}); }
 export async function listWorkOrders(): Promise<Record<string,unknown>[]> { return get("/opc/work-orders"); }
+export async function listCompanyTraces(opcId: string): Promise<Record<string, unknown>[]> {
+  return get(`/companies/${encodeURIComponent(opcId)}/traces`);
+}
+export async function getCompanyTraceSpans(opcId: string, traceId: string): Promise<Record<string, unknown>> {
+  return get(`/companies/${encodeURIComponent(opcId)}/traces/${encodeURIComponent(traceId)}/spans`);
+}
 export type GovernanceProposal = {
   autonomy_ceiling: "read_only" | "workspace_write" | "full_access";
   model_preference: "fast" | "standard" | "reasoning";
@@ -207,6 +261,77 @@ export async function modelStructured(payload: Record<string,unknown>) { return 
 export async function listModelProfiles(): Promise<Record<string,unknown>[]> { return get("/opc/models/profiles"); }
 export async function routeModel(payload: Record<string,unknown>) { return post("/opc/models/route", payload); }
 
+// === MCP Servers ===
+export interface McpServerRecord {
+  id: string;
+  name: string;
+  transport: string;
+  command?: string | null;
+  args_json?: string | null;
+  env_json?: string | null;
+  url?: string | null;
+  headers_json?: string | null;
+  enabled: boolean;
+  status?: string | null;
+  last_error?: string | null;
+  tools_json?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface McpServerUpsertRequest {
+  id: string;
+  name: string;
+  transport: string;
+  command?: string | null;
+  args_json?: string | null;
+  env_json?: string | null;
+  url?: string | null;
+  headers_json?: string | null;
+  enabled?: boolean;
+}
+
+export async function listMcpServers(): Promise<McpServerRecord[]> {
+  return get("/opc/mcp/servers");
+}
+
+export async function getMcpServer(id: string): Promise<McpServerRecord> {
+  return get(`/opc/mcp/servers/${encodeURIComponent(id)}`);
+}
+
+export async function createMcpServer(payload: McpServerUpsertRequest): Promise<{ ok: boolean }> {
+  return post("/opc/mcp/servers", payload);
+}
+
+export async function updateMcpServer(
+  id: string,
+  payload: McpServerUpsertRequest,
+): Promise<{ ok: boolean }> {
+  return put(`/opc/mcp/servers/${encodeURIComponent(id)}`, payload);
+}
+
+export async function deleteMcpServer(id: string): Promise<{ ok: boolean }> {
+  return del(`/opc/mcp/servers/${encodeURIComponent(id)}`);
+}
+
+export async function testMcpServer(
+  payload: McpServerUpsertRequest,
+): Promise<Record<string, unknown>> {
+  return post("/opc/mcp/servers/test", payload);
+}
+
+export async function connectMcpServer(id: string): Promise<Record<string, unknown>> {
+  return post(`/opc/mcp/servers/${encodeURIComponent(id)}/connect`, {});
+}
+
+export async function disconnectMcpServer(id: string): Promise<Record<string, unknown>> {
+  return post(`/opc/mcp/servers/${encodeURIComponent(id)}/disconnect`, {});
+}
+
+export async function listMcpServerTools(id: string): Promise<Record<string, unknown>> {
+  return get(`/opc/mcp/servers/${encodeURIComponent(id)}/tools`);
+}
+
 // === Worker API ===
 export async function listWorkers(): Promise<Record<string,unknown>[]> { return get("/opc/workers"); }
 export async function getWorker(id: string) { return get(`/opc/workers/${id}`); }
@@ -217,41 +342,139 @@ export async function listWorkerRuns(workerId: string) { return get(`/opc/worker
 export async function getWorkerRun(runId: string) { return get(`/opc/workers/runs/${runId}`); }
 export async function listWorkerRunSteps(runId: string) { return get(`/opc/workers/runs/${runId}/steps`); }
 export async function listWorkerRunEvents(runId: string) { return get(`/opc/workers/runs/${runId}/events`); }
+
+function parseSseEventBlock(
+  rawBlock: string,
+): { eventType: string; data: string; id: string } | null {
+  const lines = rawBlock.split(/\r?\n/);
+  let eventType = "message";
+  let id = "";
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (!line) continue;
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) {
+      eventType = line.slice("event:".length).trim() || "message";
+      continue;
+    }
+    if (line.startsWith("id:")) {
+      id = line.slice("id:".length).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  return { eventType, data: dataLines.join("\n"), id };
+}
+
+export interface StreamLifecycle {
+  /** Called when a reconnect attempt begins. attempt is 1-based. */
+  onReconnecting?: (attempt: number) => void;
+  /** Called once the stream is (re)connected and receiving data again. */
+  onReconnected?: () => void;
+}
+
 export function streamWorkerRunEvents(
   runId: string,
   onEvent: (event: Record<string, unknown>) => void,
   onFallback?: () => void,
+  lifecycle?: StreamLifecycle,
 ) {
   const url = `${getApiBase()}/opc/workers/runs/${runId}/events/stream`;
-  const source = new EventSource(url);
-  source.onmessage = (event) => {
+  const controller = new AbortController();
+  let closed = false;
+  let lastEventId = "";
+  const maxAttempts = 5;
+  const backoffMs = [1000, 2000, 4000, 4000, 4000];
+
+  function dispatch(parsed: { eventType: string; data: string; id: string }) {
+    // Track the last delivered id so a reconnect can resume via Last-Event-ID.
+    // We do NOT mutate the event payload — the delivered shape stays identical
+    // to a non-resumable stream so downstream parsing is unaffected.
+    if (parsed.id) lastEventId = parsed.id;
     try {
-      onEvent(JSON.parse(event.data));
+      onEvent(JSON.parse(parsed.data));
     } catch {
-      onEvent({ event_type: event.type, payload_json: event.data });
+      onEvent({
+        event_type: parsed.eventType,
+        payload_json: parsed.data,
+      });
     }
-  };
-  source.addEventListener("AssistantDelta", (event) => {
-    try {
-      onEvent(JSON.parse((event as MessageEvent).data));
-    } catch {
-      onEvent({ event_type: "AssistantDelta", payload_json: (event as MessageEvent).data });
-    }
-  });
-  ["LifecycleStart", "LifecycleEnd", "ToolStart", "ToolEnd", "ApprovalRequired", "WorkerBlocked", "MemoryWrite"].forEach((type) => {
-    source.addEventListener(type, (event) => {
-      try {
-        onEvent(JSON.parse((event as MessageEvent).data));
-      } catch {
-        onEvent({ event_type: type, payload_json: (event as MessageEvent).data });
-      }
+  }
+
+  // One pass over the stream. Returns true if it finished cleanly (server closed
+  // the body), false if it errored and a reconnect should be attempted.
+  async function runOnce(): Promise<boolean> {
+    const requestHeaders: Record<string, string> = {
+      ...headers(),
+      Accept: "text/event-stream",
+    };
+    // Resume from the last delivered event so we don't replay the whole run.
+    if (lastEventId) requestHeaders["Last-Event-ID"] = lastEventId;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: requestHeaders,
+      signal: controller.signal,
     });
-  });
-  source.onerror = () => {
-    source.close();
-    onFallback?.();
+    if (!response.ok || !response.body) {
+      throw new Error(`SSE request failed with HTTP ${response.status}`);
+    }
+    lifecycle?.onReconnected?.();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (!closed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || "";
+
+      for (const block of blocks) {
+        const parsed = parseSseEventBlock(block);
+        if (!parsed) continue;
+        dispatch(parsed);
+      }
+    }
+
+    const trailing = decoder.decode();
+    if (trailing) buffer += trailing;
+    const finalEvent = parseSseEventBlock(buffer);
+    if (finalEvent) dispatch(finalEvent);
+    return true;
+  }
+
+  void (async () => {
+    for (let attempt = 0; attempt <= maxAttempts && !closed; attempt++) {
+      try {
+        if (attempt > 0) {
+          lifecycle?.onReconnecting?.(attempt);
+          await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)]);
+          if (closed) return;
+        }
+        await runOnce();
+        return; // clean finish — server closed the stream
+      } catch {
+        // A user abort means closed === true; stop without falling back.
+        if (closed) return;
+        // Exhausted retries → surface the fallback so the UI can offer manual retry.
+        if (attempt >= maxAttempts) {
+          if (!closed) onFallback?.();
+          return;
+        }
+        // otherwise loop and reconnect with backoff
+      }
+    }
+  })();
+
+  return () => {
+    closed = true;
+    controller.abort();
   };
-  return () => source.close();
 }
 export async function getWorkerRunReflection(runId: string) { return get(`/opc/workers/runs/${runId}/reflection`); }
 
@@ -303,7 +526,37 @@ export async function getPromptVersion(versionId: string): Promise<PromptVersion
   return get(`/opc/prompts/versions/${versionId}`);
 }
 
-async function put<T=unknown>(path: string, body: unknown): Promise<T> {
+export async function put<T=unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
   return handleResponse(res) as Promise<T>;
+}
+
+// === Playground (API_CONTRACT §四 · multi-model compare) ===
+export interface PlaygroundResult {
+  model: string;
+  output: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  latency_ms: number;
+  error: string | null;
+}
+
+export interface PlaygroundRunResponse {
+  run_id: string;
+  results: PlaygroundResult[];
+}
+
+export interface PlaygroundRunRequest {
+  agent_id?: string;
+  system_prompt: string;
+  user_input: string;
+  variables?: Record<string, string>;
+  models: string[];
+  temperature?: number;
+  max_tokens?: number;
+}
+
+export async function runPlayground(opcId: string, req: PlaygroundRunRequest): Promise<PlaygroundRunResponse> {
+  return post(`/companies/${encodeURIComponent(opcId)}/playground/run`, req);
 }

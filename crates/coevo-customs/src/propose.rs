@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 use crate::blackboard::Blackboard;
 use crate::dependency::{CognitiveDependencyGraph, EdgeType};
-use crate::provenance::validate_provenance;
+use crate::provenance::verify_provenance;
 
 /// The CognitiveCustoms Propose interface.
 pub struct CognitiveCustoms;
@@ -28,9 +28,12 @@ impl CognitiveCustoms {
         dependency_entry_ids: &[String],
     ) -> Result<CommitReceiptSpec, ProposeError> {
         // ---- Guard 1: Validate provenance envelope ----
+        // Fact/Decision writes carry a cryptographically-verified provenance
+        // envelope. The signature is checked against the proposed value so a
+        // signature cannot be replayed onto different content.
         if cognitive_layer == CognitiveLayer::Fact || cognitive_layer == CognitiveLayer::Decision {
             let require_mcp = evidence_requirement.require_json_report;
-            validate_provenance(provenance_envelope, require_mcp)
+            verify_provenance(provenance_envelope, proposed_value, require_mcp, None)
                 .map_err(|e| ProposeError::ProvenanceValidationFailed(e.to_string()))?;
         }
 
@@ -77,7 +80,7 @@ impl CognitiveCustoms {
             target_key,
             proposed_value,
             cognitive_layer,
-            &provenance_envelope.source_agent_id,
+            provenance_envelope,
             &metadata.contract_hash,
             ttl_ms,
         )

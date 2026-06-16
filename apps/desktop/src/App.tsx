@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route } from "react-router-dom";
+import { ensureActiveCompany } from "./api/companies";
 import { GovernanceProvider } from "./hooks/useGovernance";
+import { ToastProvider } from "./components/ToastProvider";
 import { getModelConfig } from "./api/client";
 import { clearModelProviderConfigured, isModelProviderConfigured, markModelProviderConfigured } from "./settings/onboarding";
 import { initTraceWiring } from "./stores/traceStore";
@@ -12,6 +14,10 @@ import Dashboard from "./pages/Dashboard";
 import MyCompany from "./pages/MyCompany";
 import CompanyDetail from "./pages/CompanyDetail";
 import Office from "./pages/Office";
+import MeetingRoom from "./pages/MeetingRoom";
+import PerformanceBoard from "./pages/PerformanceBoard";
+import OperatingReports from "./pages/OperatingReports";
+import CostManagement from "./pages/CostManagement";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import TaskDetail from "./pages/TaskDetail";
@@ -23,9 +29,7 @@ import SkillsPage from "./pages/SkillsPage";
 import ExternalExecutors from "./pages/ExternalExecutors";
 import WorkOrders from "./pages/WorkOrders";
 import Contracts from "./pages/Contracts";
-import Plans from "./pages/Plans";
 import Customs from "./pages/Customs";
-import RiskGate from "./pages/RiskGate";
 import Resolution from "./pages/Resolution";
 import Audit from "./pages/Audit";
 import Settings from "./pages/Settings";
@@ -35,6 +39,7 @@ import Traces from "./pages/Traces";
 import Workflows from "./pages/Workflows";
 import Performance from "./pages/Performance";
 import EmployeeGrowth from "./pages/EmployeeGrowth";
+import EmployeeOffice from "./pages/EmployeeOffice";
 
 initTraceWiring();
 
@@ -52,6 +57,7 @@ export default function App() {
     }
     if (configured) {
       if (!isModelProviderConfigured()) markModelProviderConfigured();
+      await ensureActiveCompany();
     } else {
       clearModelProviderConfigured();
     }
@@ -59,9 +65,11 @@ export default function App() {
     setBooted(true);
   }
 
-  if (!booted) return <BootPage onReady={handleBootReady} />;
-  if (showFirstRun) return <FirstRun onDone={() => setShowFirstRun(false)} />;
-  return (
+  const content = !booted ? (
+    <BootPage onReady={handleBootReady} />
+  ) : showFirstRun ? (
+    <FirstRun onDone={() => setShowFirstRun(false)} />
+  ) : (
     <GovernanceProvider>
       <Routes>
         <Route element={<Layout />}>
@@ -72,6 +80,10 @@ export default function App() {
           <Route path="/company/details" element={<CompanyDetail />} />
           <Route path="/companies/:opcId" element={<CompanyDetail />} />
           <Route path="/companies/:opcId/office" element={<Office />} />
+          <Route path="/companies/:opcId/meetings" element={<MeetingRoom />} />
+          <Route path="/companies/:opcId/performance" element={<PerformanceBoard />} />
+          <Route path="/companies/:opcId/reports" element={<OperatingReports />} />
+          <Route path="/companies/:opcId/cost" element={<CostManagement />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
           <Route path="/tasks/:workOrderId" element={<TaskDetail />} />
@@ -81,13 +93,14 @@ export default function App() {
           <Route path="/employees" element={<AIEmployees />} />
           <Route path="/market" element={<TalentMarket />} />
           <Route path="/employees/:agentId/growth" element={<EmployeeGrowth />} />
+          <Route path="/employees/:agentId" element={<EmployeeOffice />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/executors" element={<ExternalExecutors />} />
           <Route path="/work-orders" element={<WorkOrders />} />
           <Route path="/contracts" element={<Contracts />} />
-          <Route path="/plans" element={<Plans />} />
+          <Route path="/plans" element={<Navigate to="/work-orders" replace />} />
           <Route path="/customs" element={<Customs />} />
-          <Route path="/risk" element={<RiskGate />} />
+          <Route path="/risk" element={<Navigate to="/settings/risk_gate" replace />} />
           <Route path="/resolution" element={<Resolution />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/timeline" element={<Timeline />} />
@@ -100,4 +113,6 @@ export default function App() {
       </Routes>
     </GovernanceProvider>
   );
+
+  return <ToastProvider>{content}</ToastProvider>;
 }

@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..", "..", "..");
-const defaultArtifactRoot = `D:\\${"\u7f16\u8bd1\u4ea7\u7269"}\\coevo`;
+const defaultArtifactRoot = join(repoRoot, ".artifacts");
 const artifactRoot = process.env.COEVO_BUILD_ARTIFACT_DIR || defaultArtifactRoot;
 const cargoTargetDir = process.env.CARGO_TARGET_DIR || join(artifactRoot, "cargo-target");
 const sidecarDir = join(artifactRoot, "sidecars");
@@ -16,7 +16,20 @@ console.log("  Repo root:", repoRoot);
 console.log("  Artifact root:", artifactRoot);
 
 const cargo = process.env.CARGO || "cargo";
-const defaultToolchain = process.env.COEVO_RUST_TOOLCHAIN || "1.96.0-x86_64-pc-windows-msvc";
+// Platform-aware default toolchain (override with COEVO_RUST_TOOLCHAIN). Avoids
+// invoking a Windows MSVC toolchain on macOS / Linux build hosts.
+const defaultToolchainForHost = () => {
+  const v = "1.96.0";
+  if (process.platform === "win32") return `${v}-x86_64-pc-windows-msvc`;
+  if (process.platform === "darwin")
+    return process.arch === "arm64"
+      ? `${v}-aarch64-apple-darwin`
+      : `${v}-x86_64-apple-darwin`;
+  return process.arch === "arm64"
+    ? `${v}-aarch64-unknown-linux-gnu`
+    : `${v}-x86_64-unknown-linux-gnu`;
+};
+const defaultToolchain = process.env.COEVO_RUST_TOOLCHAIN || defaultToolchainForHost();
 const cargoArgsPrefix = cargo === "cargo" && defaultToolchain ? [`+${defaultToolchain}`] : [];
 const runCargo = (args, options = {}) => execFileSync(cargo, [...cargoArgsPrefix, ...args], options);
 const cargoLabel = [cargo, ...cargoArgsPrefix].join(" ");

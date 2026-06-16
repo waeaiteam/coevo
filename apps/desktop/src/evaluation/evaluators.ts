@@ -1,6 +1,6 @@
-import { getAgentGrowth, type AgentGrowth } from '../api/client';
+﻿import { getAgentGrowth, type AgentGrowth } from '../api/client';
 
-export type EvaluatorType = 'prompt' | 'code' | 'agent' | 'custom_rpc';
+export type EvaluatorType = 'code' | 'agent' | 'custom_rpc';
 
 export interface EvaluationMetric {
   name: string;
@@ -10,7 +10,7 @@ export interface EvaluationMetric {
 
 export interface EvaluationResult {
   metric_name: string;
-  score: number;        // 0-100
+  score: number;
   passed: boolean;
   details?: string;
   error?: string;
@@ -23,6 +23,11 @@ export interface Evaluator {
   description: string;
   metrics: EvaluationMetric[];
   config: Record<string, any>;
+}
+
+export interface CustomRpcEvaluatorConfig {
+  endpoint: string;
+  auth_token: string;
 }
 
 export interface EvaluationJob {
@@ -38,44 +43,6 @@ export interface EvaluationJob {
   duration_ms?: number;
 }
 
-// 提示词评估器
-export class PromptEvaluator implements Evaluator {
-  id = 'prompt-evaluator-' + Date.now();
-  name = 'Prompt Quality Evaluator';
-  type: EvaluatorType = 'prompt';
-  description = 'Evaluates prompt quality using LLM';
-  metrics: EvaluationMetric[] = [
-    { name: 'clarity', weight: 0.3, threshold: 70 },
-    { name: 'completeness', weight: 0.3, threshold: 70 },
-    { name: 'structure', weight: 0.2, threshold: 60 },
-    { name: 'effectiveness', weight: 0.2, threshold: 70 },
-  ];
-  config = {
-    model: 'gpt-4',
-    temperature: 0.7,
-  };
-
-  async evaluate(prompt: string): Promise<EvaluationResult[]> {
-    // 模拟 LLM 评估（实际应该调用真实LLM API）
-    const results: EvaluationResult[] = [];
-
-    for (const metric of this.metrics) {
-      const score = Math.floor(Math.random() * 40 + 60); // 60-100 范围
-      const passed = metric.threshold ? score >= metric.threshold : true;
-
-      results.push({
-        metric_name: metric.name,
-        score,
-        passed,
-        details: `${metric.name} score: ${score}/100`,
-      });
-    }
-
-    return results;
-  }
-}
-
-// 代码评估器
 export class CodeEvaluator implements Evaluator {
   id = 'code-evaluator-' + Date.now();
   name = 'Code Quality Evaluator';
@@ -94,7 +61,6 @@ export class CodeEvaluator implements Evaluator {
   async evaluate(code: string): Promise<EvaluationResult[]> {
     const results: EvaluationResult[] = [];
 
-    // 简单的启发式检查
     const hasTests = code.includes('test(') || code.includes('describe(');
     const hasComments = code.includes('//') || code.includes('/*');
     const linesCount = code.split('\n').length;
@@ -124,7 +90,6 @@ export class CodeEvaluator implements Evaluator {
   }
 }
 
-// Agent 评估器
 export class AgentEvaluator implements Evaluator {
   id = 'agent-evaluator-' + Date.now();
   name = 'Agent Performance Evaluator';
@@ -143,8 +108,6 @@ export class AgentEvaluator implements Evaluator {
   async evaluate(agentId: string, _testCases: any[]): Promise<EvaluationResult[]> {
     const results: EvaluationResult[] = [];
 
-    // Read real execution stats from the backend growth endpoint instead of
-    // fabricating numbers. Falls back gracefully if the agent has no runs yet.
     let growth: AgentGrowth | null = null;
     try {
       growth = await getAgentGrowth(agentId);
@@ -158,7 +121,7 @@ export class AgentEvaluator implements Evaluator {
           metric_name: 'accuracy',
           score: 0,
           passed: false,
-          details: 'No execution history yet — assign tasks to this employee first.',
+          details: 'No execution history yet - assign tasks to this employee first.',
         },
       ];
     }
@@ -193,28 +156,49 @@ export class AgentEvaluator implements Evaluator {
   }
 }
 
-// 自定义 RPC 评估器
 export class CustomRPCEvaluator implements Evaluator {
-  id = 'custom-rpc-evaluator-' + Date.now();
+  id = 'custom-rpc-evaluator';
   name = 'Custom RPC Evaluator';
   type: EvaluatorType = 'custom_rpc';
   description = 'Evaluates using custom external service';
   metrics: EvaluationMetric[] = [
     { name: 'custom_score', weight: 1.0, threshold: 70 },
   ];
-  config = {
-    endpoint: 'https://api.example.com/evaluate',
-    auth_token: '',
-  };
+  config: CustomRpcEvaluatorConfig = loadCustomRpcEvaluatorConfig();
+
+  getConfig(): CustomRpcEvaluatorConfig {
+    return { ...this.config };
+  }
+
+  setConfig(next: CustomRpcEvaluatorConfig): void {
+    this.config = {
+      endpoint: next.endpoint.trim(),
+      auth_token: next.auth_token.trim(),
+    };
+    saveCustomRpcEvaluatorConfig(this.config);
+  }
 
   async evaluate(data: any): Promise<EvaluationResult[]> {
+    if (!this.config.endpoint.trim()) {
+      return [{
+        metric_name: 'custom_score',
+        score: 0,
+        passed: false,
+        error: 'Custom RPC endpoint is not configured.',
+      }];
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.config.auth_token.trim()) {
+      headers.Authorization = `Bearer ${this.config.auth_token.trim()}`;
+    }
+
     try {
       const response = await fetch(this.config.endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.config.auth_token}`,
-        },
+        headers,
         body: JSON.stringify(data),
       });
 
@@ -240,7 +224,6 @@ export class CustomRPCEvaluator implements Evaluator {
   }
 }
 
-// 评估管理器
 export class EvaluationManager {
   private evaluators = new Map<string, Evaluator>();
   private jobs = new Map<string, EvaluationJob>();
@@ -252,7 +235,7 @@ export class EvaluationManager {
   async runEvaluation(
     evaluatorId: string,
     targetId: string,
-    data: any
+    data: any,
   ): Promise<EvaluationJob> {
     const evaluator = this.evaluators.get(evaluatorId);
     if (!evaluator) {
@@ -260,7 +243,7 @@ export class EvaluationManager {
     }
 
     const job: EvaluationJob = {
-      job_id: `eval_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      job_id: `eval_${Date.now()}_${crypto.randomUUID().slice(0, 9)}`,
       evaluator_id: evaluatorId,
       target_id: targetId,
       status: 'pending',
@@ -268,21 +251,21 @@ export class EvaluationManager {
       results: [],
     };
 
-    this.jobs.set(job.job_id, job);
+    const mutableJob = cloneJob(job);
+    this.jobs.set(job.job_id, mutableJob);
 
-    // 异步执行
-    this.executeJob(job, evaluator, data).catch(error => {
-      job.status = 'failed';
-      job.error = error.message;
+    this.executeJob(mutableJob, evaluator, data).catch((error) => {
+      mutableJob.status = 'failed';
+      mutableJob.error = error.message;
     });
 
-    return job;
+    return cloneJob(mutableJob);
   }
 
   private async executeJob(
     job: EvaluationJob,
     evaluator: Evaluator,
-    data: any
+    data: any,
   ): Promise<void> {
     job.status = 'running';
     job.started_at = Date.now();
@@ -290,9 +273,7 @@ export class EvaluationManager {
     try {
       let results: EvaluationResult[];
 
-      if (evaluator instanceof PromptEvaluator) {
-        results = await evaluator.evaluate(data);
-      } else if (evaluator instanceof CodeEvaluator) {
+      if (evaluator instanceof CodeEvaluator) {
         results = await evaluator.evaluate(data);
       } else if (evaluator instanceof AgentEvaluator) {
         results = await evaluator.evaluate(data.agentId, data.testCases);
@@ -315,23 +296,72 @@ export class EvaluationManager {
   }
 
   getJob(jobId: string): EvaluationJob | undefined {
-    return this.jobs.get(jobId);
+    const job = this.jobs.get(jobId);
+    return job ? cloneJob(job) : undefined;
   }
 
   listJobs(): EvaluationJob[] {
-    return Array.from(this.jobs.values());
+    return Array.from(this.jobs.values()).map(cloneJob);
   }
 
   getEvaluators(): Evaluator[] {
     return Array.from(this.evaluators.values());
   }
+
+  getCustomRpcConfig(): CustomRpcEvaluatorConfig {
+    const evaluator = this.getCustomRpcEvaluator();
+    return evaluator ? evaluator.getConfig() : { endpoint: '', auth_token: '' };
+  }
+
+  setCustomRpcConfig(next: CustomRpcEvaluatorConfig): void {
+    const evaluator = this.getCustomRpcEvaluator();
+    if (evaluator) {
+      evaluator.setConfig(next);
+    }
+  }
+
+  private getCustomRpcEvaluator(): CustomRPCEvaluator | undefined {
+    return Array.from(this.evaluators.values()).find(
+      (evaluator): evaluator is CustomRPCEvaluator => evaluator instanceof CustomRPCEvaluator,
+    );
+  }
 }
 
-// 单例实例
 export const evaluationManager = new EvaluationManager();
 
-// 注册默认评估器
-evaluationManager.registerEvaluator(new PromptEvaluator());
 evaluationManager.registerEvaluator(new CodeEvaluator());
 evaluationManager.registerEvaluator(new AgentEvaluator());
 evaluationManager.registerEvaluator(new CustomRPCEvaluator());
+
+const CUSTOM_RPC_STORAGE_KEY = 'coevo-custom-rpc-evaluator-config';
+
+function loadCustomRpcEvaluatorConfig(): CustomRpcEvaluatorConfig {
+  try {
+    const raw = localStorage.getItem(CUSTOM_RPC_STORAGE_KEY);
+    if (!raw) return { endpoint: '', auth_token: '' };
+    const parsed = JSON.parse(raw) as Partial<CustomRpcEvaluatorConfig>;
+    return {
+      endpoint: String(parsed.endpoint || '').trim(),
+      auth_token: String(parsed.auth_token || '').trim(),
+    };
+  } catch {
+    return { endpoint: '', auth_token: '' };
+  }
+}
+
+function saveCustomRpcEvaluatorConfig(config: CustomRpcEvaluatorConfig): void {
+  localStorage.setItem(
+    CUSTOM_RPC_STORAGE_KEY,
+    JSON.stringify({
+      endpoint: config.endpoint.trim(),
+      auth_token: config.auth_token.trim(),
+    }),
+  );
+}
+
+function cloneJob(job: EvaluationJob): EvaluationJob {
+  return {
+    ...job,
+    results: job.results.map((result) => ({ ...result })),
+  };
+}

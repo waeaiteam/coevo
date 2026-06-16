@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { createEmployee, getAgentMemory, listEmployees, seedEmployees } from "../api/client";
 import Icon from "../components/Icon";
 import AgentWorkbenchPanel from "../components/AgentWorkbenchPanel";
+import { loadSettingsSnapshot } from "../hooks/useSettings";
 import { t, useLanguage } from "../settings/i18n";
+import { presetFor } from "../settings/modelPresets";
 
 const DEPTS = [
   { key: "founder_office", labelKey: "employees.department_founder_office" },
@@ -311,12 +313,21 @@ function EmployeeDetail({
             <h3 className="mt-1 text-lg font-bold">{String(employee.display_name || employee.agent_id || "")}</h3>
             <div className="mt-1 font-mono text-xs" style={{ color: "var(--accent)" }}>{String(employee.agent_id || "")}</div>
           </div>
-          <Link
-            to={`/employees/${encodeURIComponent(String(employee.agent_id || ""))}/growth`}
-            className="product-link-button"
-          >
-            <Icon name="badge-check" /> {t("growth.view")}
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              to={`/employees/${encodeURIComponent(String(employee.agent_id || ""))}`}
+              className="product-link-button"
+              style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+            >
+              <Icon name="building" /> {t("market.go_to_office")}
+            </Link>
+            <Link
+              to={`/employees/${encodeURIComponent(String(employee.agent_id || ""))}/growth`}
+              className="product-link-button"
+            >
+              <Icon name="badge-check" /> {t("growth.view")}
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -412,6 +423,8 @@ const NEW_DEPTS = ["founder_office", "product", "engineering", "research", "gove
 
 function CreateEmployeeModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   useLanguage();
+  const settings = loadSettingsSnapshot();
+  const providerPreset = presetFor(settings.model_provider.provider);
   const [name, setName] = useState("");
   const [department, setDepartment] = useState("custom");
   const [riskCeiling, setRiskCeiling] = useState(0.3);
@@ -439,9 +452,16 @@ function CreateEmployeeModal({ onClose, onCreated }: { onClose: () => void; onCr
         expires_at_ms: null,
       },
       model_profile: {
-        provider: "mock", base_url: "", api_key_ref: "",
-        default_model: "gpt-4o", fast_model: "gpt-4o-mini", reasoning_model: "o1",
-        structured_output_model: "gpt-4o", timeout_ms: 30000, max_tokens: 4096, max_cost_per_task_usd: 1.0,
+        provider: providerPreset.provider,
+        base_url: settings.model_provider.base_url || providerPreset.baseUrl,
+        api_key_ref: "coevo/model-provider",
+        default_model: settings.model_provider.default_model || providerPreset.defaultModel,
+        fast_model: settings.model_provider.fast_model || providerPreset.fastModel,
+        reasoning_model: settings.model_provider.reasoning_model || providerPreset.reasoningModel,
+        structured_output_model: settings.model_provider.structured_output_model || providerPreset.structuredModel,
+        timeout_ms: settings.model_provider.request_timeout_ms,
+        max_tokens: settings.model_provider.max_tokens,
+        max_cost_per_task_usd: settings.model_provider.max_cost_per_task_usd,
       },
       tool_scopes: ["urn:coevo:tool:read"],
       memory_scope: "agent",

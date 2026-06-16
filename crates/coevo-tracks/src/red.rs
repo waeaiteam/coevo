@@ -2,15 +2,15 @@
 //! IR=3. Requires caller_identity_proof, dual-sign lease, MFA approval.
 //! Per coevo whitepaper Section 11.3.
 
-use coevo_core::cognitive::{CognitiveLayer, ProvenanceEnvelope};
+use coevo_core::cognitive::CognitiveLayer;
 use coevo_core::contract::{ApprovalMode, ContractState};
 use coevo_core::decision::{ActionProposalSpec, GateDecision};
 use coevo_core::lease::EmergencyLease;
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_customs::propose::CognitiveCustoms;
+use coevo_customs::provenance::ProvenanceSigner;
 use coevo_mcl::compiler::MCLCompiler;
 use coevo_mcl::state_machine::{MCLStateMachine, TransitionEvent};
-use coevo_policy::mock::MockPolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use coevo_risk::lease::LeaseManager;
 use coevo_router::pcdt::PcdtRouter;
@@ -71,7 +71,8 @@ impl RedTrackRunner {
         }
 
         let zero = "0000000000000000000000000000000000000000000000000000000000000000";
-        let policy = Box::new(MockPolicyEngine::new());
+        // Fail-closed by default: DenyAll unless tests / COEVO_ENABLE_MOCK_POLICY_ENGINE=1.
+        let policy = crate::policy_select::select_policy_engine();
         let compiler = MCLCompiler::new();
 
         // ---- Step 2: Compile with OPA injection ----
@@ -198,24 +199,29 @@ impl RedTrackRunner {
                 .await
                 {
                     Ok(()) => {
-                        let provenance = ProvenanceEnvelope {
-                            source_agent_id: agent_ids.first().cloned().unwrap_or_default(),
-                            verification_tool_urn: "urn:mcp:tool:deploy-production".to_string(),
-                            environmental_scope: coevo_core::cognitive::EnvironmentalScope {
-                                environment: coevo_core::cognitive::Environment::Production,
-                                tenant_id: tenant_id.to_string(),
-                            },
-                            ttl_seconds: 900, // 15 minutes
-                            cryptographic_signature: "red-track-signature".to_string(),
-                            verification_report: Some(serde_json::json!({"deployment": "staged"})),
-                            created_at: chrono::Utc::now(),
-                        };
+                        let entry_value =
+                            serde_json::json!({"operation": i, "status": "executed_under_lease"});
+                        // Real Ed25519-signed provenance (no literal
+                        // "red-track-signature"); the signature binds to
+                        // `entry_value`.
+                        let provenance = ProvenanceSigner::new(
+                            agent_ids.first().cloned().unwrap_or_default(),
+                            "urn:mcp:tool:deploy-production",
+                        )
+                        .with_scope(coevo_core::cognitive::EnvironmentalScope {
+                            environment: coevo_core::cognitive::Environment::Production,
+                            tenant_id: tenant_id.to_string(),
+                        })
+                        .with_ttl_seconds(900) // 15 minutes
+                        .with_verification_report(serde_json::json!({"deployment": "staged"}))
+                        .sign(&entry_value);
 
+                        // Brand-new key (fresh UUID) ⇒ expected_version = 0 per OCC.
                         let receipt = CognitiveCustoms::propose(
                             pool,
                             &format!("red-result-{}-{}", uuid::Uuid::new_v4(), i),
                             0,
-                            &serde_json::json!({"operation": i, "status": "executed_under_lease"}),
+                            &entry_value,
                             CognitiveLayer::Hypothesis,
                             &provenance,
                             &meta,

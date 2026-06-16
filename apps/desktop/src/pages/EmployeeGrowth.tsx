@@ -13,7 +13,7 @@ function directionLabel(dir: AgentGrowth["direction"]): { text: string; tone: st
   }
 }
 
-export default function EmployeeGrowth() {
+export default function EmployeeGrowth({ embedded = false }: { embedded?: boolean }) {
   useLanguage();
   const params = useParams();
   const agentId = params.agentId ? decodeURIComponent(params.agentId) : "";
@@ -51,18 +51,20 @@ export default function EmployeeGrowth() {
   const dir = growth ? directionLabel(growth.direction) : null;
 
   return (
-    <div className="product-page">
-      <header className="product-header">
-        <div className="min-w-0">
-          <div className="product-kicker">{t("growth.kicker")}</div>
-          <h1 className="product-title">{agentId}</h1>
-        </div>
-        <div className="product-actions">
-          <Link to="/employees" className="product-link-button">
-            <Icon name="chevron-right" style={{ transform: "rotate(180deg)" }} /> {t("growth.back")}
-          </Link>
-        </div>
-      </header>
+    <div className={embedded ? "space-y-4" : "product-page"}>
+      {!embedded && (
+        <header className="product-header">
+          <div className="min-w-0">
+            <div className="product-kicker">{t("growth.kicker")}</div>
+            <h1 className="product-title">{agentId}</h1>
+          </div>
+          <div className="product-actions">
+            <Link to="/employees" className="product-link-button">
+              <Icon name="chevron-right" style={{ transform: "rotate(180deg)" }} /> {t("growth.back")}
+            </Link>
+          </div>
+        </header>
+      )}
 
       {loading && <div className="product-empty">{t("settings.loading")}</div>}
 
@@ -128,17 +130,34 @@ export default function EmployeeGrowth() {
             ) : (
               <div className="product-list">
                 {growth.pending_improvements.map((p) => (
-                  <div key={p.proposal_id} className="product-list-row static" style={{ flexWrap: "wrap", gap: 10 }}>
-                    <span className="product-row-main" style={{ flex: "1 1 240px" }}>{p.diagnosis}</span>
-                    <button
-                      className="primary-button"
-                      disabled={approving === p.proposal_id}
-                      onClick={() => approve(p.proposal_id)}
-                    >
-                      {approving === p.proposal_id
-                        ? <Icon name="spinner" className="icon-spin" />
-                        : <Icon name="check" />} {t("growth.approve")}
-                    </button>
+                  <div key={p.proposal_id} className="product-list-row static" style={{ flexWrap: "wrap", gap: 10, flexDirection: "column", alignItems: "stretch" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span className="product-row-main" style={{ flex: "1 1 240px" }}>{p.diagnosis}</span>
+                      <button
+                        className="primary-button"
+                        disabled={approving === p.proposal_id}
+                        onClick={() => approve(p.proposal_id)}
+                      >
+                        {approving === p.proposal_id
+                          ? <Icon name="spinner" className="icon-spin" />
+                          : <Icon name="check" />} {t("growth.approve")}
+                      </button>
+                    </div>
+                    {p.proposed_changes && (
+                      <details style={{ marginTop: 6 }}>
+                        <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-secondary)", fontWeight: 600 }}>
+                          {t("growth.proposed_changes")}
+                        </summary>
+                        <pre style={{ fontSize: 12, whiteSpace: "pre-wrap", background: "var(--surface-sunken)", borderRadius: 6, padding: "8px 10px", marginTop: 6, lineHeight: 1.5 }}>
+                          {p.proposed_changes}
+                        </pre>
+                      </details>
+                    )}
+                    {!p.proposed_changes && (
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
+                        {t("growth.no_proposed_changes")}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

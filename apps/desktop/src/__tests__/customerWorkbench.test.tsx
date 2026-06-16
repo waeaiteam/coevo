@@ -3,8 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { GovernanceProvider } from "../hooks/useGovernance";
-import MissionChat from "../pages/MissionChat";
 import Layout from "../components/Layout";
+import MissionChat from "../pages/MissionChat";
 import { setLanguage } from "../settings/i18n";
 
 const INTERNAL_TERMS =
@@ -14,7 +14,7 @@ const api = vi.hoisted(() => ({
   getHealth: vi.fn(),
   compileContract: vi.fn(),
   routePlan: vi.fn(),
-  createWorkOrder: vi.fn(),
+  streamWorkerRunEvents: vi.fn(() => () => undefined),
   listConversations: vi.fn(),
   createConversation: vi.fn(),
   getCompanyProfile: vi.fn(),
@@ -27,11 +27,27 @@ const api = vi.hoisted(() => ({
   seedSkills: vi.fn(),
 }));
 
+const org = vi.hoisted(() => ({
+  createCompanyConversation: vi.fn(),
+  appendCompanyConversationMessage: vi.fn(),
+  createCompanyWorkOrder: vi.fn(),
+  executeCompanyWorkOrder: vi.fn(),
+  getCompanyProfileById: vi.fn(),
+  listCompanyConversationMessages: vi.fn(),
+  listCompanyConversations: vi.fn(),
+  listCompanyEmployees: vi.fn(),
+  listCompanyWorkOrders: vi.fn(),
+}));
+
+const bootstrap = vi.hoisted(() => ({
+  ensureWorkspaceDefaults: vi.fn(),
+}));
+
 vi.mock("../api/client", () => ({
   getHealth: api.getHealth,
   compileContract: api.compileContract,
   routePlan: api.routePlan,
-  createWorkOrder: api.createWorkOrder,
+  streamWorkerRunEvents: api.streamWorkerRunEvents,
   listConversations: api.listConversations,
   createConversation: api.createConversation,
   getCompanyProfile: api.getCompanyProfile,
@@ -44,13 +60,29 @@ vi.mock("../api/client", () => ({
   seedSkills: api.seedSkills,
 }));
 
+vi.mock("../api/org", () => ({
+  createCompanyConversation: org.createCompanyConversation,
+  appendCompanyConversationMessage: org.appendCompanyConversationMessage,
+  createCompanyWorkOrder: org.createCompanyWorkOrder,
+  executeCompanyWorkOrder: org.executeCompanyWorkOrder,
+  getCompanyProfileById: org.getCompanyProfileById,
+  listCompanyConversationMessages: org.listCompanyConversationMessages,
+  listCompanyConversations: org.listCompanyConversations,
+  listCompanyEmployees: org.listCompanyEmployees,
+  listCompanyWorkOrders: org.listCompanyWorkOrders,
+}));
+
+vi.mock("../api/bootstrap", () => ({
+  ensureWorkspaceDefaults: bootstrap.ensureWorkspaceDefaults,
+}));
+
 function renderWorkbench() {
   render(
     <MemoryRouter>
       <GovernanceProvider>
         <MissionChat />
       </GovernanceProvider>
-    </MemoryRouter>
+    </MemoryRouter>,
   );
 }
 
@@ -58,6 +90,9 @@ describe("customer-facing desktop workbench", () => {
   beforeEach(() => {
     localStorage.clear();
     setLanguage("zh");
+    localStorage.setItem("coevo-user-id", "default-founder");
+    localStorage.setItem("coevo-opc-id", "default-opc");
+
     api.getHealth.mockResolvedValue({ status: "ok", version: "1.0.0" });
     api.compileContract.mockResolvedValue({
       contract: { mission: "整理客户线索" },
@@ -69,8 +104,28 @@ describe("customer-facing desktop workbench", () => {
       plan: { steps: ["整理", "汇总"] },
       plan_hash: "b".repeat(64),
     });
-    api.createWorkOrder.mockResolvedValue({
-      ok: true,
+    api.listConversations.mockResolvedValue([]);
+    api.createConversation.mockResolvedValue({ conversation_id: "conv-customer-1", title: "整理本周客户线索" });
+    api.getCompanyProfile.mockResolvedValue({ active_projects: ["客户项目"] });
+    api.listConversationMessages.mockResolvedValue([]);
+    api.appendConversationMessage.mockResolvedValue({ ok: true });
+    api.modelChat.mockResolvedValue({
+      content: "我会先整理客户线索，再生成跟进清单。",
+      model: "deepseek-v4-flash",
+      provider_kind: "DeepSeek",
+    });
+    api.listEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
+    api.listSkills.mockResolvedValue([{ skill_id: "skill-mission-draft", status: "Active", owner_agent_id: "agent-founder-01" }]);
+    api.seedEmployees.mockResolvedValue({ ok: true });
+    api.seedSkills.mockResolvedValue({ ok: true });
+
+    bootstrap.ensureWorkspaceDefaults.mockResolvedValue({
+      selectedAgentIds: ["agent-founder-01"],
+      requiredSkillIds: ["skill-mission-draft"],
+    });
+    org.createCompanyConversation.mockResolvedValue({ conversation_id: "conv-customer-1", title: "整理本周客户线索" });
+    org.appendCompanyConversationMessage.mockResolvedValue({ ok: true });
+    org.createCompanyWorkOrder.mockResolvedValue({
       work_order_id: "wo-customer-1",
       status: "Planned",
       governance_verdict: {
@@ -84,27 +139,12 @@ describe("customer-facing desktop workbench", () => {
         resolved_agent_id: "agent-founder-01",
       },
     });
-    api.listConversations.mockResolvedValue([]);
-    api.createConversation.mockResolvedValue({
-      conversation_id: "conv-customer-1",
-      title: "整理本周客户线索",
-    });
-    api.getCompanyProfile.mockResolvedValue({ active_projects: ["客户项目"] });
-    api.listConversationMessages.mockResolvedValue([]);
-    api.appendConversationMessage.mockResolvedValue({ ok: true });
-    api.modelChat.mockResolvedValue({
-      content: "我会先整理客户线索，再生成跟进清单。",
-      model: "deepseek-v4-flash",
-      provider_kind: "DeepSeek",
-    });
-    api.listEmployees.mockResolvedValue([
-      { agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 },
-    ]);
-    api.listSkills.mockResolvedValue([
-      { skill_id: "skill-mission-draft", status: "Active", owner_agent_id: "agent-founder-01" },
-    ]);
-    api.seedEmployees.mockResolvedValue({ ok: true });
-    api.seedSkills.mockResolvedValue({ ok: true });
+    org.executeCompanyWorkOrder.mockResolvedValue({ ok: true, run_id: "run-customer-1" });
+    org.getCompanyProfileById.mockResolvedValue({ active_projects: ["客户项目"] });
+    org.listCompanyConversationMessages.mockResolvedValue([]);
+    org.listCompanyConversations.mockResolvedValue([]);
+    org.listCompanyEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
+    org.listCompanyWorkOrders.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -136,15 +176,17 @@ describe("customer-facing desktop workbench", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => expect(api.createWorkOrder).toHaveBeenCalledTimes(1));
-    expect(api.createWorkOrder.mock.calls[0][0]).toMatchObject({
+    await waitFor(() => expect(org.createCompanyWorkOrder).toHaveBeenCalledTimes(1));
+    expect(org.createCompanyWorkOrder.mock.calls[0][1]).toMatchObject({
       governance_proposal: {
         autonomy_ceiling: "read_only",
         model_preference: "standard",
         assigned_agent_id: null,
       },
     });
-    expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument(),
+    );
     expect(screen.getByText(/我会先整理客户线索/)).toBeInTheDocument();
     expect(screen.getByText("安全状态")).toBeInTheDocument();
     expect(screen.getByText("打开任务")).toBeInTheDocument();
@@ -158,7 +200,7 @@ describe("customer-facing desktop workbench", () => {
         <GovernanceProvider>
           <Layout />
         </GovernanceProvider>
-      </MemoryRouter>
+      </MemoryRouter>,
     );
 
     expect(screen.getByRole("link", { name: "新对话" })).toHaveAttribute("href", "/");

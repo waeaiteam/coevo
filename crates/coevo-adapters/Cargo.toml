@@ -16,3 +16,5 @@ uuid.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 hex.workspace = true
+# Same version/features as coevo-models to avoid a duplicate HTTP/TLS stack.
+reqwest = { version = "0.12", features = ["json"] }

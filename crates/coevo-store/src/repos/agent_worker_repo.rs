@@ -5,6 +5,7 @@ impl AgentWorkerRepo {
     pub async fn upsert(
         pool: &SqlitePool,
         worker_id: &str,
+        opc_id: &str,
         agent_id: &str,
         department: &str,
         status: &str,
@@ -16,20 +17,36 @@ impl AgentWorkerRepo {
         created: i64,
         updated: i64,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT OR REPLACE INTO agent_workers VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(worker_id)
-            .bind(agent_id)
-            .bind(department)
-            .bind(status)
-            .bind(work_order_id)
-            .bind(session_id)
-            .bind(loaded_skills)
-            .bind(memory_scope)
-            .bind(tool_scope)
-            .bind(created)
-            .bind(updated)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO agent_workers (
+                worker_id,
+                agent_id,
+                department,
+                status,
+                current_work_order_id,
+                current_session_id,
+                loaded_skills_json,
+                memory_scope,
+                tool_scope_json,
+                created_at_ms,
+                updated_at_ms,
+                opc_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(worker_id)
+        .bind(agent_id)
+        .bind(department)
+        .bind(status)
+        .bind(work_order_id)
+        .bind(session_id)
+        .bind(loaded_skills)
+        .bind(memory_scope)
+        .bind(tool_scope)
+        .bind(created)
+        .bind(updated)
+        .bind(opc_id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn get(

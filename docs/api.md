@@ -188,9 +188,40 @@ suites.
 
 ---
 
-## WorkOrder Create Boundary
+## 8. WorkOrder Create Boundary
 
 `POST /opc/work-orders` accepts mission facts and selected resources. Track, allowed actions, restricted actions, and risk summary are server-authoritative at creation time. Legacy clients may still send those governance fields, but the server ignores them and persists its own RiskGate classification.
+
+---
+
+## 9. OPC Company Scope
+
+Coevo now exposes two company-scoped API styles:
+
+1. Canonical multi-company routes use a path-scoped company id:
+   - `/companies/{opc_id}/...`
+2. Legacy `/opc/...` routes remain supported, but they are **header-scoped**:
+   - clients **must** send `x-coevo-opc-id: <opc_id>`
+
+The server treats company scope as authoritative and rejects:
+
+- missing `x-coevo-opc-id` on legacy company-scoped `/opc/...` requests
+- malformed `opc_id`
+- mismatches between the header company id and any body/path company id supplied by the client
+
+This means the chosen isolation rule for old `/opc/...` endpoints is:
+
+- **header-based opc isolation** for legacy routes
+- **path-based opc isolation** for canonical `/companies/{opc_id}/...` routes
+
+Employee file-backed storage also follows the canonical company scope:
+
+- `{opc_id}/employees/{agent_id}/passport.json`
+- `{opc_id}/employees/{agent_id}/prompt.md`
+- `{opc_id}/employees/{agent_id}/prompt_versions/*.md`
+- `{opc_id}/employees/{agent_id}/identity.md`
+- `{opc_id}/employees/{agent_id}/soul.md`
+- `{opc_id}/employees/{agent_id}/agents.md`
 
 ---
 

@@ -16,6 +16,7 @@ pub enum ActionProposal {
     },
     Finish {
         summary: String,
+        #[serde(default = "empty_json_object")]
         result: serde_json::Value,
     },
     AskHuman {
@@ -29,4 +30,8 @@ pub struct ReasoningOutput {
     pub thought: String,
     pub proposal: ActionProposal,
     pub confidence: f64,
+}
+
+fn empty_json_object() -> serde_json::Value {
+    serde_json::json!({})
 }

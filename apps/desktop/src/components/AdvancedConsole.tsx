@@ -14,7 +14,6 @@ const groups: { titleKey: string; items: ConsoleItem[] }[] = [
       { labelKey: "adv.founder_profile", descKey: "adv.founder_profile_desc", to: "/founder" },
       { labelKey: "adv.company_memory", descKey: "adv.company_memory_desc", to: "/memory" },
       { labelKey: "adv.contracts", descKey: "adv.contracts_desc", to: "/contracts" },
-      { labelKey: "adv.plans", descKey: "adv.plans_desc", to: "/plans" },
     ],
   },
   {
@@ -23,6 +22,7 @@ const groups: { titleKey: string; items: ConsoleItem[] }[] = [
       { labelKey: "adv.ai_employees", descKey: "adv.ai_employees_desc", to: "/employees" },
       { labelKey: "adv.skills", descKey: "adv.skills_desc", to: "/skills" },
       { labelKey: "adv.external_executors", descKey: "adv.external_executors_desc", to: "/executors" },
+      { labelKey: "settings.mcp_servers", descKey: "settings.mcp_servers_desc", to: "/settings/mcp_servers" },
     ],
   },
   {
@@ -36,7 +36,6 @@ const groups: { titleKey: string; items: ConsoleItem[] }[] = [
   {
     titleKey: "adv.group.governance",
     items: [
-      { labelKey: "adv.risk_gate", descKey: "adv.risk_gate_desc", to: "/risk" },
       { labelKey: "adv.resolution", descKey: "adv.resolution_desc", to: "/resolution" },
       { labelKey: "adv.cognitive_customs", descKey: "adv.cognitive_customs_desc", to: "/customs" },
       { labelKey: "adv.policy_engine", descKey: "adv.policy_engine_desc", to: "/settings/policy_engine" },

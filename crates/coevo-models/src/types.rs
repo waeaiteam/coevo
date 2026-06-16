@@ -71,10 +71,31 @@ pub enum ModelRole {
     StructuredOutput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ModelToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelToolDefinition {
+    pub name: String,
+    pub description: Option<String>,
+    pub parameters_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelToolCall {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +107,9 @@ pub struct ModelRequest {
     pub temperature: f64,
     pub max_tokens: u32,
     pub response_format: ResponseFormat,
+    pub stream: bool,
+    pub tools: Vec<ModelToolDefinition>,
+    pub tool_choice: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +127,28 @@ pub struct ModelResponse {
     pub model: String,
     pub finish_reason: String,
     pub provider_kind: ModelProviderKind,
+    pub reasoning_content: Option<String>,
+    pub tool_calls: Vec<ModelToolCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ModelStreamEvent {
+    ContentDelta {
+        delta: String,
+    },
+    ReasoningDelta {
+        delta: String,
+    },
+    ToolCallDelta {
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments_delta: String,
+    },
+    Usage(ModelUsage),
+    Done {
+        finish_reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

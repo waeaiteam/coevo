@@ -72,6 +72,19 @@ impl EvalRepo {
         Ok(())
     }
 
+    pub async fn case_belongs_to_dataset(
+        pool: &SqlitePool,
+        case_id: &str,
+        dataset_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query("SELECT 1 FROM eval_cases WHERE case_id=? AND dataset_id=?")
+            .bind(case_id)
+            .bind(dataset_id)
+            .fetch_optional(pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_experiment(
         pool: &SqlitePool,

@@ -10,8 +10,34 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::ShellExt;
 
 static API_BASE: Mutex<String> = Mutex::new(String::new());
+static API_TOKEN: Mutex<String> = Mutex::new(String::new());
 static SIDECAR: Mutex<Option<tauri_plugin_shell::process::CommandChild>> = Mutex::new(None);
 static LAUNCH_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
+
+/// Generate a random 32-byte token rendered as 64 lowercase hex chars.
+/// Used once per app start to authenticate the desktop → sidecar HTTP surface
+/// via the `x-coevo-token` header (server reads `COEVO_AUTH_TOKEN`).
+fn generate_api_token() -> String {
+    let mut seed = [0_u8; 32];
+    // Mix several entropy sources without pulling in an RNG crate.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let addr = &seed as *const _ as u128;
+    let mut state = now ^ (pid << 64) ^ addr ^ 0x9E3779B97F4A7C15;
+    for byte in seed.iter_mut() {
+        // SplitMix64-style scrambling for decent distribution.
+        state = state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^= z >> 31;
+        *byte = (z & 0xFF) as u8;
+    }
+    seed.iter().map(|b| format!("{:02x}", b)).collect()
+}
 
 fn coevo_home() -> PathBuf {
     if let Ok(h) = std::env::var("COEVO_HOME") {
@@ -108,6 +134,11 @@ fn get_api_base() -> String {
 }
 
 #[tauri::command]
+fn get_api_token() -> String {
+    API_TOKEN.lock().unwrap().clone()
+}
+
+#[tauri::command]
 async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
     let _launch_guard = LAUNCH_LOCK.lock().await;
     {
@@ -116,6 +147,9 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
             return Ok(api.clone());
         }
     }
+    // Generate a fresh auth token for this app start and expose it to the frontend.
+    let api_token = generate_api_token();
+    *API_TOKEN.lock().unwrap() = api_token.clone();
     let home = coevo_home();
     ensure_dirs(&home);
     let port = find_free_port(8717)?;
@@ -167,6 +201,7 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
             "COEVO_PARENT_HEARTBEAT",
             heartbeat_path.to_string_lossy().to_string(),
         )
+        .env("COEVO_AUTH_TOKEN", api_token.clone())
         .env("RUST_LOG", "coevo=info");
 
     let (mut rx, child) = sidecar
@@ -230,6 +265,7 @@ fn stop_server() {
         let _ = child.kill();
     }
     *API_BASE.lock().unwrap() = String::new();
+    *API_TOKEN.lock().unwrap() = String::new();
 }
 
 #[tauri::command]
@@ -304,6 +340,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_coevo_home,
             get_api_base,
+            get_api_token,
             launch_server,
             stop_server,
             open_logs_dir,

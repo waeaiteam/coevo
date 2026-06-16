@@ -37,6 +37,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "0.8"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 thiserror = "2"
 tracing = "0.1"
@@ -51,6 +52,7 @@ rand = "0.8"
 petgraph = "0.6"
 keyring-core = "1"
 windows-native-keyring-store = "1"
+apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 
 # --- server ---
 axum = { version = "0.8", features = ["macros"] }

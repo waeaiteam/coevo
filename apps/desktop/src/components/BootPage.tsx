@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from "react";
-import { getApiBase, setApiBase } from "../api/client";
+import { getApiBase, setApiBase, ensureApiToken } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
+import { useToast } from "./ToastProvider";
 import { t, useLanguage } from "../settings/i18n";
 
 interface BootStatus { label: string; done: boolean; error?: string }
 
 export default function BootPage({ onReady }: { onReady: () => void }) {
   useLanguage();
+  const toast = useToast();
   const [stages, setStages] = useState<BootStatus[]>([
     { label: t("boot.stage_workspace"), done: false },
     { label: t("boot.stage_service"), done: false },
@@ -35,6 +37,8 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
           setError(`${t("boot.err_launch")}${e instanceof Error ? e.message : String(e)}`); return;
         }
         if (!apiBase) { setError(t("boot.err_no_address")); return; }
+        // Cache the per-launch auth token so every request can send x-coevo-token.
+        await ensureApiToken();
       } else {
         // Web dev mode: try existing server
         apiBase = getApiBase();
@@ -59,7 +63,7 @@ export default function BootPage({ onReady }: { onReady: () => void }) {
   async function openLogs() {
     const invoke = getTauriInvoke();
     if (invoke) { try { await invoke("open_logs_dir"); return; } catch {} }
-    alert(t("boot.logs_location"));
+    toast.info(t("boot.logs_location"));
   }
 
   if (error) return (

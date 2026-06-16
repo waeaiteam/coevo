@@ -1,96 +1,104 @@
-import { useMemo, useState } from "react";
-import { t, useLanguage } from "../settings/i18n";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { getActiveOpcId } from "../api/companies";
+import { getCompanyTraceSpans, listCompanyTraces } from "../api/client";
+import { listCompanyWorkOrders } from "../api/org";
 import Icon from "../components/Icon";
-import { useWorkflowStore } from "../stores/workflowStore";
-import { DAGExecutor } from "../engine/dag";
-import type { Workflow, WorkflowNode } from "../engine/dag";
+import { t, useLanguage } from "../settings/i18n";
 
-const NODE_TYPES: Array<{ type: string; labelKey: string; icon: Parameters<typeof Icon>[0]["name"] }> = [
-  { type: "llm", labelKey: "workflows.step_think", icon: "brain" },
-  { type: "tool", labelKey: "workflows.step_tool", icon: "wrench" },
-  { type: "condition", labelKey: "workflows.step_condition", icon: "git-branch" },
-  { type: "http", labelKey: "workflows.step_fetch", icon: "external" },
-];
+type Row = Record<string, unknown>;
+type TraceSpan = {
+  span_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  kind: string;
+  status: string;
+  started_at_ms: number;
+  ended_at_ms?: number | null;
+};
 
-function newWorkflow(): Workflow {
-  return {
-    id: `wf_${Date.now()}`,
-    name: "Untitled workflow",
-    nodes: [],
-    edges: [],
-  };
+function stringField(row: Row | undefined, key: string): string {
+  const value = row?.[key];
+  return value == null ? "" : String(value);
+}
+
+function parseTraceSpans(payload: Record<string, unknown>): TraceSpan[] {
+  const spans = payload.spans;
+  return Array.isArray(spans) ? (spans as TraceSpan[]) : [];
 }
 
 export default function Workflows() {
   useLanguage();
-  const {
-    workflows,
-    activeWorkflowId,
-    addWorkflow,
-    setActiveWorkflow,
-    addNode,
-    deleteNode,
-    addEdge,
-    deleteWorkflow,
-  } = useWorkflowStore();
+  const activeOpcId = useMemo(() => getActiveOpcId(), []);
+  const [workOrders, setWorkOrders] = useState<Row[]>([]);
+  const [traces, setTraces] = useState<Row[]>([]);
+  const [spans, setSpans] = useState<TraceSpan[]>([]);
+  const [selectedTraceId, setSelectedTraceId] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const [runResult, setRunResult] = useState<string>("");
-  const [running, setRunning] = useState(false);
+  const traceByWorkOrder = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const trace of traces) {
+      const workOrderId = stringField(trace, "work_order_id");
+      const traceId = stringField(trace, "trace_id");
+      if (workOrderId && traceId) map.set(workOrderId, traceId);
+    }
+    return map;
+  }, [traces]);
 
-  const list = useMemo(() => Object.values(workflows), [workflows]);
-  const active = activeWorkflowId ? workflows[activeWorkflowId] : undefined;
-
-  function handleCreate() {
-    const wf = newWorkflow();
-    addWorkflow(wf);
-    setActiveWorkflow(wf.id);
-  }
-
-  function handleAddNode(type: string) {
-    if (!active) return;
-    const id = `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const labelKey = NODE_TYPES.find((n) => n.type === type)?.labelKey || "workflows.step_think";
-    const node: WorkflowNode = {
-      id,
-      type,
-      data: { label: t(labelKey) },
-      inputs: [],
-      outputs: ["out"],
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    void Promise.all([listCompanyWorkOrders(activeOpcId), listCompanyTraces(activeOpcId)])
+      .then(([orders, traceRows]) => {
+        if (!alive) return;
+        const nextOrders = Array.isArray(orders) ? orders : [];
+        const nextTraces = Array.isArray(traceRows) ? traceRows : [];
+        setWorkOrders(nextOrders);
+        setTraces(nextTraces);
+        const nextTraceId = stringField(nextTraces[0], "trace_id");
+        setSelectedTraceId((current) => current || nextTraceId);
+        if (!nextTraceId && alive) {
+          setSpans([]);
+        }
+      })
+      .catch(() => {
+        if (!alive) return;
+        setWorkOrders([]);
+        setTraces([]);
+        setSpans([]);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
     };
-    addNode(active.id, node);
-    // Auto-chain to previous node for a simple linear default.
-    if (active.nodes.length > 0) {
-      const prev = active.nodes[active.nodes.length - 1];
-      addEdge(active.id, { id: `e_${id}`, source: prev.id, target: id });
-    }
-  }
+  }, [activeOpcId]);
 
-  async function handleRun() {
-    if (!active || running) return;
-    setRunning(true);
-    setRunResult("");
-    try {
-      const executor = new DAGExecutor();
-      for (const nt of NODE_TYPES) {
-        executor.registerNodeType(nt.type, async (node, inputs) => {
-          await new Promise((r) => setTimeout(r, 120));
-          return { node: node.id, type: nt.type, inputs };
-        });
-      }
-      const result = await executor.execute(active);
-      setRunResult(
-        result.status === "completed"
-          ? t("workflows.run_done").replace("{n}", String(result.results.size))
-          : result.status === "partial"
-            ? t("workflows.run_partial").replace("{n}", String(result.errors.size))
-            : t("workflows.run_failed")
-      );
-    } catch (e) {
-      setRunResult(`error: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setRunning(false);
+  useEffect(() => {
+    if (!selectedTraceId) {
+      setSpans([]);
+      return;
     }
-  }
+    let alive = true;
+    void getCompanyTraceSpans(activeOpcId, selectedTraceId)
+      .then((detail) => {
+        if (alive) setSpans(parseTraceSpans(detail));
+      })
+      .catch(() => {
+        if (alive) setSpans([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeOpcId, selectedTraceId]);
+
+  const summary = useMemo(() => {
+    const running = traces.filter((trace) => String(trace.status || "") === "running").length;
+    const completed = traces.filter((trace) => String(trace.status || "") === "completed").length;
+    return { workOrders: workOrders.length, traces: traces.length, running, completed };
+  }, [workOrders, traces]);
 
   return (
     <div className="product-page">
@@ -100,107 +108,179 @@ export default function Workflows() {
           <h1 className="product-title">{t("workflows.title")}</h1>
         </div>
         <div className="product-actions">
-          <button className="primary-button" onClick={handleCreate}>
-            <Icon name="plus" /> {t("workflows.new")}
-          </button>
+          <Link to="/work-orders" className="product-link-button">
+            <Icon name="layers" /> {t("nav.tasks")}
+          </Link>
         </div>
       </header>
 
       <section className="feature-hero">
-        <div className="feature-hero-icon"><Icon name="git-branch" /></div>
+        <div className="feature-hero-icon"><Icon name="history" /></div>
         <div>
           <h2>{t("workflows.title")}</h2>
-          <p>{t("workflows.desc")}</p>
+          <p>Operational workflow traces and work-order activity pulled from the live company scope.</p>
         </div>
       </section>
 
       <div className="product-grid-2">
-        <div className="product-panel">
+        <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>{t("workflows.list")}</h2>
-            <span>{list.length}</span>
+            <h2>Operational flows</h2>
+            <span>{summary.workOrders}</span>
           </div>
-          {list.length === 0 ? (
+          <div className="product-grid-3 mb-3">
+            <MiniMetric label="Traces" value={summary.traces} />
+            <MiniMetric label="Running" value={summary.running} />
+            <MiniMetric label="Completed" value={summary.completed} />
+          </div>
+          {loading ? (
+            <div className="empty-state"><p>{t("settings.loading")}</p></div>
+          ) : workOrders.length === 0 ? (
             <div className="empty-state">
-              <div className="empty-state-icon"><Icon name="git-branch" /></div>
-              <p>{t("workflows.empty")}</p>
+              <div className="empty-state-icon"><Icon name="history" /></div>
+              <p>{t("plans.empty")}</p>
             </div>
           ) : (
             <div className="product-list">
-              {list.map((wf) => (
-                <div
-                  key={wf.id}
-                  className="product-list-row"
-                  style={{ borderColor: wf.id === activeWorkflowId ? "var(--accent)" : undefined }}
-                >
-                  <button className="product-row-main text-left" onClick={() => setActiveWorkflow(wf.id)}>
-                    {wf.name}
+              {workOrders.map((row) => {
+                const id = stringField(row, "work_order_id");
+                const traceId = traceByWorkOrder.get(id);
+                const active = traceId === selectedTraceId;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    className="product-list-row text-left"
+                    onClick={() => traceId && setSelectedTraceId(traceId)}
+                    style={{ borderColor: active ? "var(--accent)" : undefined }}
+                  >
+                    <span className="min-w-0">
+                      <span className="product-row-main block truncate">
+                        {stringField(row, "mission_intent") || "Untitled flow"}
+                      </span>
+                      <span className="mt-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        {stringField(row, "status") || "-"} · {stringField(row, "track") || "-"}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="mono-chip">{id || "-"}</span>
+                    </span>
                   </button>
-                  <span className="flex items-center gap-2">
-                    <span className="mono-chip">{wf.nodes.length} nodes</span>
-                    <button className="icon-button" onClick={() => deleteWorkflow(wf.id)} aria-label={t("workflows.delete")}>
-                      <Icon name="x" />
-                    </button>
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="product-panel">
+        <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>{t("workflows.canvas")}</h2>
-            {active && (
-              <button className="product-link-button" disabled={running} onClick={handleRun}>
-                {running ? <Icon name="spinner" className="icon-spin" /> : <Icon name="send" />} {t("workflows.run")}
-              </button>
-            )}
+            <h2>Trace waterfall</h2>
           </div>
-
-          {!active ? (
+          {traces.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon"><Icon name="layers" /></div>
-              <p>{t("workflows.select")}</p>
+              <p>No company traces were returned yet.</p>
             </div>
           ) : (
             <>
-              <div className="chip-row mb-3">
-                {NODE_TYPES.map((nt) => (
-                  <button key={nt.type} className="product-link-button" onClick={() => handleAddNode(nt.type)}>
-                    <Icon name={nt.icon} /> {t(nt.labelKey)}
-                  </button>
-                ))}
+              <div className="product-list mb-3">
+                {traces.map((trace) => {
+                  const traceId = stringField(trace, "trace_id");
+                  return (
+                    <button
+                      key={traceId}
+                      type="button"
+                      className="product-list-row text-left"
+                      onClick={() => setSelectedTraceId(traceId)}
+                      style={{ borderColor: traceId === selectedTraceId ? "var(--accent)" : undefined }}
+                    >
+                      <span className="product-row-main">{stringField(trace, "work_order_id") || traceId}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="mono-chip">{stringField(trace, "status") || "-"}</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
-
-              <div className="workflow-canvas">
-                {active.nodes.length === 0 ? (
-                  <div className="empty-state">
-                    <p>{t("workflows.add_node_hint")}</p>
-                  </div>
-                ) : (
-                  active.nodes.map((node, i) => (
-                    <div key={node.id} className="workflow-node-wrap">
-                      <div className="workflow-node">
-                        <Icon name={(NODE_TYPES.find((n) => n.type === node.type)?.icon) || "info"} />
-                        <span className="truncate">{String(node.data.label || node.type)}</span>
-                        <button className="icon-button" onClick={() => deleteNode(active.id, node.id)} aria-label={t("workflows.delete")}>
-                          <Icon name="x" />
-                        </button>
-                      </div>
-                      {i < active.nodes.length - 1 && (
-                        <div className="workflow-connector"><Icon name="chevron-down" /></div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {runResult && <div className="mono-chip mt-3">{runResult}</div>}
+              {spans.length === 0 ? (
+                <div className="empty-state">
+                  <p>No trace spans were returned for the selected record.</p>
+                </div>
+              ) : (
+                <Waterfall spans={spans} />
+              )}
             </>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function MiniMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border p-3" style={{ borderColor: "var(--border-subtle)", background: "var(--bg-card)" }}>
+      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{label}</div>
+    </div>
+  );
+}
+
+function Waterfall({ spans }: { spans: TraceSpan[] }) {
+  const minStart = Math.min(...spans.map((span) => span.started_at_ms));
+  const maxEnd = Math.max(...spans.map((span) => span.ended_at_ms || Date.now()));
+  const totalDuration = Math.max(1, maxEnd - minStart);
+  const depthMap = new Map<string, number>();
+  const sorted = [...spans].sort((a, b) => a.started_at_ms - b.started_at_ms);
+
+  for (const span of sorted) {
+    const parentDepth = span.parent_span_id ? depthMap.get(span.parent_span_id) ?? 0 : -1;
+    depthMap.set(span.span_id, parentDepth + 1);
+  }
+
+  return (
+    <div className="trace-waterfall">
+      {sorted.map((span) => {
+        const offset = ((span.started_at_ms - minStart) / totalDuration) * 100;
+        const width = (((span.ended_at_ms || Date.now()) - span.started_at_ms) / totalDuration) * 100;
+        const depth = depthMap.get(span.span_id) ?? 0;
+        const color = span.status === "error" ? "var(--red)" : span.status === "running" ? "var(--blue)" : "var(--accent)";
+        return (
+          <div key={span.span_id} className="trace-span-row">
+            <div className="trace-span-label" style={{ paddingLeft: depth * 14 }}>
+              <Icon name={kindIcon(span.kind)} />
+              <span className="truncate">{span.name}</span>
+            </div>
+            <div className="trace-span-track">
+              <div
+                className="trace-span-bar"
+                style={{ marginLeft: `${offset}%`, width: `${Math.max(2, width)}%`, background: color }}
+                title={`${(span.ended_at_ms || Date.now()) - span.started_at_ms}ms`}
+              />
+            </div>
+            <span className="trace-span-time">
+              {span.ended_at_ms != null ? `${span.ended_at_ms - span.started_at_ms}ms` : t("traces.running")}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function kindIcon(kind: string) {
+  switch (kind) {
+    case "mission":
+      return "sparkles" as const;
+    case "subtask":
+      return "list-checks" as const;
+    case "model_call":
+      return "brain" as const;
+    case "tool_call":
+      return "wrench" as const;
+    case "governance":
+      return "shield-check" as const;
+    default:
+      return "info" as const;
+  }
 }

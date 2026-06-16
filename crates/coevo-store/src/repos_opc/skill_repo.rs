@@ -88,20 +88,49 @@ impl SkillRepo {
         Ok(row.as_ref().map(|r| Self::from_row(r)))
     }
     pub async fn upsert(pool: &SqlitePool, s: &AgentSkillPackage) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT OR REPLACE INTO agent_skills VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .bind(&s.skill_id).bind(&s.version).bind(&s.name).bind(&s.owner_agent_id).bind(&s.department).bind(&s.description)
-            .bind(serde_json::to_string(&s.trigger_patterns).unwrap()).bind(serde_json::to_string(&s.applicable_domains).unwrap())
-            .bind(serde_json::to_string(&s.required_tools).unwrap())
-            .bind(s.required_model_profile.as_ref().map(|m|serde_json::to_string(m).unwrap()))
-            .bind(serde_json::to_string(&s.input_schema).unwrap()).bind(serde_json::to_string(&s.output_schema).unwrap())
-            .bind(&s.prompt_template).bind(serde_json::to_string(&s.procedure_steps).unwrap())
-            .bind(serde_json::to_string(&s.guardrails).unwrap()).bind(serde_json::to_string(&s.examples).unwrap())
-            .bind(serde_json::to_string(&s.tests).unwrap()).bind(serde_json::to_string(&s.evals).unwrap())
-            .bind(serde_json::to_string(&s.permissions_required).unwrap())
-            .bind(serde_json::to_string(&s.allowed_cognitive_layers).unwrap())
-            .bind(serde_json::to_string(&s.allowed_action_modes).unwrap()).bind(s.risk_ceiling).bind(&s.provenance)
-            .bind(skill_status_to_db(s.status))
-            .bind(s.created_at_ms as i64).bind(s.updated_at_ms as i64).execute(pool).await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO agent_skills (\
+                skill_id, version, name, owner_agent_id, department, description, \
+                trigger_patterns_json, applicable_domains_json, required_tools_json, \
+                required_model_profile_json, input_schema_json, output_schema_json, \
+                prompt_template, procedure_steps_json, guardrails_json, examples_json, \
+                tests_json, evals_json, permissions_required_json, \
+                allowed_cognitive_layers_json, allowed_action_modes_json, risk_ceiling, \
+                provenance, status, created_at_ms, updated_at_ms\
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(&s.skill_id)
+        .bind(&s.version)
+        .bind(&s.name)
+        .bind(&s.owner_agent_id)
+        .bind(&s.department)
+        .bind(&s.description)
+        .bind(serde_json::to_string(&s.trigger_patterns).unwrap())
+        .bind(serde_json::to_string(&s.applicable_domains).unwrap())
+        .bind(serde_json::to_string(&s.required_tools).unwrap())
+        .bind(
+            s.required_model_profile
+                .as_ref()
+                .map(|m| serde_json::to_string(m).unwrap()),
+        )
+        .bind(serde_json::to_string(&s.input_schema).unwrap())
+        .bind(serde_json::to_string(&s.output_schema).unwrap())
+        .bind(&s.prompt_template)
+        .bind(serde_json::to_string(&s.procedure_steps).unwrap())
+        .bind(serde_json::to_string(&s.guardrails).unwrap())
+        .bind(serde_json::to_string(&s.examples).unwrap())
+        .bind(serde_json::to_string(&s.tests).unwrap())
+        .bind(serde_json::to_string(&s.evals).unwrap())
+        .bind(serde_json::to_string(&s.permissions_required).unwrap())
+        .bind(serde_json::to_string(&s.allowed_cognitive_layers).unwrap())
+        .bind(serde_json::to_string(&s.allowed_action_modes).unwrap())
+        .bind(s.risk_ceiling)
+        .bind(&s.provenance)
+        .bind(skill_status_to_db(s.status))
+        .bind(s.created_at_ms as i64)
+        .bind(s.updated_at_ms as i64)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn activate(
