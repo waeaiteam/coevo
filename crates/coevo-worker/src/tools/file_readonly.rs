@@ -1,5 +1,6 @@
 use crate::error::WorkerError;
 use async_trait::async_trait;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::github_readonly::ToolHandler;
@@ -81,16 +82,20 @@ impl ToolHandler for FileReadonlyTool {
         }
         match action {
             "ReadFile" => {
-                let content =
-                    std::fs::read_to_string(&canonical).map_err(|_| WorkerError::FileReadDenied)?;
-                let truncated = content.len() > max_bytes;
-                let display = if truncated {
-                    content.chars().take(max_bytes).collect::<String>()
-                } else {
-                    content
-                };
+                let file =
+                    std::fs::File::open(&canonical).map_err(|_| WorkerError::FileReadDenied)?;
+                let mut buffer = Vec::with_capacity(max_bytes.saturating_add(1).min(65_536));
+                file.take(max_bytes.saturating_add(1) as u64)
+                    .read_to_end(&mut buffer)
+                    .map_err(|_| WorkerError::FileReadDenied)?;
+                let truncated = buffer.len() > max_bytes;
+                if truncated {
+                    buffer.truncate(max_bytes);
+                }
+                let bytes_read = buffer.len();
+                let display = String::from_utf8_lossy(&buffer).to_string();
                 Ok(
-                    serde_json::json!({"path":canon_str,"action":"ReadFile","content":display,"truncated":truncated,"bytes_read":display.len()}),
+                    serde_json::json!({"path":canon_str,"action":"ReadFile","content":display,"truncated":truncated,"bytes_read":bytes_read}),
                 )
             }
             "ListDirectory" => {
@@ -105,5 +110,36 @@ impl ToolHandler for FileReadonlyTool {
             }
             _ => Err(WorkerError::ToolDeniedByPolicy),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_file_only_decodes_within_max_bytes_window() {
+        let root =
+            std::env::temp_dir().join(format!("coevo-file-readonly-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file_path = root.join("notes.txt");
+        std::fs::write(&file_path, b"hello\xffworld").unwrap();
+
+        let tool = FileReadonlyTool;
+        let response = tool
+            .execute(serde_json::json!({
+                "action": "ReadFile",
+                "path": file_path,
+                "allowed_paths": [root.to_string_lossy().to_string()],
+                "max_bytes": 5,
+            }))
+            .await;
+
+        let body = response.expect("bounded reads should not decode bytes beyond max_bytes");
+        assert_eq!(body["content"], "hello");
+        assert_eq!(body["truncated"], true);
+        assert_eq!(body["bytes_read"], 5);
+
+        std::fs::remove_dir_all(root).ok();
     }
 }

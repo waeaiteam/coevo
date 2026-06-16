@@ -1,10 +1,10 @@
-// Multi-company data layer (API_CONTRACT §〇).
+// Multi-company data layer (API_CONTRACT).
 //
 // The `/companies/...` endpoints are owned by the backend (codex Stage 1) and may
-// not be live yet. Per COLLAB_PROTOCOL §二.3, this module consumes the real contract
+// not be live yet. Per COLLAB_PROTOCOL 3, this module consumes the real contract
 // endpoints when available and otherwise falls back to a local, contract-shaped shell
-// so the four-layer drilldown UI is fully navigable today. When the backend ships
-// `/companies`, the real responses take over automatically — no UI change required.
+// for list/read convenience so the four-layer drilldown UI is fully navigable today.
+// Mutations stay backend-authoritative and do not fabricate success on failures.
 //
 // Strictly contract fields only (no invented fields):
 //   Company:       { opc_id, name, mission, employee_count, created_at_ms, dir }
@@ -146,7 +146,7 @@ export async function listCompanies(): Promise<Company[]> {
   const rows = await fetchCanonicalCompanies();
   if (rows.length > 0) return rows;
   try {
-    /* backend not ready — use shell */
+    /* backend not ready: use shell */
   } catch {
     /* no-op */
   }
@@ -156,23 +156,9 @@ export async function listCompanies(): Promise<Company[]> {
 }
 
 export async function createCompany(input: { name: string; mission?: string }): Promise<Company> {
-  try {
-    const created = await post<Company>("/companies", input);
-    if (created && created.opc_id) return created;
-  } catch {
-    /* backend not ready — create a local company */
-  }
-  const opcId = `opc-${Math.random().toString(36).slice(2, 10)}`;
-  const company: Company = {
-    opc_id: opcId,
-    name: input.name.trim() || "New company",
-    mission: input.mission?.trim() || "",
-    employee_count: 0,
-    created_at_ms: Date.now(),
-    dir: `~/.coevo/${opcId}`,
-  };
-  writeLocal([...readLocal(), company]);
-  return company;
+  const created = await post<Company>("/companies", input);
+  if (created && created.opc_id) return created;
+  throw new Error("Company creation failed");
 }
 
 export async function ensureActiveCompany(options?: {
@@ -205,21 +191,9 @@ export async function ensureActiveCompany(options?: {
 }
 
 export async function deleteCompany(opcId: string): Promise<{ ok: boolean }> {
-  try {
-    const res = await del<{ ok: boolean }>(`/companies/${encodeURIComponent(opcId)}`);
-    if (res && res.ok) return res;
-  } catch {
-    /* backend not ready — remove from local store */
-  }
-  writeLocal(readLocal().filter((row) => row.opc_id !== opcId));
-  if (getActiveOpcId() === opcId) {
-    try {
-      localStorage.removeItem(ACTIVE_OPC_KEY);
-    } catch {
-      /* ignore */
-    }
-  }
-  return { ok: true };
+  const res = await del<{ ok: boolean }>(`/companies/${encodeURIComponent(opcId)}`);
+  if (res && res.ok) return res;
+  throw new Error("Company deletion failed");
 }
 
 export async function getCompanyDetail(opcId: string): Promise<CompanyDetail> {
@@ -227,7 +201,7 @@ export async function getCompanyDetail(opcId: string): Promise<CompanyDetail> {
     const detail = await get<CompanyDetail>(`/companies/${encodeURIComponent(opcId)}`);
     if (detail && detail.opc_id) return detail;
   } catch {
-    /* backend not ready — assemble a shell from existing endpoints */
+    /* backend not ready: assemble a shell from existing endpoints */
   }
 
   const companies = await listCompanies();
@@ -288,3 +262,6 @@ export async function companyWorkOrders() {
     return [];
   }
 }
+
+
+

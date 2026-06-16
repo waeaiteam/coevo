@@ -67,12 +67,14 @@ export function headers(): Record<string, string> {
   // Read active OPC ID (same source as companies.ts::getActiveOpcId) without circular import
   let opcId = "";
   try { opcId = localStorage.getItem("coevo-opc-id") || ""; } catch { /* ignore */ }
-  if (!opcId) opcId = getLocalIdentity().opcId;
+  const identity = getLocalIdentity();
+  if (!opcId) opcId = identity.opcId;
 
   const base: Record<string, string> = {
     "Content-Type": "application/json",
     "x-coevo-tenant-id": getTenantId(),
     "x-coevo-actor-role": "Admin",
+    "x-coevo-actor-id": identity.userId,
     "x-coevo-opc-id": opcId,
     "x-coevo-contract-hash": "0".repeat(64),
     "x-coevo-policy-version": "0".repeat(64),

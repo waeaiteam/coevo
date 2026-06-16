@@ -6,10 +6,10 @@ services:
       context: .
       dockerfile: Dockerfile.server
     ports:
-      - "8717:8717"
+      - "127.0.0.1:8717:8717"
     environment:
       - COEVO_DATABASE_URL=sqlite:/data/coevo.db?mode=rwc
-      - COEVO_BIND_ADDR=0.0.0.0:8717
+      - COEVO_BIND_ADDR=127.0.0.1:8717
       - RUST_LOG=coevo=debug,info
     volumes:
       - coevo-data:/data

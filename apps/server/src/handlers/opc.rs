@@ -1214,6 +1214,58 @@ fn yellow_approval_receipt(req: &ExecuteRequest) -> Option<&str> {
         .filter(|s| !s.trim().is_empty())
 }
 
+fn parse_approval_receipt_proof(proof: &str) -> (&str, Option<&str>) {
+    match proof.split_once(':') {
+        Some((approval_id, digest))
+            if !approval_id.trim().is_empty() && !digest.trim().is_empty() =>
+        {
+            (approval_id.trim(), Some(digest.trim()))
+        }
+        _ => (proof.trim(), None),
+    }
+}
+
+fn compose_approval_receipt(approval_id: &str, pending_action_digest: Option<&str>) -> String {
+    match pending_action_digest {
+        Some(digest) if !digest.trim().is_empty() => format!("{approval_id}:{}", digest.trim()),
+        _ => approval_id.to_string(),
+    }
+}
+
+fn approval_actor(headers: &HeaderMap, fallback_actor: &str) -> String {
+    headers
+        .get("x-coevo-actor-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| fallback_actor.to_string())
+}
+
+async fn pending_action_digest_for_work_order(
+    pool: &sqlx::SqlitePool,
+    work_order_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT messages_json FROM worker_sessions WHERE session_id=?")
+            .bind(format!("session-{work_order_id}"))
+            .fetch_optional(pool)
+            .await?;
+    let Some(messages_json) = row else {
+        return Ok(None);
+    };
+    let Ok(cursor) = serde_json::from_str::<serde_json::Value>(&messages_json) else {
+        return Ok(None);
+    };
+    if cursor.get("kind").and_then(|value| value.as_str()) != Some("controlled_react_cursor") {
+        return Ok(None);
+    }
+    Ok(cursor
+        .get("pending_action_digest")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned))
+}
+
 /// Map an `ExecutorError` to an HTTP status + message for the executor routes.
 ///
 /// `NotRegistered`/`Disabled` are 403 (the executor is structurally unusable);
@@ -2903,6 +2955,7 @@ pub async fn execute_work_order(
         );
     }
     let risk = track_risk(&wo.track);
+    let mut approval_receipt = req.caller_identity_proof.clone().or(req.lease_id.clone());
 
     // 3. Validate agents
     let employee_pool = if !wo.opc_id.trim().is_empty() && wo.opc_id != "default-opc" {
@@ -3059,7 +3112,7 @@ pub async fn execute_work_order(
                 "message":message
             }));
         }
-        let receipt_id = receipt.unwrap();
+        let (receipt_id, provided_digest) = parse_approval_receipt_proof(receipt.unwrap());
         let approval = match ApprovalRepo::find_by_id(&s.pool, &wo.opc_id, receipt_id).await {
             Ok(Some(a)) => a,
             Ok(None) => return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_NOT_FOUND"),
@@ -3078,6 +3131,23 @@ pub async fn execute_work_order(
         if approval.status != "approved" {
             return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_NOT_APPROVED");
         }
+        let pending_action_digest =
+            match pending_action_digest_for_work_order(scoped_work_order_pool_ref, &id).await {
+                Ok(value) => value,
+                Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            };
+        if let Some(expected_digest) = pending_action_digest.as_deref() {
+            let Some(candidate_digest) = provided_digest else {
+                return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_DIGEST_REQUIRED");
+            };
+            if candidate_digest != expected_digest {
+                return err!(StatusCode::FORBIDDEN, "APPROVAL_RECEIPT_DIGEST_MISMATCH");
+            }
+        }
+        approval_receipt = Some(compose_approval_receipt(
+            receipt_id,
+            pending_action_digest.as_deref(),
+        ));
         let _ = AuditLogger::log_json(
             &s.pool,
             "work_order.approval.receipt.accepted",
@@ -3110,7 +3180,7 @@ pub async fn execute_work_order(
         opc_pool_ref,
         &id,
         WorkerHarnessOptions {
-            approval_receipt: req.caller_identity_proof.clone().or(req.lease_id.clone()),
+            approval_receipt,
             max_runtime_ms: Some(60000),
             deterministic_mode: true,
             preferred_tool_ids: vec![],
@@ -3208,19 +3278,25 @@ pub async fn decide_work_order_approval(
         return err!(StatusCode::FORBIDDEN, "APPROVAL_ACTION_MISMATCH");
     }
 
-    let actor = "default-founder";
+    let actor = approval_actor(&headers, &work_order.user_id);
     match req.decision.as_str() {
         "approve" | "approved" => {
             if let Err(e) =
-                ApprovalRepo::approve(&s.pool, &work_order.opc_id, &req.approval_id, actor).await
+                ApprovalRepo::approve(&s.pool, &work_order.opc_id, &req.approval_id, &actor).await
             {
+                if matches!(e, sqlx::Error::RowNotFound) {
+                    return err!(
+                        StatusCode::CONFLICT,
+                        "Approval request is no longer pending or has expired"
+                    );
+                }
                 return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
             }
             let _ = AuditRepo::insert(
                 &s.pool,
                 "work_order.approval.approved",
                 Some(&work_order.contract_hash),
-                Some(actor),
+                Some(actor.as_str()),
                 None,
                 &work_order.opc_id,
                 &serde_json::json!({
@@ -3231,12 +3307,17 @@ pub async fn decide_work_order_approval(
                 .to_string(),
             )
             .await;
+            let approval_receipt =
+                match pending_action_digest_for_work_order(scoped_work_order_pool_ref, &id).await {
+                    Ok(digest) => compose_approval_receipt(&req.approval_id, digest.as_deref()),
+                    Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                };
             let (status, Json(mut body)) = execute_work_order(
                 headers.clone(),
                 State(s.clone()),
                 Path(id.clone()),
                 Json(ExecuteRequest {
-                    caller_identity_proof: Some(req.approval_id.clone()),
+                    caller_identity_proof: Some(approval_receipt.clone()),
                     monitoring_signature: None,
                     diagnostic_signature: None,
                     lease_id: None,
@@ -3246,7 +3327,7 @@ pub async fn decide_work_order_approval(
             if let Some(obj) = body.as_object_mut() {
                 obj.insert(
                     "approval_receipt".to_string(),
-                    serde_json::json!(req.approval_id),
+                    serde_json::json!(approval_receipt),
                 );
                 if let Some(comment) = req.comment {
                     obj.insert("approval_comment".to_string(), serde_json::json!(comment));
@@ -3265,15 +3346,21 @@ pub async fn decide_work_order_approval(
         }
         "reject" | "rejected" | "deny" | "denied" => {
             if let Err(e) =
-                ApprovalRepo::deny(&s.pool, &work_order.opc_id, &req.approval_id, actor).await
+                ApprovalRepo::deny(&s.pool, &work_order.opc_id, &req.approval_id, &actor).await
             {
+                if matches!(e, sqlx::Error::RowNotFound) {
+                    return err!(
+                        StatusCode::CONFLICT,
+                        "Approval request is no longer pending or has expired"
+                    );
+                }
                 return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
             }
             let _ = AuditRepo::insert(
                 &s.pool,
                 "work_order.approval.rejected",
                 Some(&work_order.contract_hash),
-                Some(actor),
+                Some(actor.as_str()),
                 None,
                 &work_order.opc_id,
                 &serde_json::json!({
@@ -4119,7 +4206,7 @@ mod tests {
     use crate::state::AppState;
     use axum::{
         body::Body,
-        http::{Request, StatusCode},
+        http::{HeaderValue, Request, StatusCode},
         routing::get,
         Router,
     };
@@ -8295,6 +8382,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approval_endpoint_records_header_actor_id() {
+        let (state, root, opc_id) = seeded_legacy_company_state().await;
+        let pool = state.pool.clone();
+        configure_active_openai_compatible(&pool).await;
+        let work_order_id = "wo-yellow-approval-actor";
+        let contract_hash = "f".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        create_yellow_work_order(state.clone(), &opc_id, work_order_id, &contract_hash).await;
+        let (wait_status, Json(wait_body)) = execute_work_order(
+            legacy_company_headers(&opc_id),
+            State(state.clone()),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+        assert_eq!(wait_status, StatusCode::OK);
+        let approval_id = wait_body["approval_id"].as_str().unwrap().to_string();
+
+        let mut headers = legacy_company_headers(&opc_id);
+        headers.insert("x-coevo-actor-id", HeaderValue::from_static("approver-42"));
+        let (status, _) = decide_work_order_approval(
+            headers,
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ApprovalDecisionRequest {
+                approval_id: approval_id.clone(),
+                decision: "approve".to_string(),
+                comment: Some("approved by actor header".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let approval = ApprovalRepo::find_by_id(&pool, &opc_id, &approval_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(approval.approved_by.as_deref(), Some("approver-42"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_work_order_rejects_bare_receipt_when_resume_cursor_requires_digest() {
+        let (state, root, opc_id) = seeded_legacy_company_state().await;
+        let pool = state.pool.clone();
+        let work_order_id = "wo-yellow-resume-digest";
+        let contract_hash = "a".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+        let company_db = company_pool(&state, &opc_id).await.unwrap();
+
+        create_yellow_work_order(state.clone(), &opc_id, work_order_id, &contract_hash).await;
+        let approval_id = ApprovalRepo::create(
+            &pool,
+            &opc_id,
+            &contract_hash,
+            &format!("urn:coevo:work-order:{work_order_id}:execute"),
+            "NEGATIVE_CONSENT",
+            "default-founder",
+            300_000,
+        )
+        .await
+        .unwrap();
+        ApprovalRepo::approve(&pool, &opc_id, &approval_id, "default-founder")
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let cursor = serde_json::json!({
+            "kind": "controlled_react_cursor",
+            "version": 1,
+            "run_id": "run-resume-digest-1",
+            "round": 2,
+            "pending_action_digest": "digest-123",
+            "reason": "approval required",
+            "authorization_serialized": false,
+        });
+        sqlx::query(
+            "INSERT INTO worker_sessions (
+                session_id,
+                opc_id,
+                worker_id,
+                work_order_id,
+                agent_id,
+                channel,
+                messages_json,
+                context_memory_ids_json,
+                loaded_skill_ids_json,
+                tool_call_ids_json,
+                status,
+                created_at_ms,
+                updated_at_ms
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(format!("session-{work_order_id}"))
+        .bind(&opc_id)
+        .bind("worker-agent-risk-01")
+        .bind(work_order_id)
+        .bind("agent-risk-01")
+        .bind("MissionChat")
+        .bind(cursor.to_string())
+        .bind("[]")
+        .bind("[]")
+        .bind("[]")
+        .bind("WaitingApproval")
+        .bind(now)
+        .bind(now)
+        .execute(&company_db)
+        .await
+        .unwrap();
+        company_db.close().await;
+
+        let (status, Json(body)) = execute_work_order(
+            legacy_company_headers(&opc_id),
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: Some(approval_id),
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("APPROVAL_RECEIPT_DIGEST_REQUIRED"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
     async fn approval_endpoint_rejects_cross_company_approval_receipt() {
         let _lock = ENV_LOCK.lock().unwrap();
         let (state, root) = company_test_state().await;
@@ -8759,9 +8985,6 @@ mod tests {
         )
         .await
         .unwrap();
-        ApprovalRepo::approve(&pool, &opc_id, &expired_id, "default-founder")
-            .await
-            .unwrap();
         let (expired_status, Json(expired_body)) = execute_work_order(
             legacy_company_headers(&opc_id),
             State(state.clone()),

@@ -19,7 +19,7 @@ This document lists the current Alpha foundation and the remaining items before 
 - SkillRuntime, ToolPolicy, ToolRegistry.
 - MemoryContext with provenance filtering.
 - Reflection and SelfUpgradeLoop.
-- Red Track hard-blocked by default.
+- Red Track creates persisted explicit approval requests and resumes only with an approved receipt.
 - Yellow Track creates persisted approval requests and requires an approved receipt before execution.
 - Synthetic end-to-end tests for development and CI.
 - Desktop app with local sidecar launch and WorkerHarness visualization.
@@ -31,7 +31,7 @@ This document lists the current Alpha foundation and the remaining items before 
 - Mock Provider is not ordinary user onboarding; it is for deterministic dev/CI only.
 - Credential vault is Windows-first. Non-Windows vault support is unavailable in Alpha.
 - Existing Alpha databases with legacy plaintext API-key rows remain readable until a migration rewrites them into keyring references.
-- Red Track blocking is runtime policy, not production MFA or lease execution.
+- Red Track uses explicit approval gating, but production MFA / dual-sign / lease-backed execution remains incomplete.
 - Yellow approval has receipt validation, but the full user-facing approval management UI is still evolving.
 - Track classification is keyword-based and intentionally over-classifies upward in Alpha.
 - Vector memory is not implemented.
@@ -62,4 +62,4 @@ Model provides cognition, not authorization.
 Worker executes under WorkOrder, RiskGate, approval state, and ToolPolicy governance.
 External Executors are governed execution workers, not free agents.
 API keys are masked in all outputs.
-Red Track remains hard-blocked in Alpha until production identity proof, dual-sign, MFA, and lease verification exist.
+Red Track remains non-production in Alpha until production identity proof, dual-sign, MFA, and lease verification exist; the current behavior is explicit approval gating rather than a hard block.

@@ -109,10 +109,18 @@ function formatBytes(size: number): string {
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
+function summarizeProjectFolder(projectFolder: string): string {
+  const normalized = projectFolder.trim();
+  if (!normalized) return "";
+  const segments = normalized.split(/[\\/]+/).filter(Boolean);
+  const lastSegment = segments[segments.length - 1] || "";
+  return lastSegment || t("mission.folder_selected");
+}
+
 function buildTaskIntent(text: string, attachments: AttachmentMeta[], projectFolder: string, projectName: string): string {
   const lines: string[] = [];
   if (projectName) lines.push(`${t("mission.context_project")}: ${projectName}`);
-  if (projectFolder) lines.push(`${t("mission.context_project_folder")}: ${projectFolder}`);
+  if (projectFolder) lines.push(`${t("mission.context_project_folder")}: ${summarizeProjectFolder(projectFolder)}`);
   if (attachments.length > 0) {
     lines.push(`${t("mission.context_attachments")}: ${attachments.map((file) => `${file.name} (${formatBytes(file.size)})`).join(", ")}`);
   }

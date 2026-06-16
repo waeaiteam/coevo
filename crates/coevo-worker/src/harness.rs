@@ -2,7 +2,7 @@ use crate::agent_harness::{AgentRunContract, AgentSubHarness, RunAuthorization};
 use crate::error::WorkerError;
 use crate::queue::WorkerQueueService;
 use crate::r#loop::{SandboxProfile, SandboxTier};
-use coevo_core::opc::{AutonomyCeiling, ModelPreference};
+use coevo_core::opc::{AutonomyCeiling, ExecutorStatus, ExternalExecutorPassport, ModelPreference};
 use coevo_models::gateway::select_gateway;
 use coevo_models::router::{default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel};
 use coevo_models::types::{ModelProviderConfig, ModelProviderKind};
@@ -42,6 +42,41 @@ fn workspace_root_from_env_or_cwd() -> Option<std::path::PathBuf> {
         .filter(|value| !value.trim().is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
+}
+
+fn select_selected_executor_passports(
+    work_order: &coevo_core::opc::WorkOrder,
+    executor_passports: Vec<ExternalExecutorPassport>,
+) -> Result<Vec<ExternalExecutorPassport>, WorkerError> {
+    if work_order.selected_executors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut passports_by_id = std::collections::HashMap::new();
+    for passport in executor_passports {
+        passports_by_id.insert(passport.executor_id.clone(), passport);
+    }
+
+    let mut selected = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for executor_id in &work_order.selected_executors {
+        if !seen.insert(executor_id) {
+            continue;
+        }
+        let Some(passport) = passports_by_id.get(executor_id) else {
+            return Err(WorkerError::ToolUnavailable(format!(
+                "Selected executor {executor_id} is missing"
+            )));
+        };
+        if passport.status == ExecutorStatus::Disabled {
+            return Err(WorkerError::ToolUnavailable(format!(
+                "Selected executor {executor_id} is disabled"
+            )));
+        }
+        selected.push(passport.clone());
+    }
+
+    Ok(selected)
 }
 
 async fn model_profiles_for_execution(
@@ -537,9 +572,10 @@ impl WorkerHarness {
             }
             list
         };
-        let bound_executors: Vec<crate::r#loop::BoundExecutorAdapter> = executor_passports
+        let selected_executor_passports =
+            select_selected_executor_passports(&wo, executor_passports)?;
+        let bound_executors: Vec<crate::r#loop::BoundExecutorAdapter> = selected_executor_passports
             .into_iter()
-            .filter(|p| p.status != coevo_core::opc::ExecutorStatus::Disabled)
             .map(|p| crate::r#loop::BoundExecutorAdapter::new(p, wo.clone()))
             .collect();
         let external_agent_refs: Vec<&dyn crate::r#loop::ExternalAgentAdapter> = bound_executors
@@ -748,7 +784,10 @@ impl WorkerHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use coevo_core::opc::{
+        ExecutorSourceType, ExecutorStatus, ExternalExecutorPassport, MemoryScope,
+        PermissionBoundary, SandboxLevel, WorkOrder, WorkOrderStatus,
+    };
     use coevo_models::router::{ModelCapability, ModelRouter, ModelRoutingRequest, PrivacyLevel};
     use coevo_store::migrate::run_migrations;
     use coevo_store::pool::create_test_pool;
@@ -777,6 +816,38 @@ mod tests {
             risk_summary: "test".to_string(),
             governance_proposal: None,
             governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        }
+    }
+
+    fn test_executor(executor_id: &str, status: ExecutorStatus) -> ExternalExecutorPassport {
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        ExternalExecutorPassport {
+            executor_id: executor_id.to_string(),
+            display_name: executor_id.to_string(),
+            source_type: ExecutorSourceType::LocalProcess,
+            runtime_endpoint: "http://localhost".to_string(),
+            capabilities: vec!["read".to_string()],
+            required_credentials: vec![],
+            permission_boundary: PermissionBoundary {
+                max_risk_score: 0.5,
+                can_write_fact: false,
+                can_write_decision: false,
+                can_access_network: false,
+                can_access_filesystem: false,
+                can_call_external_executor: false,
+                can_propose_skill: false,
+            },
+            file_scope: vec![],
+            network_scope: vec![],
+            memory_scope: MemoryScope::Executor,
+            risk_ceiling: 0.5,
+            supported_actions: vec!["read".to_string()],
+            sandbox_level: SandboxLevel::Process,
+            health_check_url: String::new(),
+            audit_callback_url: String::new(),
+            status,
             created_at_ms: now,
             updated_at_ms: now,
         }
@@ -1006,6 +1077,42 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn selected_executor_selection_is_closed_over_missing_and_disabled_entries() {
+        let mut work_order = test_work_order("wo-selected-executors", "green");
+        work_order.selected_executors = vec!["executor-beta".to_string()];
+
+        let selected = select_selected_executor_passports(
+            &work_order,
+            vec![
+                test_executor("executor-alpha", ExecutorStatus::Registered),
+                test_executor("executor-beta", ExecutorStatus::Registered),
+            ],
+        )
+        .expect("selected executor should be retained");
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].executor_id, "executor-beta");
+
+        let missing = select_selected_executor_passports(
+            &work_order,
+            vec![test_executor("executor-alpha", ExecutorStatus::Registered)],
+        )
+        .expect_err("missing selected executor must fail closed");
+        assert!(
+            matches!(missing, WorkerError::ToolUnavailable(message) if message.contains("executor-beta"))
+        );
+
+        let disabled = select_selected_executor_passports(
+            &work_order,
+            vec![test_executor("executor-beta", ExecutorStatus::Disabled)],
+        )
+        .expect_err("disabled selected executor must fail closed");
+        assert!(
+            matches!(disabled, WorkerError::ToolUnavailable(message) if message.contains("disabled"))
+        );
     }
 
     #[tokio::test]

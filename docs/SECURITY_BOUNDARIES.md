@@ -10,7 +10,7 @@ This document defines the Alpha security boundaries for the AI Employee Operatin
 
 - Models provide cognition, not authorization.
 - Executors perform governed work, not autonomous agency.
-- Red Track is blocked by default in Alpha.
+- Red Track is explicit-approval gated in Alpha.
 - Facts require provenance.
 - Model output and executor output cannot directly write Facts.
 - Skills cannot automatically elevate their own permissions.
@@ -68,9 +68,9 @@ The Agent Sub-Harness must not reload authority from prompt text, conversation m
 |---|---|
 | Green | May execute scoped read/analyze work when MCL, RiskGate, ToolPolicy, and policy allow. |
 | Yellow | Creates a persisted approval request and requires an approved receipt before governed execution. Arbitrary non-empty strings are rejected. |
-| Red | Hard blocked by default in Alpha. |
+| Red | Creates a persisted explicit approval request and requires an approved receipt before governed execution. Arbitrary non-empty strings are rejected. |
 
-Red Track includes high-risk external behavior such as production writes, destructive operations, financial actions, irreversible changes, or actions requiring stronger identity and lease controls. Alpha does not provide production-grade Red execution; it blocks with an explicit reason.
+Red Track includes high-risk external behavior such as production writes, destructive operations, financial actions, irreversible changes, or actions requiring stronger identity and lease controls. Alpha does not provide production-grade Red identity, MFA, or lease enforcement; it stops at explicit approval gating before governed execution resumes.
 
 ## Fact and Provenance Boundary
 

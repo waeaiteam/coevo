@@ -725,6 +725,9 @@ mod tests {
     use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
     use coevo_store::repos_opc::work_order_repo::WorkOrderRepo;
     use coevo_worker::worker_cancel;
+    use std::sync::Mutex;
+
+    static WORKSPACE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     async fn run_worker_rejects_public_mock_routing_when_no_model_provider() {
@@ -879,10 +882,12 @@ mod tests {
 
     #[tokio::test]
     async fn workspace_write_allows_file_write_and_shell() {
+        let _lock = WORKSPACE_ENV_LOCK.lock().unwrap();
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let root = std::env::temp_dir().join(format!("coevo-tools-write-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("COEVO_WORKSPACE_DIR", &root);
         let state = AppState::new(pool.clone(), root.clone());
 
         insert_work_order(
@@ -937,6 +942,7 @@ mod tests {
             .unwrap_or_default()
             .contains("workspace-shell-ok"));
 
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -2024,12 +2030,8 @@ mod tests {
         let live_token = cancellation.token();
         assert!(!live_token.is_cancelled());
 
-        let (status, Json(body)) = cancel_worker(
-            HeaderMap::new(),
-            State(state),
-            Path(worker_id.to_string()),
-        )
-        .await;
+        let (status, Json(body)) =
+            cancel_worker(HeaderMap::new(), State(state), Path(worker_id.to_string())).await;
 
         assert_eq!(status, StatusCode::OK, "{body:?}");
         assert_eq!(body["cancelled_run_id"], run_id);
@@ -2043,10 +2045,8 @@ mod tests {
     async fn cancel_worker_does_not_rewrite_completed_run_when_queue_lane_is_missing() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "coevo-cancel-worker-late-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("coevo-cancel-worker-late-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let state = AppState::new(pool.clone(), root.clone());
 
@@ -2146,23 +2146,20 @@ mod tests {
         .await
         .unwrap();
 
-        let (status, Json(body)) = cancel_worker(
-            HeaderMap::new(),
-            State(state),
-            Path(worker_id.to_string()),
-        )
-        .await;
+        let (status, Json(body)) =
+            cancel_worker(HeaderMap::new(), State(state), Path(worker_id.to_string())).await;
 
         assert_eq!(status, StatusCode::OK, "{body:?}");
         assert!(body["cancelled_run_id"].is_null(), "{body:?}");
         assert!(body["session_id"].is_null(), "{body:?}");
         assert_eq!(body["queue_released"], false);
 
-        let run_status: String = sqlx::query_scalar("SELECT status FROM worker_runs WHERE run_id=?")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let run_status: String =
+            sqlx::query_scalar("SELECT status FROM worker_runs WHERE run_id=?")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let session_status: String =
             sqlx::query_scalar("SELECT status FROM worker_sessions WHERE session_id=?")
                 .bind(session_id)

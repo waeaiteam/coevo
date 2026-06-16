@@ -145,7 +145,7 @@ impl RedTrackRunner {
         // Red Track: dual-sign already validated in Step 1b.
         // Generate lease whenever identity + dual-sign are present.
         let lease = match gating.decision {
-            GateDecision::AllowWithLease | GateDecision::RequireHumanApproval => {
+            GateDecision::AllowWithLease => {
                 // Dual-sign is already validated (Step 1b) — grant lease
                 let lease = LeaseManager::grant(
                     pool,
@@ -160,6 +160,7 @@ impl RedTrackRunner {
                 .map_err(|e| RedTrackError::LeaseError(e.to_string()))?;
                 Some(lease)
             }
+            GateDecision::RequireHumanApproval => None,
             GateDecision::Deny => {
                 return Err(RedTrackError::CircuitBreakerTripped {
                     reason: gating.reason,
@@ -187,6 +188,18 @@ impl RedTrackRunner {
         };
 
         let mut entries = vec![];
+
+        if gating.decision == GateDecision::RequireHumanApproval {
+            return Ok(RedTrackResult {
+                contract_hash,
+                plan_hash: route_result.plan_hash,
+                traceparent,
+                lease: None,
+                decision: format!("{:?}", gating.decision),
+                requires_mfa: true,
+                entries_created: entries,
+            });
+        }
 
         // If lease exists, consume operations for each write
         if let Some(ref l) = lease {

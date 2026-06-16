@@ -216,7 +216,7 @@ async fn next_worker_events(
     pool: &sqlx::SqlitePool,
     run_id: &str,
     last_seq: i64,
-) -> Vec<sqlx::sqlite::SqliteRow> {
+) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
     sqlx::query(
         "SELECT * FROM worker_events WHERE run_id=? AND event_seq>? ORDER BY event_seq LIMIT 25",
     )
@@ -224,7 +224,18 @@ async fn next_worker_events(
     .bind(last_seq)
     .fetch_all(pool)
     .await
-    .unwrap_or_default()
+}
+
+fn parse_last_event_id(headers: &HeaderMap) -> i64 {
+    headers
+        .get("Last-Event-ID")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(-1)
+}
+
+fn is_terminal_stream_event(event_type: &str) -> bool {
+    matches!(event_type, "Done" | "LifecycleEnd")
 }
 
 pub async fn list_workers(
@@ -408,16 +419,37 @@ pub async fn stream_run_events(
     require_visible_run(&s.pool, &run_id, &work_order_ids).await?;
     company_pool.close().await;
     let pool = s.pool.clone();
+    let initial_last_seq = parse_last_event_id(&headers);
     let stream = async_stream::stream! {
-        let mut last_seq = -1_i64;
+        let mut last_seq = initial_last_seq;
         let mut interval = tokio::time::interval(Duration::from_millis(750));
         loop {
             interval.tick().await;
-            let rows = next_worker_events(&pool, &run_id, last_seq).await;
-            for row in rows {
-                let seq = row.try_get::<i64, _>("event_seq").unwrap_or(last_seq + 1);
-                last_seq = seq;
-                yield Ok(worker_event_to_sse(&row, seq));
+            match next_worker_events(&pool, &run_id, last_seq).await {
+                Ok(rows) => {
+                    let mut saw_terminal = false;
+                    for row in rows {
+                        let seq = row.try_get::<i64, _>("event_seq").unwrap_or(last_seq + 1);
+                        let event_type = row
+                            .try_get::<String, _>("event_type")
+                            .unwrap_or_else(|_| "Unknown".to_string());
+                        last_seq = seq;
+                        yield Ok(worker_event_to_sse(&row, seq));
+                        if is_terminal_stream_event(&event_type) {
+                            saw_terminal = true;
+                            break;
+                        }
+                    }
+                    if saw_terminal {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    yield Ok(Event::default()
+                        .event("Error")
+                        .data(serde_json::json!({"error": err.to_string()}).to_string()));
+                    break;
+                }
             }
         }
     };
@@ -836,7 +868,9 @@ mod tests {
             .unwrap();
         }
 
-        let rows = next_worker_events(&pool, "run-sequenced-stream", -1).await;
+        let rows = next_worker_events(&pool, "run-sequenced-stream", -1)
+            .await
+            .unwrap();
         let seen = rows
             .iter()
             .map(|row| {
@@ -855,6 +889,49 @@ mod tests {
                 (2, "Done".to_string()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn next_worker_events_respects_last_seq_cursor() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        for (seq, event_type) in [
+            (0_i64, "ReasoningDelta"),
+            (1_i64, "ContentDelta"),
+            (2_i64, "Done"),
+        ] {
+            sqlx::query(
+                "INSERT INTO worker_events (event_id, run_id, event_seq, event_type, payload_json, created_at_ms, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(format!("evt-resume-{seq}"))
+            .bind("run-resume-stream")
+            .bind(seq)
+            .bind(event_type)
+            .bind("{}")
+            .bind(now + seq)
+            .bind("session-resume-stream")
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let rows = next_worker_events(&pool, "run-resume-stream", 1)
+            .await
+            .unwrap();
+        let seen = rows
+            .iter()
+            .map(|row| row.get::<i64, _>("event_seq"))
+            .collect::<Vec<_>>();
+        assert_eq!(seen, vec![2]);
+    }
+
+    #[tokio::test]
+    async fn next_worker_events_surfaces_query_failures() {
+        let pool = create_test_pool().await.unwrap();
+        let err = next_worker_events(&pool, "run-without-migrations", -1).await;
+        assert!(err.is_err(), "query failures should not be swallowed");
     }
 
     #[tokio::test]
@@ -985,6 +1062,7 @@ mod tests {
         .unwrap();
         let seen = next_worker_events(&pool, run_id, -1)
             .await
+            .unwrap()
             .into_iter()
             .map(|row| row.get::<String, _>("event_type"))
             .collect::<Vec<_>>();
@@ -1069,6 +1147,83 @@ mod tests {
             .any(|text| text.contains("Streaming route observable.")));
         assert!(frames.iter().any(|text| text.contains("event: Usage")));
         assert!(frames.iter().any(|text| text.contains("event: Done")));
+        let end = tokio::time::timeout(std::time::Duration::from_secs(2), body.frame())
+            .await
+            .expect("timed out waiting for SSE completion");
+        assert!(
+            end.is_none(),
+            "stream should finish after the terminal Done event"
+        );
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn events_stream_route_resumes_from_last_event_id() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root =
+            std::env::temp_dir().join(format!("coevo-workers-sse-resume-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(pool.clone(), root.clone());
+        let opc_id = create_company_id(&state, "SSE Resume Co").await;
+        seed_company_for_worker_visibility(
+            &state,
+            &opc_id,
+            "wo-stream-resume",
+            "agent-founder-01",
+            "worker-stream-resume",
+            "session-stream-resume",
+            "run-stream-resume",
+        )
+        .await;
+        let now = chrono::Utc::now().timestamp_millis();
+        for (seq, event_type, payload) in [
+            (1_i64, "ContentDelta", "{\"delta\":\"answer\"}"),
+            (2_i64, "Done", "{\"finish_reason\":\"stop\"}"),
+        ] {
+            sqlx::query(
+                "INSERT INTO worker_events (event_id, run_id, event_seq, event_type, payload_json, created_at_ms, session_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(format!("evt-stream-resume-{seq}"))
+            .bind("run-stream-resume")
+            .bind(seq)
+            .bind(event_type)
+            .bind(payload)
+            .bind(now + seq)
+            .bind("session-stream-resume")
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/opc/workers/runs/run-stream-resume/events/stream")
+                    .header(LEGACY_OPC_ID_HEADER, &opc_id)
+                    .header("Last-Event-ID", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut body = response.into_body();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), body.frame())
+            .await
+            .expect("timed out waiting for resumed SSE frame")
+            .expect("SSE stream ended unexpectedly")
+            .expect("failed to read SSE frame");
+        let bytes = frame.into_data().expect("expected SSE data frame");
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("id: 2"));
+        assert!(text.contains("event: Done"));
+        assert!(!text.contains("id: 0"));
+        assert!(!text.contains("id: 1"));
 
         std::fs::remove_dir_all(root).ok();
     }

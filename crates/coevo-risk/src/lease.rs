@@ -168,18 +168,24 @@ impl LeaseManager {
             });
         }
 
-        // Check budget
-        if row.operations_used >= row.lease_budget {
-            return Err(LeaseError::BudgetExhausted {
-                used: row.operations_used as u32,
-                budget: row.lease_budget as u32,
-            });
-        }
-
         // Consume operation
-        LeaseRepo::consume_operation(pool, lease_id)
+        let consumed = LeaseRepo::consume_operation(pool, lease_id)
             .await
             .map_err(|_| LeaseError::LeaseExpiredOrRevoked)?;
+        if consumed == 0 {
+            let refreshed = LeaseRepo::find_active(pool, lease_id)
+                .await
+                .map_err(|_| LeaseError::LeaseExpiredOrRevoked)?;
+            if let Some(current) = refreshed {
+                if current.operations_used >= current.lease_budget {
+                    return Err(LeaseError::BudgetExhausted {
+                        used: current.operations_used as u32,
+                        budget: current.lease_budget as u32,
+                    });
+                }
+            }
+            return Err(LeaseError::LeaseExpiredOrRevoked);
+        }
 
         Ok(())
     }
@@ -309,5 +315,36 @@ mod tests {
         .await
         .expect_err("role-swapped signature must be rejected");
         assert!(matches!(err, LeaseError::OutOfScope { .. }));
+    }
+
+    #[tokio::test]
+    async fn try_consume_reports_budget_exhausted_after_budget_is_used_up() {
+        let pool = pool_with_contract("lease-contract-consume").await;
+        let scope = vec!["urn:coevo:action:test".to_string()];
+        let mon = LeaseManager::sign_attestation("agent-x", &scope, LEASE_ROLE_MONITORING);
+        let diag = LeaseManager::sign_attestation("agent-x", &scope, LEASE_ROLE_DIAGNOSTIC);
+        let lease = LeaseManager::grant(
+            &pool,
+            "lease-contract-consume",
+            "agent-x",
+            scope,
+            1,
+            &mon,
+            &diag,
+        )
+        .await
+        .expect("lease should be granted");
+
+        LeaseManager::try_consume(&pool, &lease.lease_id, "urn:coevo:action:test:one")
+            .await
+            .expect("first consume should succeed");
+
+        let err = LeaseManager::try_consume(&pool, &lease.lease_id, "urn:coevo:action:test:two")
+            .await
+            .expect_err("second consume must fail once budget is exhausted");
+        assert!(matches!(
+            err,
+            LeaseError::BudgetExhausted { used: 1, budget: 1 }
+        ));
     }
 }

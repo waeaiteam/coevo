@@ -2,13 +2,48 @@
 //! Per coevo whitepaper Section 1.
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use coevo_core::metadata::CommonMetadataHeader;
 use coevo_core::problem::ProblemDetails;
+
+pub(crate) fn configured_sidecar_token() -> Option<String> {
+    std::env::var("COEVO_AUTH_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub async fn require_sidecar_token(
+    State(expected_token): State<Option<String>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(expected_token) = expected_token {
+        let actual_token = req
+            .headers()
+            .get("x-coevo-token")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .unwrap_or_default();
+        if actual_token != expected_token {
+            let problem = ProblemDetails::new(
+                "https://coevo.dev/errors/unauthorized",
+                "Unauthorized",
+                StatusCode::UNAUTHORIZED.as_u16(),
+                "Missing or invalid sidecar token",
+                "require_sidecar_token",
+                "UNAUTHORIZED",
+            );
+            return (StatusCode::UNAUTHORIZED, axum::Json(problem)).into_response();
+        }
+    }
+
+    next.run(req).await
+}
 
 /// Extract and validate the CommonMetadataHeader from request headers.
 pub async fn validate_metadata(req: Request, next: Next) -> Response {

@@ -2583,13 +2583,25 @@ async fn persist_loop_cursor(
     Ok(())
 }
 
+fn parse_approval_receipt_proof(proof: &str) -> (&str, Option<&str>) {
+    match proof.split_once(':') {
+        Some((receipt_id, digest))
+            if !receipt_id.trim().is_empty() && !digest.trim().is_empty() =>
+        {
+            (receipt_id.trim(), Some(digest.trim()))
+        }
+        _ => (proof.trim(), None),
+    }
+}
+
 async fn load_resume_cursor(
     pool: &SqlitePool,
     authorization: &RunAuthorization,
 ) -> Result<Option<String>, WorkerError> {
-    if authorization.approval_receipt.is_none() {
+    let Some(approval_receipt) = authorization.approval_receipt.as_deref() else {
         return Ok(None);
-    }
+    };
+    let (_, provided_digest) = parse_approval_receipt_proof(approval_receipt);
     let row: Option<String> =
         sqlx::query_scalar("SELECT messages_json FROM worker_sessions WHERE session_id=?")
             .bind(&authorization.session_id)
@@ -2613,6 +2625,10 @@ async fn load_resume_cursor(
         .get("pending_action_digest")
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
+    match provided_digest {
+        Some(candidate) if candidate == digest => {}
+        _ => return Err(WorkerError::YellowApprovalRequired),
+    }
     let reason = cursor
         .get("reason")
         .and_then(|value| value.as_str())
@@ -5019,21 +5035,21 @@ mod tests {
             },
             "confidence": 0.9
         })])
-            .with_stream_completion_hook(move || {
-                let pool = cancel_pool.clone();
-                let run_id = cancel_run_id.clone();
-                let session_id = cancel_session_id.clone();
-                tokio::spawn(async move {
-                    let _ = WorkerRunRepo::set_status(&pool, &run_id, "Cancelled").await;
-                    let _ = coevo_store::repos::worker_session_repo::WorkerSessionRepo::update_status(
-                        &pool,
-                        &session_id,
-                        "Cancelled",
-                    )
-                    .await;
-                });
-                std::thread::sleep(std::time::Duration::from_millis(25));
+        .with_stream_completion_hook(move || {
+            let pool = cancel_pool.clone();
+            let run_id = cancel_run_id.clone();
+            let session_id = cancel_session_id.clone();
+            tokio::spawn(async move {
+                let _ = WorkerRunRepo::set_status(&pool, &run_id, "Cancelled").await;
+                let _ = coevo_store::repos::worker_session_repo::WorkerSessionRepo::update_status(
+                    &pool,
+                    &session_id,
+                    "Cancelled",
+                )
+                .await;
             });
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        });
 
         let result = AgentSubHarness::execute(
             &pool,
@@ -6769,9 +6785,17 @@ Conclusion:
             "confidence": 0.9
         })]);
         let seen_messages = resume_gateway.seen_messages.clone();
+        let messages_json: String =
+            sqlx::query_scalar("SELECT messages_json FROM worker_sessions WHERE session_id=?")
+                .bind(&auth.session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let cursor: serde_json::Value = serde_json::from_str(&messages_json).unwrap();
+        let digest = cursor["pending_action_digest"].as_str().unwrap();
         let mut resumed_auth = auth.clone();
         resumed_auth.run_id = "run2-resume-cursor".to_string();
-        resumed_auth.approval_receipt = Some("approval-receipt".to_string());
+        resumed_auth.approval_receipt = Some(format!("approval-receipt:{digest}"));
         let resumed = AgentSubHarness::execute(
             &pool,
             &test_contract("wo-resume-cursor", "Pause and resume."),
@@ -6795,5 +6819,41 @@ Conclusion:
         assert!(first_prompt.contains("Resuming controlled ReAct loop"));
         assert!(first_prompt.contains("pending_action_digest"));
         assert!(!first_prompt.contains("approval-receipt"));
+    }
+
+    #[tokio::test]
+    async fn resume_with_mismatched_pending_action_digest_fails_closed() {
+        let pool = migrated_pool().await;
+        let pause_gateway = ScriptedGateway::new(vec![serde_json::json!({
+            "thought": "I need human input before continuing.",
+            "proposal": {
+                "kind": "ask_human",
+                "question": "Approve this external action?",
+                "blocking": true
+            },
+            "confidence": 0.6
+        })]);
+        let auth = test_auth("wo-resume-digest", "run-resume-digest-1", vec![]);
+        create_worker_session(&pool, &auth).await;
+        let paused = AgentSubHarness::execute(
+            &pool,
+            &test_contract("wo-resume-digest", "Pause and resume."),
+            &auth,
+            &default_model_profiles(),
+            None,
+            &pause_gateway,
+            &ModelProviderConfig::mock(),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(paused.final_status, "WaitingApproval");
+
+        let mut resumed_auth = auth.clone();
+        resumed_auth.run_id = "run-resume-digest-2".to_string();
+        resumed_auth.approval_receipt = Some("approval-receipt:wrong-digest".to_string());
+        let err = load_resume_cursor(&pool, &resumed_auth).await;
+        assert!(matches!(err, Err(WorkerError::YellowApprovalRequired)));
     }
 }

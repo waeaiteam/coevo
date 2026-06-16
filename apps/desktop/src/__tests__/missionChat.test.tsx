@@ -376,7 +376,8 @@ describe("MissionChat WorkOrder creation", () => {
 
     await waitFor(() => expect(org.createCompanyWorkOrder).toHaveBeenCalledTimes(1));
     expect((window as unknown as { __TAURI__: { core: { invoke: unknown } } }).__TAURI__.core.invoke).toHaveBeenCalledWith("choose_project_folder");
-    expect(org.createCompanyWorkOrder.mock.calls[0][1].mission_intent).toContain("D:\\workspace\\client-project");
+    expect(org.createCompanyWorkOrder.mock.calls[0][1].mission_intent).not.toContain("D:\\workspace\\client-project");
+    expect(org.createCompanyWorkOrder.mock.calls[0][1].mission_intent).toContain("client-project");
   });
 
   it("uses the server-authoritative verdict returned by task creation", async () => {

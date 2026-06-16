@@ -706,6 +706,11 @@ async fn stream_chat_completions(
             break;
         }
     }
+    if !saw_done {
+        return Err(ModelError::InvalidResponse(
+            "stream ended before [DONE] sentinel".to_string(),
+        ));
+    }
 
     let response = aggregate.finish(matches!(request.response_format, ResponseFormat::Json))?;
     if response.usage.total_tokens > 0 {
@@ -1416,6 +1421,79 @@ Final structured answer:
             .position(|event| matches!(event, ModelStreamEvent::Done { .. }))
             .expect("Done event should be emitted");
         assert!(usage_index < done_index);
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_missing_done_sentinel() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0_u8; 4096];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let body = concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let config = ModelProviderConfig {
+            provider_id: "desktop".into(),
+            kind: ModelProviderKind::DeepSeek,
+            base_url: format!("http://{}/v1", addr),
+            api_key: "sk-test".into(),
+            default_model: "deepseek-chat".into(),
+            fast_model: "deepseek-chat".into(),
+            reasoning_model: "deepseek-reasoner".into(),
+            structured_output_model: "deepseek-chat".into(),
+            max_tokens: 8192,
+            temperature: 0.2,
+            timeout_ms: 1000,
+            max_cost_per_task_usd: 5.0,
+        };
+        let request = ModelRequest {
+            config,
+            role: ModelRole::Synthesizer,
+            model: "deepseek-chat".into(),
+            messages: vec![ModelMessage {
+                role: "user".into(),
+                content: "Say hello.".into(),
+                ..Default::default()
+            }],
+            temperature: 0.2,
+            max_tokens: 128,
+            response_format: ResponseFormat::Text,
+            stream: true,
+            tools: vec![],
+            tool_choice: None,
+        };
+
+        let mut events = Vec::new();
+        let mut sink = |event: ModelStreamEvent| {
+            events.push(event);
+            Box::pin(async { Ok(()) })
+                as Pin<Box<dyn Future<Output = Result<(), ModelError>> + Send>>
+        };
+
+        let err = OpenAICompatibleGateway
+            .stream(&request, None, &mut sink)
+            .await
+            .expect_err("stream without [DONE] sentinel should fail closed");
+        server.await.unwrap();
+
+        assert!(matches!(err, ModelError::InvalidResponse(message) if message.contains("[DONE]")));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelStreamEvent::Done { .. })),
+            "missing sentinel must not emit a synthetic Done event"
+        );
     }
 
     #[tokio::test]

@@ -67,6 +67,37 @@ fn request_to_record(req: UpsertMcpServerRequest) -> McpServerRecord {
     }
 }
 
+fn redact_secret_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for nested in map.values_mut() {
+                redact_secret_value(nested);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for nested in items {
+                redact_secret_value(nested);
+            }
+        }
+        serde_json::Value::Null => {}
+        _ => *value = serde_json::Value::String("[redacted]".to_string()),
+    }
+}
+
+fn redact_secret_json(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "{}".to_string();
+    }
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(mut value) => {
+            redact_secret_value(&mut value);
+            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+        }
+        Err(_) => "[redacted]".to_string(),
+    }
+}
+
 pub async fn list_mcp_servers(State(s): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match McpServerRepo::list(&s.pool).await {
         Ok(rows) => {
@@ -79,9 +110,9 @@ pub async fn list_mcp_servers(State(s): State<AppState>) -> (StatusCode, Json<se
                         "transport": row.transport,
                         "command": row.command,
                         "args_json": row.args_json,
-                        "env_json": row.env_json,
+                        "env_json": redact_secret_json(&row.env_json),
                         "url": row.url,
-                        "headers_json": row.headers_json,
+                        "headers_json": redact_secret_json(&row.headers_json),
                         "enabled": row.enabled,
                         "status": row.status,
                         "last_error": row.last_error,
@@ -108,9 +139,9 @@ pub async fn get_mcp_server(
             "transport": row.transport,
             "command": row.command,
             "args_json": row.args_json,
-            "env_json": row.env_json,
+            "env_json": redact_secret_json(&row.env_json),
             "url": row.url,
-            "headers_json": row.headers_json,
+            "headers_json": redact_secret_json(&row.headers_json),
             "enabled": row.enabled,
             "status": row.status,
             "last_error": row.last_error,
@@ -367,5 +398,56 @@ mod tests {
         let row = McpServerRepo::get(&pool, "srv-2").await.unwrap().unwrap();
         assert_eq!(row.status, "unknown");
         assert_eq!(row.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn list_and_get_mcp_server_redact_secret_material() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
+
+        let create = create_mcp_server(
+            State(state.clone()),
+            Json(UpsertMcpServerRequest {
+                id: "srv-secrets".into(),
+                name: "secrets".into(),
+                transport: "http".into(),
+                command: None,
+                args_json: None,
+                env_json: Some(r#"{"API_KEY":"super-secret","MODE":"prod"}"#.into()),
+                url: Some("http://127.0.0.1:7777/mcp".into()),
+                headers_json: Some(
+                    r#"{"Authorization":"Bearer super-secret","X-Trace":"trace-value"}"#.into(),
+                ),
+                enabled: true,
+            }),
+        )
+        .await;
+        assert_eq!(create.0, StatusCode::OK);
+
+        let list = list_mcp_servers(State(state.clone())).await;
+        assert_eq!(list.0, StatusCode::OK);
+        let list_body: serde_json::Value = serde_json::from_value(list.1 .0).unwrap();
+        let list_item = &list_body.as_array().unwrap()[0];
+        assert!(!list_item["env_json"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("super-secret"));
+        assert!(!list_item["headers_json"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("super-secret"));
+
+        let get = get_mcp_server(State(state), Path("srv-secrets".into())).await;
+        assert_eq!(get.0, StatusCode::OK);
+        let get_body: serde_json::Value = serde_json::from_value(get.1 .0).unwrap();
+        assert!(!get_body["env_json"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("super-secret"));
+        assert!(!get_body["headers_json"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("super-secret"));
     }
 }

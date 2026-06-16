@@ -1,5 +1,6 @@
 //! coevo-server: axum HTTP API entrypoint for the coevo control plane.
 
+use axum::http::{HeaderValue, Method};
 use std::env;
 use std::path::PathBuf;
 use std::process;
@@ -13,7 +14,7 @@ use coevo_server::state::AppState;
 use coevo_store::migrate::{
     create_pool_and_run_migrations_with_recovery, MigrationRecoveryOutcome,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -54,11 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(error = %err, "failed to sync enabled MCP servers at startup");
     }
 
-    // CORS (allow desktop app)
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = build_cors_layer();
 
     // Build router
     let app = build_router(state).layer(cors);
@@ -71,6 +68,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn build_cors_layer() -> CorsLayer {
+    let extra_origins = env::var("COEVO_ALLOWED_ORIGINS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let allow_origin = AllowOrigin::predicate(move |origin: &HeaderValue, _| {
+        let Ok(origin) = origin.to_str() else {
+            return false;
+        };
+        is_default_allowed_origin(origin)
+            || extra_origins
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(origin))
+    });
+
+    CorsLayer::new()
+        .allow_origin(allow_origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers(AllowHeaders::mirror_request())
+}
+
+fn is_default_allowed_origin(origin: &str) -> bool {
+    matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) || origin.starts_with("http://localhost:")
+        || origin.starts_with("https://localhost:")
+        || origin.starts_with("http://127.0.0.1:")
+        || origin.starts_with("https://127.0.0.1:")
+        || origin.starts_with("http://[::1]:")
+        || origin.starts_with("https://[::1]:")
+        || matches!(
+            origin,
+            "http://localhost"
+                | "https://localhost"
+                | "http://127.0.0.1"
+                | "https://127.0.0.1"
+                | "http://[::1]"
+                | "https://[::1]"
+        )
 }
 
 fn coevo_recovery_backup_root() -> PathBuf {

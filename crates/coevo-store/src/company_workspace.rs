@@ -54,7 +54,7 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_dir(&self, opc_id: &str) -> PathBuf {
-        self.root.join(opc_id)
+        self.root.join(validated_segment(opc_id, "opc_id"))
     }
 
     pub fn company_db_path(&self, opc_id: &str) -> PathBuf {
@@ -66,7 +66,8 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_employee_dir(&self, opc_id: &str, agent_id: &str) -> PathBuf {
-        self.company_employees_dir(opc_id).join(agent_id)
+        self.company_employees_dir(opc_id)
+            .join(validated_segment(agent_id, "agent_id"))
     }
 
     pub fn company_employee_passport_path(&self, opc_id: &str, agent_id: &str) -> PathBuf {
@@ -135,7 +136,8 @@ impl CompanyWorkspaceManager {
     }
 
     pub fn company_skill_dir(&self, opc_id: &str, skill_id: &str) -> PathBuf {
-        self.company_skills_dir(opc_id).join(skill_id)
+        self.company_skills_dir(opc_id)
+            .join(validated_segment(skill_id, "skill_id"))
     }
 
     pub fn company_skill_markdown_path(&self, opc_id: &str, skill_id: &str) -> PathBuf {
@@ -153,7 +155,7 @@ impl CompanyWorkspaceManager {
         skill_id: &str,
     ) -> PathBuf {
         self.company_employee_skills_dir(opc_id, agent_id)
-            .join(skill_id)
+            .join(validated_segment(skill_id, "skill_id"))
     }
 
     pub fn company_employee_skill_markdown_path(
@@ -493,6 +495,16 @@ fn remove_dir_all_with_windows_retry(
     })))
 }
 
+fn validated_segment<'a>(segment: &'a str, label: &str) -> &'a str {
+    let path = Path::new(segment);
+    let mut components = path.components();
+    let valid = !segment.is_empty()
+        && matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    assert!(valid, "{label} must be a single path segment");
+    segment
+}
+
 fn is_transient_windows_dir_lock(error: &std::io::Error) -> bool {
     #[cfg(windows)]
     {
@@ -524,4 +536,32 @@ fn read_json_or_default(path: &Path, default: Value) -> Result<Value, std::io::E
     }
     let raw = std::fs::read_to_string(path)?;
     serde_json::from_str(&raw).map_err(std::io::Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn company_dir_rejects_path_separator_segments() {
+        let manager = CompanyWorkspaceManager::new(std::env::temp_dir());
+        let result = std::panic::catch_unwind(|| manager.company_dir("opc/escape"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn company_employee_dir_rejects_parent_components() {
+        let manager = CompanyWorkspaceManager::new(std::env::temp_dir());
+        let result = std::panic::catch_unwind(|| manager.company_employee_dir("opc-1", "../agent"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn company_skill_path_rejects_nested_segments() {
+        let manager = CompanyWorkspaceManager::new(std::env::temp_dir());
+        let result = std::panic::catch_unwind(|| {
+            manager.company_employee_skill_markdown_path("opc-1", "agent-1", "skill/nested")
+        });
+        assert!(result.is_err());
+    }
 }

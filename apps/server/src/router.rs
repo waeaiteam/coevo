@@ -8,17 +8,23 @@ use axum::{
 
 use crate::docs;
 use crate::handlers;
-use crate::middleware::validate_metadata;
+use crate::middleware::{configured_sidecar_token, require_sidecar_token, validate_metadata};
 use crate::state::AppState;
 
 /// Build the full axum Router with all API routes.
 pub fn build_router(state: AppState) -> Router {
-    // Public routes (no metadata validation)
-    let public = Router::new()
+    build_router_with_sidecar_token(state, configured_sidecar_token())
+}
+
+fn build_router_with_sidecar_token(state: AppState, sidecar_token: Option<String>) -> Router {
+    let docs = Router::new()
         .route("/health", get(handlers::health::health_check))
         .route("/openapi.json", get(docs::openapi_json))
         .route("/docs", get(docs::swagger_ui))
-        .route("/redoc", get(docs::redoc))
+        .route("/redoc", get(docs::redoc));
+
+    // Operational routes are protected by the sidecar token when configured.
+    let public = Router::new()
         .route(
             "/founder",
             get(handlers::opc::get_founder).put(handlers::opc::put_founder),
@@ -548,7 +554,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .layer(middleware::from_fn(validate_metadata));
 
-    Router::new().merge(public).merge(api).with_state(state)
+    let secured = Router::new()
+        .merge(public)
+        .merge(api)
+        .layer(middleware::from_fn_with_state(
+            sidecar_token,
+            require_sidecar_token,
+        ));
+
+    Router::new().merge(docs).merge(secured).with_state(state)
 }
 
 #[cfg(test)]
@@ -718,6 +732,104 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn operational_routes_require_sidecar_token_when_configured() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!("coevo-router-auth-{}", uuid::Uuid::new_v4()));
+        let app = build_router_with_sidecar_token(
+            AppState::new(pool, root.clone()),
+            Some("test-sidecar-token".to_string()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/companies")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Unauthorized Co",
+                            "mission": "should fail without token"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+
+        let authorized = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/companies")
+                    .header("content-type", "application/json")
+                    .header("x-coevo-token", "test-sidecar-token")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Authorized Co",
+                            "mission": "should pass with token"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn router_captures_missing_sidecar_token_at_build_time() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "coevo-router-auth-capture-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let app = build_router_with_sidecar_token(AppState::new(pool, root.clone()), None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/companies")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Late Token Co",
+                            "mission": "should stay public after router build"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[tokio::test]
