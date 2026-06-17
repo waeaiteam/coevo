@@ -66,8 +66,8 @@ pub use types::{McpContent, McpServerInfo, McpToolInfo, McpToolOutput};
 use crate::traits::{AdapterError, McpProvider, McpToolCall, McpToolResult};
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -76,6 +76,16 @@ const URN_PREFIX: &str = "urn:mcp:";
 /// Default per-call timeout for `tools/call` when the caller does not specify
 /// one (used by the [`McpProvider`] trait impl, whose signature has no timeout).
 pub const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Process-wide MCP manager shared by the CRUD API and worker tool calls.
+///
+/// Cloning the returned manager is cheap and preserves a shared inner registry,
+/// so disconnect/update/delete operations in the server constrain worker calls
+/// in the same process instead of drifting into separate connection maps.
+pub fn shared_mcp_client_manager() -> McpClientManager {
+    static SHARED: OnceLock<McpClientManager> = OnceLock::new();
+    SHARED.get_or_init(McpClientManager::new).clone()
+}
 
 /// Build the fully-qualified URN for a tool on a server.
 pub fn make_tool_urn(server_name: &str, tool_name: &str) -> String {
@@ -128,6 +138,7 @@ pub fn integrity_hash(value: &serde_json::Value) -> String {
 #[derive(Clone, Default)]
 pub struct McpClientManager {
     clients: Arc<RwLock<HashMap<String, ManagedConnection>>>,
+    disabled: Arc<RwLock<HashSet<String>>>,
 }
 
 struct ManagedConnection {
@@ -150,6 +161,7 @@ impl McpClientManager {
         let info = client
             .server_info()
             .ok_or_else(|| AdapterError::McpError("initialize produced no server info".into()))?;
+        self.disabled.write().await.remove(&config.id);
         let previous = {
             let mut guard = self.clients.write().await;
             guard.insert(
@@ -164,6 +176,21 @@ impl McpClientManager {
             old.client.shutdown().await;
         }
         Ok(info)
+    }
+
+    /// Ensure `config.id` is connected in the shared registry unless that id
+    /// was explicitly disconnected and not subsequently reconnected.
+    pub async fn ensure_connected(&self, config: McpServerConfig) -> Result<(), AdapterError> {
+        if self.is_connected(&config.id).await {
+            return Ok(());
+        }
+        if self.disabled.read().await.contains(&config.id) {
+            return Err(AdapterError::McpError(format!(
+                "MCP server '{}' was explicitly disconnected",
+                config.id
+            )));
+        }
+        self.connect(config).await.map(|_| ())
     }
 
     /// Build + initialize a client from a config (shared by connect/reconnect).
@@ -193,6 +220,7 @@ impl McpClientManager {
         let entry = self.clients.write().await.remove(id);
         match entry {
             Some(entry) => {
+                self.disabled.write().await.insert(id.to_string());
                 entry.client.shutdown().await;
                 Ok(())
             }

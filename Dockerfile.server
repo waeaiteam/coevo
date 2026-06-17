@@ -22,7 +22,12 @@ COPY crates/coevo-resolution/Cargo.toml crates/coevo-resolution/
 COPY crates/coevo-reputation/Cargo.toml crates/coevo-reputation/
 COPY crates/coevo-tracks/Cargo.toml crates/coevo-tracks/
 COPY crates/coevo-cli/Cargo.toml crates/coevo-cli/
+COPY crates/coevo-evolution/Cargo.toml crates/coevo-evolution/
+COPY crates/coevo-executors/Cargo.toml crates/coevo-executors/
+COPY crates/coevo-models/Cargo.toml crates/coevo-models/
+COPY crates/coevo-worker/Cargo.toml crates/coevo-worker/
 COPY apps/server/Cargo.toml apps/server/
+COPY tests/e2e/Cargo.toml tests/e2e/
 
 # Dummy src to build deps
 RUN mkdir -p crates/coevo-core/src && echo "" > crates/coevo-core/src/lib.rs
@@ -38,9 +43,14 @@ RUN mkdir -p crates/coevo-resolution/src && echo "" > crates/coevo-resolution/sr
 RUN mkdir -p crates/coevo-reputation/src && echo "" > crates/coevo-reputation/src/lib.rs
 RUN mkdir -p crates/coevo-tracks/src && echo "" > crates/coevo-tracks/src/lib.rs
 RUN mkdir -p crates/coevo-cli/src && echo "fn main() {}" > crates/coevo-cli/src/main.rs
+RUN mkdir -p crates/coevo-evolution/src && echo "" > crates/coevo-evolution/src/lib.rs
+RUN mkdir -p crates/coevo-executors/src && echo "" > crates/coevo-executors/src/lib.rs
+RUN mkdir -p crates/coevo-models/src && echo "" > crates/coevo-models/src/lib.rs
+RUN mkdir -p crates/coevo-worker/src && echo "" > crates/coevo-worker/src/lib.rs
 RUN mkdir -p apps/server/src && echo "fn main() {}" > apps/server/src/main.rs
+RUN mkdir -p tests/e2e && echo "#[test] fn acceptance_placeholder() {}" > tests/e2e/acceptance.rs
 
-RUN cargo build --release -p coevo-server 2>/dev/null || true
+RUN cargo build --release -p coevo-server
 
 # Copy real src
 COPY crates/ crates/

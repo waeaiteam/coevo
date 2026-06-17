@@ -985,7 +985,7 @@ fn resolve_governance_verdict(
                 .filter(|id| !id.is_empty())
                 .cloned()
         });
-    let blocked = track_decision.track == "red";
+    let blocked = false;
 
     GovernanceVerdict {
         effective_track: track_decision.track.to_string(),
@@ -996,10 +996,7 @@ fn resolve_governance_verdict(
             "Requested autonomy exceeds the server RiskGate ceiling for this task.".to_string()
         }),
         blocked,
-        block_reason: blocked.then(|| {
-            "Red Track execution is blocked in Alpha until the production verifier is available."
-                .to_string()
-        }),
+        block_reason: None,
         resolved_agent_id,
     }
 }
@@ -1204,14 +1201,24 @@ fn classify_mission_track(intent: &str) -> TrackDecision {
     }
 }
 
-fn yellow_approval_receipt(req: &ExecuteRequest) -> Option<&str> {
+fn approval_receipt_for_track<'a>(req: &'a ExecuteRequest, track: &str) -> Option<&'a str> {
     // Alpha compatibility: Yellow approval receipts may arrive through the legacy
-    // caller_identity_proof field or lease_id. Red Track leases need a separate
-    // verifier before Red execution is enabled.
-    req.caller_identity_proof
+    // caller_identity_proof field or lease_id. Red Track must stay stricter and
+    // only accept the explicit approval-receipt field so lease IDs cannot be
+    // misrouted into the human-approval path.
+    let caller_receipt = req
+        .caller_identity_proof
         .as_deref()
-        .or(req.lease_id.as_deref())
-        .filter(|s| !s.trim().is_empty())
+        .filter(|s| !s.trim().is_empty());
+    if caller_receipt.is_some() {
+        return caller_receipt;
+    }
+
+    if track == "yellow" {
+        req.lease_id.as_deref().filter(|s| !s.trim().is_empty())
+    } else {
+        None
+    }
 }
 
 fn parse_approval_receipt_proof(proof: &str) -> (&str, Option<&str>) {
@@ -1233,13 +1240,8 @@ fn compose_approval_receipt(approval_id: &str, pending_action_digest: Option<&st
 }
 
 fn approval_actor(headers: &HeaderMap, fallback_actor: &str) -> String {
-    headers
-        .get("x-coevo-actor-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| fallback_actor.to_string())
+    let _ = headers;
+    fallback_actor.to_string()
 }
 
 async fn pending_action_digest_for_work_order(
@@ -1484,8 +1486,9 @@ pub async fn list_company_shared_files(
     State(s): State<AppState>,
     Path(opc_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(err) = company_pool(&s, &opc_id).await {
-        return err;
+    match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool.close().await,
+        Err(err) => return err,
     }
     let shared_root = company_shared_root(&s, &opc_id);
     let mut items = Vec::new();
@@ -1520,8 +1523,9 @@ pub async fn put_company_shared_file(
     Path(opc_id): Path<String>,
     Json(req): Json<SharedFileUpsertRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(err) = company_pool(&s, &opc_id).await {
-        return err;
+    match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool.close().await,
+        Err(err) => return err,
     }
     let target = match resolve_company_shared_path(&s, &opc_id, &req.path) {
         Ok(path) => path,
@@ -1615,8 +1619,9 @@ pub async fn put_company(
     Path(opc_id): Path<String>,
     Json(req): Json<UpdateCompanyRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(err) = company_pool(&s, &opc_id).await {
-        return err;
+    match company_pool(&s, &opc_id).await {
+        Ok(pool) => pool.close().await,
+        Err(err) => return err,
     }
     let company_dir = s.company_workspace.company_dir(&opc_id);
 
@@ -2580,6 +2585,13 @@ pub async fn update_company_employee_prompt(
         pool.close().await;
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
+    if let Err(e) =
+        agent_employee_repo::AgentEmployeeRepo::update_system_prompt(&pool, &id, &req.system_prompt)
+            .await
+    {
+        pool.close().await;
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
 
     pool.close().await;
     ok!(serde_json::json!({"version": next_version, "change_summary": req.change_summary}))
@@ -2679,6 +2691,12 @@ pub async fn rollback_company_employee_prompt(
     {
         pool.close().await;
         return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    if let Err(e) =
+        agent_employee_repo::AgentEmployeeRepo::update_system_prompt(&pool, &id, &content).await
+    {
+        pool.close().await;
+        return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     pool.close().await;
     ok!(serde_json::json!({"version": req.version, "ok": true}))
@@ -3053,7 +3071,7 @@ pub async fn execute_work_order(
             }
             Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
-        let receipt = yellow_approval_receipt(&req);
+        let receipt = approval_receipt_for_track(&req, wo.track.as_str());
         if receipt.is_none() {
             let approval_id = match ApprovalRepo::create(
                 &s.pool,
@@ -4983,7 +5001,7 @@ mod tests {
                 .await
                 .unwrap();
         pool.close().await;
-        assert!(db_prompt.trim().is_empty());
+        assert_eq!(db_prompt, "Updated summary prompt");
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -6216,6 +6234,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn red_execute_ignores_lease_id_as_approval_receipt() {
+        let (state, root, opc_id) = seeded_legacy_company_state().await;
+        let pool = state.pool.clone();
+        let contract_hash = "d".repeat(64);
+        let work_order_id = "wo-red-lease-id-is-not-receipt";
+        insert_contract(&pool, &contract_hash).await;
+        let company_db = company_pool(&state, &opc_id).await.unwrap();
+        let mut risk_employee =
+            agent_employee_repo::AgentEmployeeRepo::get(&company_db, "agent-risk-01")
+                .await
+                .unwrap()
+                .unwrap();
+        risk_employee.risk_ceiling = 1.0;
+        risk_employee.permission_boundary.max_risk_score = 1.0;
+        agent_employee_repo::AgentEmployeeRepo::upsert(&company_db, &risk_employee)
+            .await
+            .unwrap();
+        company_db.close().await;
+
+        let create = CreateWORequest {
+            work_order_id: Some(work_order_id.to_string()),
+            conversation_id: None,
+            contract_hash: contract_hash.clone(),
+            plan_hash: "e".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: opc_id.clone(),
+            mission_intent: "Delete production customer data".to_string(),
+            selected_agents: vec!["agent-risk-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            governance_proposal: None,
+        };
+        let (create_status, _) = create_work_order(
+            legacy_company_headers(&opc_id),
+            State(state.clone()),
+            Json(create),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::OK);
+
+        let approval_id = ApprovalRepo::create(
+            &pool,
+            &opc_id,
+            &contract_hash,
+            &format!("urn:coevo:work-order:{}:execute", work_order_id),
+            "EXPLICIT_APPROVAL",
+            "default-founder",
+            300_000,
+        )
+        .await
+        .unwrap();
+        ApprovalRepo::approve(&pool, &opc_id, &approval_id, "default-founder")
+            .await
+            .unwrap();
+
+        let (status, Json(body)) = execute_work_order(
+            legacy_company_headers(&opc_id),
+            State(state),
+            Path(work_order_id.to_string()),
+            Json(ExecuteRequest {
+                caller_identity_proof: None,
+                monitoring_signature: None,
+                diagnostic_signature: None,
+                lease_id: Some(approval_id.clone()),
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(body["status"], "WaitingApproval");
+        assert_ne!(
+            body["approval_id"].as_str().unwrap_or_default(),
+            approval_id,
+            "red approval gating must not accept lease_id as the approval receipt"
+        );
+        assert_eq!(count_rows(&pool, "worker_sessions", work_order_id).await, 0);
+        assert_eq!(count_rows(&pool, "worker_runs", work_order_id).await, 0);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
     async fn create_work_order_overrides_client_track_with_server_classification() {
         let (state, root, opc_id) = seeded_legacy_company_state().await;
         let work_order_id = "wo-server-classifies-red";
@@ -6244,7 +6343,8 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["track"], "red");
         assert_eq!(body["governance_verdict"]["effective_track"], "red");
-        assert_eq!(body["governance_verdict"]["blocked"], true);
+        assert_eq!(body["governance_verdict"]["blocked"], false);
+        assert!(body["governance_verdict"]["block_reason"].is_null());
         assert!(body["risk_summary"]
             .as_str()
             .unwrap_or_default()
@@ -8382,7 +8482,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_endpoint_records_header_actor_id() {
+    async fn approval_endpoint_ignores_spoofed_header_actor_id() {
         let (state, root, opc_id) = seeded_legacy_company_state().await;
         let pool = state.pool.clone();
         configure_active_openai_compatible(&pool).await;
@@ -8425,7 +8525,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(approval.approved_by.as_deref(), Some("approver-42"));
+        assert_eq!(approval.approved_by.as_deref(), Some("default-founder"));
         std::fs::remove_dir_all(root).ok();
     }
 

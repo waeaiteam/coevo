@@ -748,6 +748,11 @@ async fn stream_messages(
 
     let structured =
         schema_json.is_some() || matches!(request.response_format, ResponseFormat::Json);
+    if !saw_stop {
+        return Err(ModelError::InvalidResponse(
+            "stream ended before message_stop terminator".to_string(),
+        ));
+    }
     let response = state.finish(request, latency, structured)?;
     if response.usage.total_tokens > 0 {
         on_event(ModelStreamEvent::Usage(response.usage.clone())).await?;
@@ -818,6 +823,42 @@ mod tests {
             }
         }
         Ok((state, stopped))
+    }
+
+    async fn run_stream_server(response_body: &'static str) -> Result<ModelResponse, ModelError> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("local addr");
+        let body = response_body.to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept connection");
+            let mut request_buf = [0u8; 4096];
+            let _ = socket.read(&mut request_buf).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+
+        let mut request = test_request(ResponseFormat::Text);
+        request.config.base_url = format!("http://{}", addr);
+        let gateway = AnthropicGateway;
+        let mut events = Vec::new();
+        let mut sink = |event: ModelStreamEvent| {
+            events.push(event);
+            Box::pin(async { Ok(()) })
+                as Pin<Box<dyn Future<Output = Result<(), ModelError>> + Send>>
+        };
+        let result = gateway.stream(&request, None, &mut sink).await;
+        server.await.expect("server task");
+        result
     }
 
     /// Canned Anthropic SSE fixture: text + tool_use + usage, no network.
@@ -946,6 +987,21 @@ mod tests {
             .await
             .expect_err("error event should fail the stream");
         assert!(err.to_string().contains("Overloaded"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn sse_stream_without_message_stop_is_rejected() {
+        let response_body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n"
+        );
+
+        let err = run_stream_server(response_body)
+            .await
+            .expect_err("missing message_stop should be rejected");
+        assert!(err.to_string().contains("message_stop"), "got: {err}");
     }
 
     #[tokio::test]

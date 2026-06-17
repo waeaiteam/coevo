@@ -5,6 +5,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use coevo_store::models::ApprovalRequestRow;
 use coevo_store::models::AuditEventRow;
 use coevo_store::pool::create_pool;
 use coevo_store::repos::audit_repo::AuditRepo;
@@ -162,15 +163,40 @@ pub async fn timeline(
         Ok(opc_id) => opc_id,
         Err(err) => return err,
     };
-    let (_, scoped_work_order_pool) = match load_scoped_work_order(&s, &headers, &id).await {
-        Ok(result) => result,
-        Err(err) => return err,
-    };
+    let (_work_order, scoped_work_order_pool) =
+        match load_scoped_work_order(&s, &headers, &id).await {
+            Ok(result) => result,
+            Err(err) => return err,
+        };
+    let mut items: Vec<serde_json::Value> = vec![];
+    let pending_action_urn = format!("urn:coevo:work-order:{}:execute", &id);
+    if let Some(pool) = scoped_work_order_pool.as_ref() {
+        if let Ok(Some(pending_approval)) = sqlx::query_as::<_, ApprovalRequestRow>(
+        "SELECT * FROM approval_requests WHERE opc_id=? AND action_urn=? AND status='pending' ORDER BY requested_at_ms DESC LIMIT 1",
+        )
+        .bind(&opc_id)
+        .bind(&pending_action_urn)
+        .fetch_optional(pool)
+        .await
+        {
+            items.push(serde_json::json!({
+                "time_ms": pending_approval.requested_at_ms,
+                "type": "ApprovalRequired",
+                "title": "Approval required",
+                "work_order_id": id,
+                "approval_id": pending_approval.id,
+                "details": {
+                    "approval_id": pending_approval.id,
+                    "action_urn": pending_approval.action_urn,
+                    "approval_mode": pending_approval.approval_mode,
+                    "requested_by": pending_approval.requested_by,
+                }
+            }));
+        }
+    }
     if let Some(pool) = scoped_work_order_pool {
         pool.close().await;
     }
-
-    let mut items: Vec<serde_json::Value> = vec![];
     // Load sessions
     if let Ok(sessions) = sqlx::query(
         "SELECT * FROM worker_sessions WHERE opc_id=? AND work_order_id=? ORDER BY created_at_ms",
@@ -638,15 +664,67 @@ mod tests {
     use crate::handlers::opc::{create_company, CreateCompanyRequest};
     use crate::state::AppState;
     use axum::http::HeaderValue;
+    use coevo_core::contract::{
+        ActionMode, ApprovalMode, ContractState, EvidenceRequirement, GoalNode, GoalStatus,
+        GoalTree, HumanApprovalPolicy, MCLSpec, ResponsibilityAnchorPolicy, RiskToleranceProfile,
+        TerminationPolicy,
+    };
     use coevo_core::opc::{MemoryRecord, MemoryScope, MemoryStatus, WorkOrder, WorkOrderStatus};
     use coevo_store::{
         migrate::run_migrations,
         pool::create_test_pool,
+        repos::approval_repo::ApprovalRepo,
         repos::audit_repo::AuditRepo,
+        repos::contract_repo::ContractRepo,
         repos::worker_session_repo::WorkerSessionRepo,
         repos_opc::{memory_repo::MemoryRepo, work_order_repo::WorkOrderRepo},
     };
     use tokio::time::{sleep, Duration};
+
+    async fn insert_contract(pool: &sqlx::SqlitePool, hash: &str) {
+        let contract = MCLSpec {
+            mcl_version: "1.0".to_string(),
+            mcl_state: ContractState::ActiveContract,
+            parent_contract_hash: "0".repeat(64),
+            goal_tree: GoalTree {
+                root: GoalNode {
+                    id: "root".to_string(),
+                    description: "test".to_string(),
+                    status: GoalStatus::Pending,
+                    children: vec![],
+                    depends_on: vec![],
+                },
+            },
+            institution_policy_hash: "0".repeat(64),
+            data_boundary: vec![],
+            allowed_action_modes: vec![ActionMode::DraftOnly],
+            human_approval_policy: HumanApprovalPolicy {
+                approval_mode: ApprovalMode::NegativeConsent,
+                authorized_roles: vec!["Admin".to_string()],
+                negative_consent_timeout_secs: 300,
+                mfa_auth_url: None,
+            },
+            evidence_requirement: EvidenceRequirement {
+                minimum_level: "none".to_string(),
+                require_json_report: false,
+            },
+            risk_tolerance_profile: RiskToleranceProfile {
+                max_risk_score: 0.6,
+                allow_emergency_lease: false,
+            },
+            termination_policy: TerminationPolicy {
+                max_token_budget: 10000,
+                max_hops: 3,
+                max_latency_ms: 60000,
+                max_stance_rounds: 3,
+            },
+            responsibility_anchor_policy: ResponsibilityAnchorPolicy {
+                required_human_roles: vec!["Admin".to_string()],
+                agent_forbidden_actions: vec![],
+            },
+        };
+        ContractRepo::insert(pool, &contract, hash).await.unwrap();
+    }
 
     #[tokio::test]
     async fn global_timeline_merges_tasks_and_worker_sessions() {
@@ -809,6 +887,86 @@ mod tests {
         assert!(items
             .iter()
             .any(|item| item["type"] == "WorkerSessionCreated"));
+    }
+
+    #[tokio::test]
+    async fn legacy_timeline_includes_pending_approval_anchor_for_refresh() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let root =
+            std::env::temp_dir().join(format!("coevo-timeline-approval-{}", uuid::Uuid::new_v4()));
+        let state = AppState::new(pool.clone(), root.clone());
+
+        let (_, Json(created)) = create_company(
+            State(state.clone()),
+            Json(CreateCompanyRequest {
+                name: "Timeline Approval Co".to_string(),
+                mission: Some("Validate timeline approval anchors".to_string()),
+            }),
+        )
+        .await;
+        let opc_id = created["opc_id"].as_str().unwrap().to_string();
+        let company_pool = company_pool(&state, &opc_id).await.unwrap();
+        insert_contract(&company_pool, &"a".repeat(64)).await;
+        let work_order = WorkOrder {
+            work_order_id: "wo-company-approval".to_string(),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: opc_id.clone(),
+            mission_intent: "Wait for approval".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec![],
+            track: "yellow".to_string(),
+            status: WorkOrderStatus::WaitingApproval,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec![],
+            risk_summary: "company".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: 10,
+            updated_at_ms: 10,
+        };
+        WorkOrderRepo::create(&company_pool, &work_order)
+            .await
+            .unwrap();
+        let approval_id = ApprovalRepo::create(
+            &company_pool,
+            &opc_id,
+            &work_order.contract_hash,
+            &format!("urn:coevo:work-order:{}:execute", work_order.work_order_id),
+            "NEGATIVE_CONSENT",
+            &work_order.user_id,
+            300_000,
+        )
+        .await
+        .unwrap();
+        company_pool.close().await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            LEGACY_OPC_ID_HEADER,
+            opc_id.parse().expect("valid opc header"),
+        );
+        let (status, Json(body)) = timeline(
+            headers,
+            State(state),
+            Path("wo-company-approval".to_string()),
+        )
+        .await;
+
+        std::fs::remove_dir_all(root).ok();
+
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        let items = body.as_array().unwrap();
+        assert!(items.iter().any(|item| {
+            item["type"] == "ApprovalRequired"
+                && item["details"]["approval_id"] == approval_id
+                && item["details"]["action_urn"]
+                    == format!("urn:coevo:work-order:{}:execute", "wo-company-approval")
+        }));
     }
 
     #[tokio::test]

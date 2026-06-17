@@ -8,15 +8,27 @@ use axum::{
 
 use crate::docs;
 use crate::handlers;
-use crate::middleware::{configured_sidecar_token, require_sidecar_token, validate_metadata};
+#[cfg(not(test))]
+use crate::middleware::configured_sidecar_token;
+use crate::middleware::{require_sidecar_token, validate_metadata};
 use crate::state::AppState;
 
 /// Build the full axum Router with all API routes.
+#[cfg(not(test))]
 pub fn build_router(state: AppState) -> Router {
     build_router_with_sidecar_token(state, configured_sidecar_token())
 }
 
-fn build_router_with_sidecar_token(state: AppState, sidecar_token: Option<String>) -> Router {
+/// Test-only default router: keep behavioral tests focused on the route under
+/// test instead of forcing every fixture to provision sidecar auth headers.
+/// Targeted auth tests call `build_router_with_sidecar_token` explicitly.
+#[cfg(test)]
+pub fn build_router(state: AppState) -> Router {
+    build_router_with_sidecar_token(state, Some(String::new()))
+}
+
+#[doc(hidden)]
+pub fn build_router_with_sidecar_token(state: AppState, sidecar_token: Option<String>) -> Router {
     let docs = Router::new()
         .route("/health", get(handlers::health::health_check))
         .route("/openapi.json", get(docs::openapi_json))
@@ -801,7 +813,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn router_captures_missing_sidecar_token_at_build_time() {
+    async fn router_denies_operational_routes_when_sidecar_token_is_unconfigured() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let root = std::env::temp_dir().join(format!(
@@ -827,7 +839,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         std::fs::remove_dir_all(root).ok();
     }
@@ -3125,10 +3137,9 @@ mod tests {
         .unwrap();
         company_pool.close().await;
 
-        assert!(
-            stored_system_prompt.trim().is_empty(),
-            "expected agent_employees.system_prompt to be blank metadata storage, got {:?}",
-            stored_system_prompt
+        assert_eq!(
+            stored_system_prompt, prompt_v2,
+            "expected agent_employees.system_prompt to retain the latest published prompt"
         );
         assert!(
             stored_prompt_contents

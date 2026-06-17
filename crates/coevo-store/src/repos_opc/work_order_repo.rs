@@ -133,21 +133,154 @@ impl WorkOrderRepo {
         id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE work_orders SET status=?,updated_at_ms=? WHERE work_order_id=?")
-            .bind(status)
-            .bind(chrono::Utc::now().timestamp_millis())
-            .bind(id)
-            .execute(pool)
-            .await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut tx = pool.begin().await?;
+        let result = match status {
+            "Draft" => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status IN (?)",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind("Draft")
+                .execute(&mut *tx)
+                .await?
+            }
+            "Planned" => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status IN (?,?)",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind("Draft")
+                .bind("Planned")
+                .execute(&mut *tx)
+                .await?
+            }
+            "Running" => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status IN (?,?,?)",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind("Planned")
+                .bind("WaitingApproval")
+                .bind("Running")
+                .execute(&mut *tx)
+                .await?
+            }
+            "WaitingApproval" => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status IN (?,?,?)",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind("Planned")
+                .bind("Running")
+                .bind("WaitingApproval")
+                .execute(&mut *tx)
+                .await?
+            }
+            "Completed" | "Failed" | "Cancelled" | "Blocked" => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status IN (?,?,?,?)",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind("Planned")
+                .bind("WaitingApproval")
+                .bind("Running")
+                .bind(status)
+                .execute(&mut *tx)
+                .await?
+            }
+            _ => {
+                sqlx::query(
+                    "UPDATE work_orders
+                 SET status=?,updated_at_ms=?
+                 WHERE work_order_id=? AND status=?",
+                )
+                .bind(status)
+                .bind(now)
+                .bind(id)
+                .bind(status)
+                .execute(&mut *tx)
+                .await?
+            }
+        };
+
+        if result.rows_affected() > 0 {
+            tx.commit().await?;
+            return Ok(());
+        }
+
+        let current =
+            sqlx::query_scalar::<_, String>("SELECT status FROM work_orders WHERE work_order_id=?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        tx.rollback().await?;
+
+        let Some(current) = current else {
+            return Err(sqlx::Error::RowNotFound);
+        };
+        validate_status_transition(&current, status)
+    }
+}
+
+fn validate_status_transition(current: &str, next: &str) -> Result<(), sqlx::Error> {
+    if current == next {
+        return Ok(());
+    }
+    let allowed = match current {
+        "Draft" => matches!(next, "Planned"),
+        "Planned" => matches!(
+            next,
+            "Running" | "WaitingApproval" | "Completed" | "Failed" | "Cancelled" | "Blocked"
+        ),
+        "WaitingApproval" => {
+            matches!(
+                next,
+                "Running" | "Completed" | "Failed" | "Cancelled" | "Blocked"
+            )
+        }
+        "Running" => matches!(
+            next,
+            "WaitingApproval" | "Completed" | "Failed" | "Cancelled" | "Blocked"
+        ),
+        "Completed" | "Failed" | "Cancelled" | "Blocked" => false,
+        _ => false,
+    };
+    if allowed {
         Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(
+            format!("illegal work order status transition: {current} -> {next}").into(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::WorkOrderRepo;
-    use crate::{migrate::run_migrations, pool::create_test_pool};
+    use crate::{migrate::run_migrations, pool::create_pool, pool::create_test_pool};
     use coevo_core::opc::{WorkOrder, WorkOrderStatus};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
     async fn create_persists_work_order_against_current_schema() {
@@ -263,5 +396,157 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(saved.status, WorkOrderStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn update_status_rejects_terminal_state_rollbacks() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let work_order = WorkOrder {
+            work_order_id: "wo-terminal-rollback".to_string(),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "guard terminal rollback".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Completed,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec![],
+            risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+        let err = WorkOrderRepo::update_status(&pool, &work_order.work_order_id, "Planned")
+            .await
+            .expect_err("terminal work orders should not roll back");
+        assert!(matches!(err, sqlx::Error::Protocol(_)));
+
+        let saved = WorkOrderRepo::get(&pool, &work_order.work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, WorkOrderStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn update_status_rejects_non_terminal_rollbacks() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let work_order = WorkOrder {
+            work_order_id: "wo-forward-jump".to_string(),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "guard forward jumps".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec![],
+            risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+        let err = WorkOrderRepo::update_status(&pool, &work_order.work_order_id, "Draft")
+            .await
+            .expect_err("planned work orders should not roll back to draft");
+        assert!(matches!(err, sqlx::Error::Protocol(_)));
+
+        let saved = WorkOrderRepo::get(&pool, &work_order.work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, WorkOrderStatus::Planned);
+    }
+
+    #[tokio::test]
+    async fn update_status_reports_the_live_current_status_on_stale_writes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("wo-stale-write-{unique}.db"));
+        let db_url = db_path.to_string_lossy().to_string();
+        let pool = create_pool(&db_url).await.unwrap();
+        let competing_pool = create_pool(&db_url).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let now = chrono::Utc::now().timestamp_millis() as u64;
+        let work_order = WorkOrder {
+            work_order_id: "wo-stale-write".to_string(),
+            conversation_id: None,
+            contract_hash: "a".repeat(64),
+            plan_hash: "b".repeat(64),
+            user_id: "default-founder".to_string(),
+            opc_id: "default-opc".to_string(),
+            mission_intent: "surface a stale status mismatch".to_string(),
+            selected_agents: vec!["agent-founder-01".to_string()],
+            selected_executors: vec![],
+            required_skills: vec!["skill-mission-draft".to_string()],
+            track: "green".to_string(),
+            status: WorkOrderStatus::Planned,
+            allowed_actions: vec!["read".to_string()],
+            restricted_actions: vec![],
+            risk_summary: "green".to_string(),
+            governance_proposal: None,
+            governance_verdict: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+
+        WorkOrderRepo::create(&pool, &work_order).await.unwrap();
+
+        let mut competing_tx = competing_pool.begin().await.unwrap();
+        sqlx::query(
+            "UPDATE work_orders SET status='Completed', updated_at_ms=? WHERE work_order_id=?",
+        )
+        .bind(chrono::Utc::now().timestamp_millis())
+        .bind(&work_order.work_order_id)
+        .execute(&mut *competing_tx)
+        .await
+        .unwrap();
+
+        let update = tokio::spawn({
+            let pool = pool.clone();
+            let work_order_id = work_order.work_order_id.clone();
+            async move { WorkOrderRepo::update_status(&pool, &work_order_id, "Running").await }
+        });
+
+        tokio::task::yield_now().await;
+        competing_tx.commit().await.unwrap();
+
+        let err = update
+            .await
+            .unwrap()
+            .expect_err("stale write must be rejected");
+        let message = err.to_string();
+        assert!(message.contains("illegal work order status transition: Completed -> Running"));
+
+        let saved = WorkOrderRepo::get(&pool, &work_order.work_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, WorkOrderStatus::Completed);
+
+        let _ = std::fs::remove_file(db_path);
     }
 }

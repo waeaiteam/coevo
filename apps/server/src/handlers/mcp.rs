@@ -67,6 +67,10 @@ fn request_to_record(req: UpsertMcpServerRequest) -> McpServerRecord {
     }
 }
 
+fn transport_is_stdio(transport: &str) -> bool {
+    transport.trim().eq_ignore_ascii_case("stdio")
+}
+
 fn redact_secret_value(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -158,6 +162,12 @@ pub async fn create_mcp_server(
     State(s): State<AppState>,
     Json(req): Json<UpsertMcpServerRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    if transport_is_stdio(&req.transport) {
+        return err!(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "stdio transport is not allowed through the HTTP API by default"
+        );
+    }
     let record = request_to_record(req);
     match McpServerRepo::insert(&s.pool, &record).await {
         Ok(()) => ok!(serde_json::json!({"ok": true})),
@@ -170,6 +180,12 @@ pub async fn update_mcp_server(
     Path(id): Path<String>,
     Json(req): Json<UpsertMcpServerRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    if transport_is_stdio(&req.transport) {
+        return err!(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "stdio transport is not allowed through the HTTP API by default"
+        );
+    }
     let mut record = request_to_record(req);
     record.id = id;
     match McpServerRepo::update(&s.pool, &record).await {
@@ -198,6 +214,12 @@ pub async fn connect_mcp_server(
         Ok(None) => return err!(StatusCode::NOT_FOUND, "MCP server not found"),
         Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    if transport_is_stdio(&record.transport) {
+        return err!(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "stdio transport is not allowed through the HTTP API by default"
+        );
+    }
     let config = match record_to_config(&record) {
         Ok(cfg) => cfg,
         Err(e) => return err!(StatusCode::UNPROCESSABLE_ENTITY, e),
@@ -259,6 +281,12 @@ pub async fn test_mcp_server(
     State(s): State<AppState>,
     Json(req): Json<UpsertMcpServerRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    if transport_is_stdio(&req.transport) {
+        return err!(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "stdio transport is not allowed through the HTTP API by default"
+        );
+    }
     let record = request_to_record(req);
     let config = match record_to_config(&record) {
         Ok(cfg) => cfg,
@@ -283,6 +311,12 @@ pub async fn list_mcp_server_tools(
         Ok(None) => return err!(StatusCode::NOT_FOUND, "MCP server not found"),
         Err(e) => return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    if transport_is_stdio(&record.transport) {
+        return err!(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "stdio transport is not allowed through the HTTP API by default"
+        );
+    }
     let config = match record_to_config(&record) {
         Ok(cfg) => cfg,
         Err(e) => return err!(StatusCode::UNPROCESSABLE_ENTITY, e),
@@ -302,6 +336,13 @@ pub async fn sync_enabled_mcp_servers(state: &AppState) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     for row in rows {
+        if transport_is_stdio(&row.transport) {
+            tracing::warn!(
+                server_id = %row.id,
+                "skipping stdio MCP server during startup sync because HTTP-managed stdio transport is disabled"
+            );
+            continue;
+        }
         let config = record_to_config(&row)?;
         state
             .mcp_manager
@@ -329,11 +370,11 @@ mod tests {
             Json(UpsertMcpServerRequest {
                 id: "srv-1".into(),
                 name: "files".into(),
-                transport: "stdio".into(),
-                command: Some("node".into()),
-                args_json: Some(r#"["server.js"]"#.into()),
+                transport: "http".into(),
+                command: None,
+                args_json: None,
                 env_json: None,
-                url: None,
+                url: Some("http://127.0.0.1:7777/mcp".into()),
                 headers_json: None,
                 enabled: true,
             }),
@@ -378,11 +419,11 @@ mod tests {
             Json(UpsertMcpServerRequest {
                 id: "srv-2".into(),
                 name: "filesystem".into(),
-                transport: "stdio".into(),
-                command: Some("node".into()),
-                args_json: Some(r#"["server.js"]"#.into()),
+                transport: "http".into(),
+                command: None,
+                args_json: None,
                 env_json: Some("{}".into()),
-                url: None,
+                url: Some("http://127.0.0.1:7777/mcp".into()),
                 headers_json: Some("{}".into()),
                 enabled: true,
             }),
@@ -449,5 +490,155 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("super-secret"));
+    }
+
+    #[tokio::test]
+    async fn http_mcp_routes_reject_stdio_transport_by_default() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool, std::env::temp_dir());
+
+        let create = create_mcp_server(
+            State(state),
+            Json(UpsertMcpServerRequest {
+                id: "srv-stdio-blocked".into(),
+                name: "files".into(),
+                transport: "stdio".into(),
+                command: Some("node".into()),
+                args_json: Some(r#"["server.js"]"#.into()),
+                env_json: None,
+                url: None,
+                headers_json: None,
+                enabled: true,
+            }),
+        )
+        .await;
+
+        assert_eq!(create.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn http_mcp_routes_reject_stdio_transport_updates_by_default() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool, std::env::temp_dir());
+
+        let _ = create_mcp_server(
+            State(state.clone()),
+            Json(UpsertMcpServerRequest {
+                id: "srv-update-target".into(),
+                name: "files".into(),
+                transport: "http".into(),
+                command: None,
+                args_json: None,
+                env_json: None,
+                url: Some("http://127.0.0.1:7777/mcp".into()),
+                headers_json: None,
+                enabled: true,
+            }),
+        )
+        .await;
+
+        let update = update_mcp_server(
+            State(state),
+            Path("srv-update-target".into()),
+            Json(UpsertMcpServerRequest {
+                id: "srv-update-target".into(),
+                name: "files".into(),
+                transport: "stdio".into(),
+                command: Some("node".into()),
+                args_json: Some(r#"["server.js"]"#.into()),
+                env_json: None,
+                url: None,
+                headers_json: None,
+                enabled: true,
+            }),
+        )
+        .await;
+
+        assert_eq!(update.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn http_mcp_routes_reject_stdio_transport_connect_and_test_by_default() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
+
+        McpServerRepo::insert(
+            &pool,
+            &McpServerRecord {
+                id: "srv-connect-target".into(),
+                name: "files".into(),
+                transport: "stdio".into(),
+                command: Some("node".into()),
+                args_json: r#"["server.js"]"#.into(),
+                env_json: "{}".into(),
+                url: None,
+                headers_json: "{}".into(),
+                enabled: true,
+                status: "unknown".into(),
+                last_error: None,
+                tools_json: "[]".into(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let connect =
+            connect_mcp_server(State(state.clone()), Path("srv-connect-target".into())).await;
+        assert_eq!(connect.0, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let test = test_mcp_server(
+            State(state),
+            Json(UpsertMcpServerRequest {
+                id: "srv-connect-target".into(),
+                name: "files".into(),
+                transport: "stdio".into(),
+                command: Some("node".into()),
+                args_json: Some(r#"["server.js"]"#.into()),
+                env_json: None,
+                url: None,
+                headers_json: None,
+                enabled: true,
+            }),
+        )
+        .await;
+        assert_eq!(test.0, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn http_mcp_routes_reject_stdio_transport_list_tools_by_default() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let state = AppState::new(pool.clone(), std::env::temp_dir());
+
+        McpServerRepo::insert(
+            &pool,
+            &McpServerRecord {
+                id: "srv-list-tools-target".into(),
+                name: "files".into(),
+                transport: "stdio".into(),
+                command: Some("node".into()),
+                args_json: r#"["server.js"]"#.into(),
+                env_json: "{}".into(),
+                url: None,
+                headers_json: "{}".into(),
+                enabled: true,
+                status: "unknown".into(),
+                last_error: None,
+                tools_json: "[]".into(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response =
+            list_mcp_server_tools(State(state), Path("srv-list-tools-target".into())).await;
+        assert_eq!(response.0, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

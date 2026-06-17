@@ -265,12 +265,44 @@ describe("WorkOrders", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
     await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-yellow"));
-    fireEvent.click(await screen.findByRole("button", { name: /Approval Required|需要审批/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /Approve|批准/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Approval Required/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Approve/i }));
 
     await waitFor(() =>
       expect(org.decideCompanyWorkOrderApproval).toHaveBeenCalledWith("opc-live", "wo-yellow", {
         approval_id: "approval-123",
+        decision: "approve",
+        comment: "",
+      }),
+    );
+  });
+
+  it("uses a top-level approval id from the refreshed timeline before deciding", async () => {
+    org.listCompanyWorkOrders.mockResolvedValue([
+      workOrder({ work_order_id: "wo-yellow", mission_intent: "Draft announcement", track: "yellow", status: "WaitingApproval" }),
+    ]);
+    org.getCompanyWorkOrderTimeline.mockResolvedValue([
+      {
+        type: "ApprovalRequired",
+        approval_id: "approval-456",
+        details: {
+          action_urn: "urn:coevo:work-order:wo-yellow:execute",
+          approval_mode: "NEGATIVE_CONSENT",
+        },
+      },
+    ]);
+    org.decideCompanyWorkOrderApproval.mockResolvedValue({ ok: true, approval_receipt: "approval-456" });
+
+    renderWorkOrders();
+
+    fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
+    await waitFor(() => expect(org.getCompanyWorkOrderTimeline).toHaveBeenCalledWith("opc-live", "wo-yellow"));
+    fireEvent.click(await screen.findByRole("button", { name: /Approval Required/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Approve/i }));
+
+    await waitFor(() =>
+      expect(org.decideCompanyWorkOrderApproval).toHaveBeenCalledWith("opc-live", "wo-yellow", {
+        approval_id: "approval-456",
         decision: "approve",
         comment: "",
       }),

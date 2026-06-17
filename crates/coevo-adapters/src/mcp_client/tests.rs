@@ -290,6 +290,21 @@ async fn manager_rejects_unknown_ids_and_lists_nothing() {
 }
 
 #[tokio::test]
+async fn shared_manager_reuses_process_registry() {
+    let shared = shared_mcp_client_manager();
+    shared.disconnect_all().await;
+
+    let (client, _) = start(FakeServerOptions::default());
+    shared.insert_client("shared", client).await;
+
+    let another = shared_mcp_client_manager();
+    assert_eq!(another.connected_ids().await, vec!["shared"]);
+
+    another.disconnect_all().await;
+    assert!(shared.connected_ids().await.is_empty());
+}
+
+#[tokio::test]
 async fn manager_rejects_empty_stdio_command() {
     let manager = McpClientManager::new();
     let err = manager

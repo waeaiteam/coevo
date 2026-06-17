@@ -74,7 +74,6 @@ export function headers(): Record<string, string> {
     "Content-Type": "application/json",
     "x-coevo-tenant-id": getTenantId(),
     "x-coevo-actor-role": "Admin",
-    "x-coevo-actor-id": identity.userId,
     "x-coevo-opc-id": opcId,
     "x-coevo-contract-hash": "0".repeat(64),
     "x-coevo-policy-version": "0".repeat(64),

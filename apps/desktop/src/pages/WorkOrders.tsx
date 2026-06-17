@@ -579,7 +579,13 @@ function findApprovalId(timeline: WorkOrderRecord[]): string {
   for (const item of timeline) {
     const details = (item.details || {}) as Record<string, unknown>;
     const payload = parseJson(details.payload_json) as Record<string, unknown>;
-    const approvalId = String(payload.approval_id || payload.approval_receipt || details.approval_id || "").trim();
+    const approvalId = String(
+      item.approval_id ||
+        payload.approval_id ||
+        payload.approval_receipt ||
+        details.approval_id ||
+        "",
+    ).trim();
     if (approvalId) return approvalId;
   }
   return "";

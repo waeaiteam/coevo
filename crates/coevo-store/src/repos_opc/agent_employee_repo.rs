@@ -8,8 +8,8 @@ use sqlx::{Row, SqlitePool};
 
 pub struct AgentEmployeeRepo;
 impl AgentEmployeeRepo {
-    fn prompt_storage_value(_system_prompt: &str) -> &'static str {
-        ""
+    fn prompt_storage_value(system_prompt: &str) -> &str {
+        system_prompt
     }
 
     pub async fn list(pool: &SqlitePool) -> Result<Vec<AgentEmployee>, sqlx::Error> {
@@ -292,5 +292,42 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
         let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
+    }
+
+    #[tokio::test]
+    async fn system_prompt_round_trips_through_upsert_and_update() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        AgentEmployeeRepo::seed(&pool).await.unwrap();
+
+        let mut employee = AgentEmployeeRepo::get(&pool, "agent-founder-01")
+            .await
+            .unwrap()
+            .unwrap();
+        employee.system_prompt = "You are a meticulous execution charter.".to_string();
+        AgentEmployeeRepo::upsert(&pool, &employee).await.unwrap();
+
+        let stored = AgentEmployeeRepo::get(&pool, "agent-founder-01")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.system_prompt,
+            "You are a meticulous execution charter."
+        );
+
+        AgentEmployeeRepo::update_system_prompt(
+            &pool,
+            "agent-founder-01",
+            "Updated charter for the employee",
+        )
+        .await
+        .unwrap();
+
+        let updated = AgentEmployeeRepo::get(&pool, "agent-founder-01")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.system_prompt, "Updated charter for the employee");
     }
 }

@@ -108,21 +108,22 @@ fn is_default_allowed_origin(origin: &str) -> bool {
     matches!(
         origin,
         "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
-    ) || origin.starts_with("http://localhost:")
-        || origin.starts_with("https://localhost:")
-        || origin.starts_with("http://127.0.0.1:")
-        || origin.starts_with("https://127.0.0.1:")
-        || origin.starts_with("http://[::1]:")
-        || origin.starts_with("https://[::1]:")
-        || matches!(
-            origin,
-            "http://localhost"
-                | "https://localhost"
-                | "http://127.0.0.1"
-                | "https://127.0.0.1"
-                | "http://[::1]"
-                | "https://[::1]"
-        )
+    ) || (cfg!(debug_assertions)
+        && matches!(origin, "http://localhost:5173" | "http://127.0.0.1:5173"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_default_allowed_origin;
+
+    #[test]
+    fn default_cors_allows_tauri_and_debug_dev_shell_origins() {
+        assert!(is_default_allowed_origin("tauri://localhost"));
+        assert!(is_default_allowed_origin("http://tauri.localhost"));
+        assert!(is_default_allowed_origin("http://127.0.0.1:5173"));
+        assert!(is_default_allowed_origin("http://localhost:5173"));
+        assert!(!is_default_allowed_origin("http://localhost:3000"));
+    }
 }
 
 fn coevo_recovery_backup_root() -> PathBuf {

@@ -9,6 +9,7 @@ use coevo_adapters::identity::MockIdentityProvider;
 use coevo_adapters::mcp::MockMcpAdapter;
 use coevo_adapters::mcp_client::{McpClientManager, RealMcpClient};
 use coevo_adapters::mcp_client::{McpServerConfig, McpServerRow};
+use coevo_adapters::shared_mcp_client_manager;
 use coevo_adapters::traits::{
     A2aMessage, A2aProvider, A2aResponse, AdapterError, IdentityClaims, IdentityProvider,
     McpProvider, McpToolCall, McpToolResult,
@@ -41,7 +42,7 @@ impl AppState {
                 std::env::var("COEVO_ENABLE_MOCK_ADAPTERS"),
                 Ok(value) if value == "1"
             );
-        let mcp_manager = Arc::new(McpClientManager::new());
+        let mcp_manager = Arc::new(shared_mcp_client_manager());
         let provider_pool = pool.clone();
         Self {
             pool,

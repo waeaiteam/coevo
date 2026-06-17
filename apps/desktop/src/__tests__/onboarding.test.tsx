@@ -31,6 +31,14 @@ describe("Desktop onboarding", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
+    vi.spyOn(companiesApi, "createCompany").mockResolvedValue({
+      opc_id: "opc-test-001",
+      name: "My OPC",
+      mission: "Start the company foundation",
+      employee_count: 0,
+      created_at_ms: 1,
+      dir: "~/.coevo/opc-test-001",
+    });
     api.createMemory.mockReset();
     api.updateCompanyProfile.mockReset();
     api.updateModelConfig.mockReset();

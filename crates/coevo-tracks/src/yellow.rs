@@ -15,6 +15,7 @@ use coevo_router::pcdt::PcdtRouter;
 use coevo_store::repos::approval_repo::ApprovalRepo;
 use coevo_store::repos::contract_repo::ContractRepo;
 use coevo_store::repos::plan_repo::PlanRepo;
+use coevo_store::repos::risk_repo::RiskRepo;
 use sqlx::SqlitePool;
 
 /// Yellow Track result.
@@ -31,6 +32,17 @@ pub struct YellowTrackResult {
 
 /// Yellow Track runner.
 pub struct YellowTrackRunner;
+
+fn canonical_gate_decision(decision: GateDecision) -> &'static str {
+    match decision {
+        GateDecision::Allow => "ALLOW",
+        GateDecision::Deny => "DENY",
+        GateDecision::RequireHumanApproval => "REQUIRE_HUMAN_APPROVAL",
+        GateDecision::DeferForMoreEvidence => "DEFER_FOR_MORE_EVIDENCE",
+        GateDecision::AllowWithLease => "ALLOW_WITH_LEASE",
+        GateDecision::EscalateToResolution => "ESCALATE_TO_RESOLUTION",
+    }
+}
 
 impl YellowTrackRunner {
     /// Run the Yellow Track end-to-end.
@@ -109,6 +121,26 @@ impl YellowTrackRunner {
             )
             .await;
 
+        let decided_by = agent_ids
+            .first()
+            .map(String::as_str)
+            .unwrap_or("YellowTrackRunner");
+        RiskRepo::insert(
+            pool,
+            &uuid::Uuid::new_v4().to_string(),
+            &contract_hash,
+            decided_by,
+            &action.action_urn,
+            canonical_gate_decision(gating.decision),
+            gating.required_confidence,
+            gating.available_confidence,
+            gating.action_risk,
+            gating.inaction_risk,
+            &gating.reason,
+        )
+        .await
+        .map_err(|e| YellowTrackError::StorageError(e.to_string()))?;
+
         let (approval_id, decision_str, _final_decision) = match gating.decision {
             GateDecision::Allow => (None, "ALLOW".to_string(), GateDecision::Allow),
             GateDecision::RequireHumanApproval => {
@@ -140,7 +172,11 @@ impl YellowTrackRunner {
                     gating.decision,
                 )
             }
-            _ => (None, format!("{:?}", gating.decision), gating.decision),
+            _ => (
+                None,
+                canonical_gate_decision(gating.decision).to_string(),
+                gating.decision,
+            ),
         };
 
         // Write Hypothesis to blackboard
@@ -216,4 +252,45 @@ pub enum YellowTrackError {
     StorageError(String),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::YellowTrackRunner;
+    use coevo_store::{
+        migrate::run_migrations, pool::create_test_pool, repos::risk_repo::RiskRepo,
+    };
+
+    async fn setup() -> sqlx::SqlitePool {
+        std::env::set_var("COEVO_ENABLE_MOCK_POLICY_ENGINE", "1");
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn run_persists_risk_decision_for_audit_replay() {
+        let pool = setup().await;
+
+        let result = YellowTrackRunner::run(
+            &pool,
+            "Send an internal release notification to staging responders.",
+            vec!["agent-yellow-1".to_string()],
+            "tenant-yellow",
+            "staging",
+        )
+        .await
+        .unwrap();
+
+        let rows = RiskRepo::find_by_contract(&pool, &result.contract_hash)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].action_urn,
+            "urn:coevo:action:write:internal-notification"
+        );
+        assert!(!rows[0].decision.trim().is_empty());
+        assert!(!rows[0].reason.trim().is_empty());
+    }
 }

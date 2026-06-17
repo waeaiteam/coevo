@@ -18,7 +18,7 @@ use coevo_mcl::compiler::MCLCompiler;
 use coevo_reputation::scoring::{ErrorSeverity, ReputationEngine};
 use coevo_resolution::engine::ResolutionEngine;
 use coevo_risk::lease::LeaseManager;
-use coevo_server::{router::build_router, state::AppState};
+use coevo_server::{router::build_router_with_sidecar_token, state::AppState};
 use coevo_store::pool::create_test_pool;
 use coevo_store::repos::*;
 use coevo_store::repos_opc::agent_employee_repo::AgentEmployeeRepo;
@@ -26,6 +26,8 @@ use coevo_tracks::green::GreenTrackRunner;
 use coevo_tracks::red::RedTrackRunner;
 use coevo_tracks::yellow::YellowTrackRunner;
 use tower::ServiceExt;
+
+const ACCEPTANCE_SIDECAR_TOKEN: &str = "acceptance-sidecar-token";
 
 async fn setup() -> sqlx::SqlitePool {
     // Track runners now fail closed by default (DenyAll policy engine). These
@@ -35,6 +37,17 @@ async fn setup() -> sqlx::SqlitePool {
     let pool = create_test_pool().await.unwrap();
     coevo_store::migrate::run_migrations(&pool).await.unwrap();
     pool
+}
+
+fn acceptance_router(pool: sqlx::SqlitePool, root: std::path::PathBuf) -> axum::Router {
+    build_router_with_sidecar_token(
+        AppState::new(pool, root),
+        Some(ACCEPTANCE_SIDECAR_TOKEN.to_string()),
+    )
+}
+
+fn sidecar_request(builder: axum::http::request::Builder) -> axum::http::request::Builder {
+    builder.header("x-coevo-token", ACCEPTANCE_SIDECAR_TOKEN)
 }
 
 /// Produce the real monitoring + diagnostic Ed25519 dual-sign signatures that
@@ -734,12 +747,12 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
         "coevo-acceptance-company-files-{}",
         uuid::Uuid::new_v4()
     ));
-    let app = build_router(AppState::new(pool, root.clone()));
+    let app = acceptance_router(pool, root.clone());
 
     let create_company = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri("/companies")
                 .header("content-type", "application/json")
@@ -767,7 +780,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let seed = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri(format!("/companies/{opc_id}/employees/seed"))
                 .body(Body::empty())
@@ -792,7 +805,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
         let response = app
             .clone()
             .oneshot(
-                Request::builder()
+                sidecar_request(Request::builder())
                     .method("PUT")
                     .uri(format!("/companies/{opc_id}/employees/{agent_id}/prompt"))
                     .header("content-type", "application/json")
@@ -813,7 +826,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let rollback = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri(format!(
                     "/companies/{opc_id}/employees/{agent_id}/prompt/rollback"
@@ -829,7 +842,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let detail = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .body(Body::empty())
@@ -861,7 +874,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let detail_after_divergence = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .body(Body::empty())
@@ -884,7 +897,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let prompt = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}/prompt"))
                 .body(Body::empty())
@@ -914,7 +927,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     let versions = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!(
                     "/companies/{opc_id}/employees/{agent_id}/prompt/versions"
@@ -970,7 +983,7 @@ async fn test_14_company_employee_file_backed_storage_and_prompt_index_alignment
     company_pool.close().await;
     assert_eq!(total_versions, 2);
     assert_eq!(published_version, 1);
-    assert!(db_prompt.trim().is_empty());
+    assert_eq!(db_prompt, v1);
     assert!(version_contents
         .iter()
         .all(|content| content.trim().is_empty()));
@@ -988,12 +1001,12 @@ async fn test_15_delete_company_employee_removes_employee_directory() {
         "coevo-acceptance-company-employee-delete-{}",
         uuid::Uuid::new_v4()
     ));
-    let app = build_router(AppState::new(pool, root.clone()));
+    let app = acceptance_router(pool, root.clone());
 
     let create_company = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri("/companies")
                 .header("content-type", "application/json")
@@ -1021,7 +1034,7 @@ async fn test_15_delete_company_employee_removes_employee_directory() {
     let seed = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri(format!("/companies/{opc_id}/employees/seed"))
                 .body(Body::empty())
@@ -1037,7 +1050,7 @@ async fn test_15_delete_company_employee_removes_employee_directory() {
     let delete = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("DELETE")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .body(Body::empty())
@@ -1051,7 +1064,7 @@ async fn test_15_delete_company_employee_removes_employee_directory() {
     let get_employee = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .body(Body::empty())
@@ -1074,12 +1087,12 @@ async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
         "coevo-acceptance-company-employee-summary-{}",
         uuid::Uuid::new_v4()
     ));
-    let app = build_router(AppState::new(pool, root.clone()));
+    let app = acceptance_router(pool, root.clone());
 
     let create_company = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri("/companies")
                 .header("content-type", "application/json")
@@ -1107,7 +1120,7 @@ async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
     let seed = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("POST")
                 .uri(format!("/companies/{opc_id}/employees/seed"))
                 .body(Body::empty())
@@ -1120,7 +1133,7 @@ async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
     let list = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees"))
                 .body(Body::empty())
@@ -1151,7 +1164,7 @@ async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
     let detail = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("GET")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .body(Body::empty())
@@ -1185,7 +1198,7 @@ async fn test_16_company_employee_summary_endpoints_match_contract_shape() {
     let update = app
         .clone()
         .oneshot(
-            Request::builder()
+            sidecar_request(Request::builder())
                 .method("PUT")
                 .uri(format!("/companies/{opc_id}/employees/{agent_id}"))
                 .header("content-type", "application/json")

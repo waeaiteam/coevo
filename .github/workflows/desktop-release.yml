@@ -22,6 +22,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -105,7 +108,7 @@ jobs:
             gh release create "$env:RELEASE_TAG" artifacts/* `
               --repo "${{ github.repository }}" `
               --title "coevo desktop $env:RELEASE_TAG" `
-              --notes "Windows desktop installer built from ${{ github.sha }}." `
+              --notes "Windows desktop installer built from $env:RELEASE_TAG (checked out at $(git rev-parse --short HEAD))." `
               --prerelease
           } else {
             gh release upload "$env:RELEASE_TAG" artifacts/* `
@@ -128,6 +131,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -209,7 +215,7 @@ jobs:
             gh release create "$env:RELEASE_TAG" `
               --repo "${{ github.repository }}" `
               --title "coevo desktop $env:RELEASE_TAG" `
-              --notes "Desktop release artifacts built from ${{ github.sha }}." `
+              --notes "Desktop release artifacts built from $env:RELEASE_TAG (checked out at $(git rev-parse --short HEAD))." `
               --prerelease 2>$null
           }
           gh release upload "$env:RELEASE_TAG" artifacts/* `

@@ -111,6 +111,12 @@ impl ToolHandler for WorkspaceWriteFileTool {
 
     async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value, WorkerError> {
         let (root, target) = resolve_target(&input)?;
+        if std::fs::symlink_metadata(&target)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(WorkerError::PathTraversalDenied);
+        }
         let content = input["content"].as_str().unwrap_or("");
         let parent = target.parent().ok_or(WorkerError::PathTraversalDenied)?;
         std::fs::create_dir_all(parent).map_err(|e| WorkerError::Internal(e.to_string()))?;
@@ -133,6 +139,7 @@ impl ToolHandler for WorkspaceWriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     fn setup_workspace() -> (PathBuf, PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("coevo-wsf-{}", uuid::Uuid::new_v4()));
@@ -143,8 +150,14 @@ mod tests {
         (base, trusted_root, malicious_root)
     }
 
+    fn workspace_test_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
     #[tokio::test]
     async fn execute_allows_absolute_path_within_trusted_root() {
+        let _guard = workspace_test_lock();
         let (base, trusted_root, malicious_root) = setup_workspace();
         let tool = WorkspaceWriteFileTool;
         let target = trusted_root.join("nested").join("ok.txt");
@@ -166,6 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_rejects_absolute_path_outside_trusted_root() {
+        let _guard = workspace_test_lock();
         let (base, trusted_root, malicious_root) = setup_workspace();
         let tool = WorkspaceWriteFileTool;
         let path = malicious_root.join("escape.txt");
@@ -180,6 +194,33 @@ mod tests {
             .expect_err("absolute path outside the trusted workspace must be denied");
 
         assert!(matches!(err, WorkerError::PathTraversalDenied));
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_rejects_existing_symlink_target() {
+        let _guard = workspace_test_lock();
+        let (base, trusted_root, malicious_root) = setup_workspace();
+        let tool = WorkspaceWriteFileTool;
+        let outside = malicious_root.join("outside.txt");
+        std::fs::write(&outside, "outside").unwrap();
+        let link = trusted_root.join("linked.txt");
+        use std::os::unix::fs::symlink;
+        symlink(&outside, &link).unwrap();
+
+        let err = tool
+            .execute(serde_json::json!({
+                "workspace_root": trusted_root,
+                "path": link,
+                "content": "hello"
+            }))
+            .await
+            .expect_err("existing symlink leaf must be denied");
+
+        assert!(matches!(err, WorkerError::PathTraversalDenied));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
         std::env::remove_var("COEVO_WORKSPACE_DIR");
         std::fs::remove_dir_all(base).ok();
     }
