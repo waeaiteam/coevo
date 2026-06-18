@@ -22,11 +22,32 @@ pub struct A2aResponse {
     pub success: bool,
 }
 
+/// One delivered message sitting in a recipient's inbox on the in-process bus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveredMessage {
+    pub delivery_id: String,
+    pub from_agent: String,
+    pub to_agent: String,
+    pub payload: serde_json::Value,
+    pub traceparent: String,
+    pub contract_hash: String,
+}
+
 #[async_trait]
 pub trait A2aProvider: Send + Sync {
     async fn send_message(&self, msg: A2aMessage) -> Result<A2aResponse, AdapterError>;
     async fn discover_agents(&self) -> Result<Vec<String>, AdapterError>;
     async fn health_check(&self) -> Result<bool, AdapterError>;
+
+    /// Register an agent so it can receive messages. Default no-op for transports
+    /// (e.g. the echo mock) that don't maintain inboxes.
+    fn register(&self, _agent_id: &str) {}
+
+    /// Drain (take and clear) the recipient's inbox. Default empty for transports
+    /// without inboxes; the in-process router returns real queued peer messages.
+    fn drain_inbox(&self, _agent_id: &str) -> Vec<DeliveredMessage> {
+        Vec::new()
+    }
 }
 
 // ---- MCP (Model Context Protocol) ----

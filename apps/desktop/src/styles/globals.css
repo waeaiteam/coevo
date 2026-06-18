@@ -47,6 +47,7 @@
   --red-dim: var(--cv-red-soft);
   --blue: var(--cv-blue);
   --blue-dim: var(--cv-blue-soft);
+  --surface-sunken: #efefef;
 }
 
 [data-theme="dark"] {
@@ -69,9 +70,10 @@
   --cv-yellow-soft: #2a2414;
   --cv-red: #ef4444;
   --cv-red-soft: #2a1414;
-  --cv-blue: #a3a3a3;
+  --cv-blue: #c0c0c0;
   --cv-blue-soft: #262626;
   --cv-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.2);
+  --surface-sunken: #161616;
 }
 
 * { box-sizing: border-box; }
@@ -656,5 +658,83 @@ textarea.input { resize: vertical; min-height: 60px; line-height: 1.5; }
     scroll-behavior: auto !important;
   }
   .streaming-cursor { animation: none !important; }
+}
+
+/* Slash command menu (popover above the mission composer) */
+.slash-command-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: var(--cv-shadow);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.slash-command-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.slash-command-item:hover,
+.slash-command-item.active {
+  background: var(--surface-raised);
+}
+.slash-command-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.slash-command-empty {
+  padding: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Mission composer context chips (attachments / project badges) */
+.context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.streaming-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+/* Home hero cards rendered as links */
+.mission-card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.mission-card-link:hover {
+  border-color: var(--border-accent);
+  background: var(--bg-card-hover);
 }
 

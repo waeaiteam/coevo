@@ -1561,9 +1561,65 @@ impl AgentSubHarness {
                             )
                             .await
                             .map_err(|e| WorkerError::Internal(e.to_string()))?;
-                            let next_observation = format!(
-                                "Spawned subagent {subagent_id} with skill '{skill_id}' for: {task}. The subagent operates under your authority and skill envelope; incorporate its focus into your next step."
-                            );
+                            // Actually run the bounded, governed sub-agent: a single-skill,
+                            // read-only reasoning helper that produces a real contribution.
+                            let skill_directive = skill_directives
+                                .iter()
+                                .find(|(sid, _, _)| sid == &skill_id)
+                                .map(|(_, _, directive)| directive.clone())
+                                .unwrap_or_default();
+                            let subagent_outcome = run_governed_subagent(
+                                gateway,
+                                provider_config,
+                                model_profiles,
+                                run_contract,
+                                authorization,
+                                &subagent_id,
+                                &skill_id,
+                                &skill_directive,
+                                &task,
+                            )
+                            .await;
+                            let next_observation = match subagent_outcome {
+                                Ok(contribution) => {
+                                    WorkerEventRepo::append(
+                                        pool,
+                                        &authorization.run_id,
+                                        "SubagentCompleted",
+                                        &serde_json::to_string(&serde_json::json!({
+                                            "round": round,
+                                            "subagent_id": subagent_id,
+                                            "skill_id": skill_id,
+                                            "contribution": contribution,
+                                        }))
+                                        .unwrap(),
+                                    )
+                                    .await
+                                    .map_err(|e| WorkerError::Internal(e.to_string()))?;
+                                    format!(
+                                        "Sub-agent {subagent_id} (skill '{skill_id}') completed the delegated task '{task}' and reports:\n{contribution}\nIncorporate this into your next step."
+                                    )
+                                }
+                                Err(err) => {
+                                    WorkerEventRepo::append(
+                                        pool,
+                                        &authorization.run_id,
+                                        "SubagentFailed",
+                                        &serde_json::to_string(&serde_json::json!({
+                                            "round": round,
+                                            "subagent_id": subagent_id,
+                                            "skill_id": skill_id,
+                                            "error": err.to_string(),
+                                        }))
+                                        .unwrap(),
+                                    )
+                                    .await
+                                    .map_err(|e| WorkerError::Internal(e.to_string()))?;
+                                    format!(
+                                        "Sub-agent {subagent_id} could not complete '{task}' ({err}). Proceed yourself or finish."
+                                    )
+                                }
+                            };
                             loop_history.push(observation_history_message(
                                 next_observation.clone(),
                                 streamed_tool_calls.first().and_then(|call| call.id.clone()),
@@ -2666,6 +2722,121 @@ async fn compact_history_with_model(
         provenance,
         dropped_message_count,
     }))
+}
+
+/// Run a bounded, governed sub-agent on behalf of a department head.
+///
+/// The sub-agent is an ephemeral, single-skill, read-only *reasoning* helper: it
+/// performs one focused model call using the delegated skill's directive and
+/// returns a concrete contribution that the head folds into its next step. It has
+/// no tool, executor, or spawn authority of its own (so there is no governance
+/// bypass and no recursion), and it inherits the head's model routing. Returns the
+/// sub-agent's contribution text, or an error the caller surfaces as an observation.
+#[allow(clippy::too_many_arguments)]
+async fn run_governed_subagent(
+    gateway: &dyn ModelGateway,
+    provider_config: &ModelProviderConfig,
+    model_profiles: &[ModelProfile],
+    run_contract: &AgentRunContract,
+    authorization: &RunAuthorization,
+    subagent_id: &str,
+    skill_id: &str,
+    skill_directive: &str,
+    task: &str,
+) -> Result<String, WorkerError> {
+    let mut caps = vec![ModelCapability::StructuredJSON, ModelCapability::DeepReasoning];
+    caps.sort_by_key(|capability| format!("{capability:?}"));
+    caps.dedup();
+    let routing = route_for_step(
+        run_contract,
+        authorization,
+        "SubagentReasoning",
+        caps,
+        model_profiles,
+        None,
+    );
+    if routing.selected_model_id == "unavailable" {
+        return Err(WorkerError::Internal(
+            "no model available for subagent".to_string(),
+        ));
+    }
+    let directive = if skill_directive.trim().is_empty() {
+        format!("Apply your '{skill_id}' skill.")
+    } else {
+        skill_directive.trim().to_string()
+    };
+    let system = format!(
+        "You are sub-agent {subagent_id}, an ephemeral single-skill helper created by a \
+         department head. Your only skill is '{skill_id}'. You reason and analyze only: you \
+         have NO authority to call tools, executors, or spawn further agents. Produce a \
+         focused, concrete contribution for the delegated task that the head can act on. \
+         Skill directive: {directive}"
+    );
+    let messages = vec![
+        ModelMessage {
+            role: "system".to_string(),
+            content: system,
+            ..Default::default()
+        },
+        ModelMessage {
+            role: "user".to_string(),
+            content: serde_json::json!({
+                "mission_intent": run_contract.mission_intent,
+                "delegated_task": task,
+                "skill_id": skill_id,
+            })
+            .to_string(),
+            ..Default::default()
+        },
+    ];
+    let request = ModelRequest {
+        config: provider_config.clone(),
+        role: coevo_models::types::ModelRole::StructuredOutput,
+        model: routing.selected_model_id.clone(),
+        messages,
+        temperature: 0.2,
+        max_tokens: provider_config.max_tokens.min(800),
+        response_format: ResponseFormat::Json,
+        stream: false,
+        tools: vec![],
+        tool_choice: None,
+    };
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "contribution": {"type": "string"},
+            "key_findings": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["contribution"],
+        "additionalProperties": true
+    });
+    let response = gateway
+        .structured(&request, &schema)
+        .await
+        .map_err(|e| WorkerError::Internal(format!("subagent model call failed: {e}")))?;
+    let contribution = response
+        .json
+        .as_ref()
+        .and_then(|value| value.get("contribution"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let extracted = extract_structured_json_text(&response.content).unwrap_or_default();
+            serde_json::from_str::<serde_json::Value>(&extracted)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("contribution")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.trim().to_string())
+                })
+        })
+        .filter(|value| !value.is_empty());
+    contribution.ok_or_else(|| {
+        WorkerError::Internal("subagent returned no usable contribution".to_string())
+    })
 }
 
 async fn persist_loop_cursor(
@@ -4564,6 +4735,77 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(file_tool_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_subagent_runs_governed_helper_and_records_completion() {
+        let pool = migrated_pool().await;
+        let work_order_id = "wo-spawn-subagent";
+        let run_id = "run-spawn-subagent";
+        // The subagent's structured() call pops this contribution from the outputs queue.
+        let gateway = ScriptedGateway::new(vec![serde_json::json!({
+            "contribution": "Drafted three candidate mission statements with rationale.",
+            "key_findings": ["clarity", "scope"]
+        })])
+        .with_stream_json(vec![
+            // Round 1: the head delegates to a single-skill sub-agent it holds.
+            Some(serde_json::json!({
+                "thought": "Delegate the focused drafting to a sub-agent.",
+                "proposal": {
+                    "kind": "spawn_subagent",
+                    "skill_id": "skill-mission-draft",
+                    "task": "Draft candidate mission statements.",
+                    "rationale": "Needs focused drafting help."
+                },
+                "confidence": 0.9
+            })),
+            // Round 2: the head finishes after folding in the sub-agent's contribution.
+            Some(serde_json::json!({
+                "thought": "The sub-agent's draft is enough to finish.",
+                "proposal": {
+                    "kind": "finish",
+                    "summary": "Mission drafted with sub-agent help.",
+                    "result": {"ok": true}
+                },
+                "confidence": 0.95
+            })),
+        ]);
+
+        let result = AgentSubHarness::execute(
+            &pool,
+            &test_contract(work_order_id, "Draft a mission statement."),
+            &test_auth(work_order_id, run_id, vec!["delete".to_string()]),
+            &default_model_profiles(),
+            None,
+            &gateway,
+            &ModelProviderConfig::mock(),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_status, "Completed");
+        // The sub-agent actually ran: a SubagentCompleted event carries its real contribution.
+        let completed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM worker_events WHERE run_id=? AND event_type='SubagentCompleted'",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(completed, 1, "subagent should run and record completion");
+        let payload: String = sqlx::query_scalar(
+            "SELECT payload_json FROM worker_events WHERE run_id=? AND event_type='SubagentCompleted' LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            payload.contains("candidate mission statements"),
+            "completion event must carry the sub-agent's real contribution, got: {payload}"
+        );
     }
 
     #[tokio::test]

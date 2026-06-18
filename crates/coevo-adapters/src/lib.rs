@@ -11,7 +11,8 @@ pub mod mcp;
 pub mod mcp_client;
 pub mod traits;
 
-pub use a2a_router::{DeliveredMessage, InProcessA2aRouter};
+pub use a2a_router::InProcessA2aRouter;
+pub use traits::DeliveredMessage;
 pub use identity_ed25519::{identity_challenge, Ed25519IdentityProvider};
 pub use mcp_client::{
     integrity_hash, make_tool_urn, parse_tool_urn, shared_mcp_client_manager, McpClient,

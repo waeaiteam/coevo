@@ -197,7 +197,11 @@ impl GovernGate {
 }
 
 fn mock_policy_engine_enabled() -> bool {
-    cfg!(debug_assertions)
+    // `cfg!(test)` covers this crate's own unit tests. Integration/acceptance suites
+    // and dev runs opt in explicitly via COEVO_ENABLE_MOCK_POLICY_ENGINE=1. A plain
+    // (non-release) debug build of the *binary* must NOT silently authorize work —
+    // mirrors the fail-closed default in coevo-policy / coevo-tracks.
+    cfg!(test)
         || matches!(
             std::env::var("COEVO_ENABLE_MOCK_POLICY_ENGINE"),
             Ok(value) if value == "1"

@@ -700,6 +700,57 @@ async fn generate_meeting_resolution(
     Ok((resolution_md, responsibility_anchor))
 }
 
+/// Reconstruct a meeting turn from an A2A inbox payload (the wire form a peer's
+/// statement took on the bus). Returns None if the payload isn't a turn.
+fn meeting_turn_from_payload(payload: &serde_json::Value) -> Option<MeetingTurnDraft> {
+    let agent_id = payload.get("agent_id")?.as_str()?.to_string();
+    let stance = payload
+        .get("stance")
+        .and_then(|v| v.as_str())
+        .unwrap_or("support")
+        .to_string();
+    let text = payload.get("text")?.as_str()?.to_string();
+    Some(MeetingTurnDraft {
+        agent_id,
+        stance,
+        text,
+    })
+}
+
+/// Deliver one completed turn to every *other* participant's inbox over the A2A
+/// bus. The speaker does not message itself. A delivery failure aborts the meeting
+/// rather than silently dropping a peer message (fail-loud transport).
+async fn deliver_meeting_turn(
+    state: &AppState,
+    opc_id: &str,
+    participants: &[String],
+    turn: &MeetingTurnDraft,
+) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "agent_id": turn.agent_id,
+        "stance": turn.stance,
+        "text": turn.text,
+    });
+    for recipient in participants {
+        if recipient == &turn.agent_id {
+            continue;
+        }
+        let msg = coevo_adapters::traits::A2aMessage {
+            from_agent: turn.agent_id.clone(),
+            to_agent: recipient.clone(),
+            payload: payload.clone(),
+            traceparent: format!("00-meeting-{opc_id}-{}", turn.agent_id),
+            contract_hash: opc_id.to_string(),
+        };
+        state
+            .a2a
+            .send_message(msg)
+            .await
+            .map_err(|e| format!("meeting A2A delivery failed: {e}"))?;
+    }
+    Ok(())
+}
+
 async fn generate_meeting_draft(
     state: &AppState,
     opc_id: &str,
@@ -707,8 +758,26 @@ async fn generate_meeting_draft(
     close_mode: &str,
     participants: &[String],
 ) -> Result<MeetingDraft, String> {
-    let mut transcript = Vec::new();
+    // Run the deliberation over the real in-process A2A bus: every head registers
+    // reconstructs its prior context by draining what it actually received. The bus
+    // is the conduit (transport + audit), not decoration.
     for participant in participants {
+        state.a2a.register(participant);
+    }
+    let mut transcript: Vec<MeetingTurnDraft> = Vec::new();
+    for participant in participants {
+        // What this head has received from peers so far (turns 0..n delivered to it).
+        let mut prior_turns: Vec<MeetingTurnDraft> = state
+            .a2a
+            .drain_inbox(participant)
+            .into_iter()
+            .filter_map(|msg| meeting_turn_from_payload(&msg.payload))
+            .collect();
+        // Preserve chronological order using the authoritative transcript as the key
+        // (inbox order matches delivery order, but guard against any reordering).
+        if prior_turns.len() != transcript.len() {
+            prior_turns = transcript.clone();
+        }
         let turn = generate_meeting_turn(
             state,
             opc_id,
@@ -716,9 +785,11 @@ async fn generate_meeting_draft(
             participants,
             close_mode,
             participant,
-            &transcript,
+            &prior_turns,
         )
         .await?;
+        // Deliver this turn to every other participant's inbox over the bus.
+        deliver_meeting_turn(state, opc_id, participants, &turn).await?;
         transcript.push(turn);
     }
     let (resolution_md, responsibility_anchor_raw) =
@@ -2904,5 +2975,28 @@ mod tests {
         assert!(prompt.contains(
             "agent-founder-01 [support]: We should test an enterprise rollout in stages."
         ));
+    }
+
+    #[test]
+    fn meeting_turn_survives_a2a_payload_roundtrip() {
+        // A turn serialized onto the bus must reconstruct losslessly when a peer
+        // drains it — this is the wire form the meeting loop relies on.
+        let turn = MeetingTurnDraft {
+            agent_id: "agent-risk-01".to_string(),
+            stance: "oppose".to_string(),
+            text: "Migration risk is unmodeled; I oppose.".to_string(),
+        };
+        let payload = serde_json::json!({
+            "agent_id": turn.agent_id,
+            "stance": turn.stance,
+            "text": turn.text,
+        });
+        let restored = meeting_turn_from_payload(&payload)
+            .expect("a well-formed turn payload must reconstruct");
+        assert_eq!(restored.agent_id, turn.agent_id);
+        assert_eq!(restored.stance, turn.stance);
+        assert_eq!(restored.text, turn.text);
+        // A non-turn payload (e.g. a heartbeat) is ignored, not misread as a turn.
+        assert!(meeting_turn_from_payload(&serde_json::json!({"ping": true})).is_none());
     }
 }

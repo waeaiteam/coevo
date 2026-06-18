@@ -17,17 +17,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// One delivered message sitting in a recipient's inbox.
-#[derive(Debug, Clone)]
-pub struct DeliveredMessage {
-    pub delivery_id: String,
-    pub from_agent: String,
-    pub to_agent: String,
-    pub payload: serde_json::Value,
-    pub traceparent: String,
-    pub contract_hash: String,
-}
-
 pub struct InProcessA2aRouter {
     /// agent_id -> ordered inbox of delivered messages.
     inboxes: Mutex<HashMap<String, Vec<DeliveredMessage>>>,
@@ -43,22 +32,6 @@ impl InProcessA2aRouter {
         Self {
             inboxes: Mutex::new(inboxes),
         }
-    }
-
-    /// Register an agent so it can receive messages.
-    pub fn register(&self, agent_id: impl Into<String>) {
-        let mut guard = self.inboxes.lock().unwrap();
-        guard.entry(agent_id.into()).or_default();
-    }
-
-    /// Drain (take and clear) the recipient's inbox. Used by the server layer to feed a
-    /// manager its pending peer messages before it reasons a reply.
-    pub fn drain_inbox(&self, agent_id: &str) -> Vec<DeliveredMessage> {
-        let mut guard = self.inboxes.lock().unwrap();
-        guard
-            .get_mut(agent_id)
-            .map(std::mem::take)
-            .unwrap_or_default()
     }
 
     /// Non-destructive peek at how many messages are waiting (diagnostics/tests).
@@ -125,6 +98,19 @@ impl A2aProvider for InProcessA2aRouter {
     async fn health_check(&self) -> Result<bool, AdapterError> {
         Ok(true)
     }
+
+    fn register(&self, agent_id: &str) {
+        let mut guard = self.inboxes.lock().unwrap();
+        guard.entry(agent_id.to_string()).or_default();
+    }
+
+    fn drain_inbox(&self, agent_id: &str) -> Vec<DeliveredMessage> {
+        let mut guard = self.inboxes.lock().unwrap();
+        guard
+            .get_mut(agent_id)
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +169,28 @@ mod tests {
     async fn discover_returns_sorted_registry() {
         let bus = InProcessA2aRouter::new(vec!["agent-b".into(), "agent-a".into()]);
         assert_eq!(bus.discover_agents().await.unwrap(), vec!["agent-a", "agent-b"]);
+    }
+
+    #[tokio::test]
+    async fn dyn_provider_register_send_and_drain_roundtrip() {
+        // Exercise the same trait-object surface the server's meeting loop uses:
+        // register through &dyn, deliver, then drain the recipient's real inbox.
+        let bus: std::sync::Arc<dyn A2aProvider> =
+            std::sync::Arc::new(InProcessA2aRouter::new(vec![]));
+        bus.register("agent-pm-01");
+        bus.register("agent-eng-01");
+        bus.send_message(msg(
+            "agent-pm-01",
+            "agent-eng-01",
+            serde_json::json!({"text": "is this feasible?"}),
+        ))
+        .await
+        .unwrap();
+        let drained = bus.drain_inbox("agent-eng-01");
+        assert_eq!(drained.len(), 1, "message must flow through the bus");
+        assert_eq!(drained[0].from_agent, "agent-pm-01");
+        assert_eq!(drained[0].payload["text"], "is this feasible?");
+        // Draining is destructive: a second drain is empty.
+        assert!(bus.drain_inbox("agent-eng-01").is_empty());
     }
 }

@@ -3,25 +3,26 @@
 use crate::traits::*;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use std::sync::Mutex;
 
 pub struct MockA2aAdapter {
-    registered_agents: Vec<String>,
+    registered_agents: Mutex<Vec<String>>,
 }
 
 impl MockA2aAdapter {
     pub fn new() -> Self {
         Self {
-            registered_agents: vec![
+            registered_agents: Mutex::new(vec![
                 "agent-synthesizer-01".to_string(),
                 "agent-critic-01".to_string(),
                 "agent-proposer-01".to_string(),
                 "agent-diagnostic-01".to_string(),
-            ],
+            ]),
         }
     }
 
-    pub fn with_agents(mut self, agents: Vec<String>) -> Self {
-        self.registered_agents = agents;
+    pub fn with_agents(self, agents: Vec<String>) -> Self {
+        *self.registered_agents.lock().unwrap() = agents;
         self
     }
 }
@@ -43,7 +44,7 @@ impl A2aProvider for MockA2aAdapter {
             contract_hash,
         } = msg;
 
-        if !self.registered_agents.contains(&to_agent) {
+        if !self.registered_agents.lock().unwrap().contains(&to_agent) {
             return Err(AdapterError::A2aError(format!(
                 "target agent '{}' not found",
                 to_agent
@@ -74,11 +75,18 @@ impl A2aProvider for MockA2aAdapter {
     }
 
     async fn discover_agents(&self) -> Result<Vec<String>, AdapterError> {
-        Ok(self.registered_agents.clone())
+        Ok(self.registered_agents.lock().unwrap().clone())
     }
 
     async fn health_check(&self) -> Result<bool, AdapterError> {
         Ok(true)
+    }
+
+    fn register(&self, agent_id: &str) {
+        let mut guard = self.registered_agents.lock().unwrap();
+        if !guard.iter().any(|a| a == agent_id) {
+            guard.push(agent_id.to_string());
+        }
     }
 }
 

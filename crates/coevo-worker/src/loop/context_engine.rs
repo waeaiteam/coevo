@@ -130,7 +130,7 @@ impl ContextEngine for MemoryBudgetContextEngine {
             "required_skills": ctx.run_contract.required_skills,
             "available_tools": tool_manifest,
             "memory_context": memory_summary,
-            "required_output": "Use native tool calls whenever a tool is needed. After observations, return JSON matching ReasoningOutput with exactly one proposal: call_tool, call_executor, ask_human, or finish. For file-readonly and workspace tools, stay inside sandbox_profile.workspace_root and permission_boundary.allowed_paths; do not invent paths outside that workspace.",
+            "required_output": "Use native tool calls whenever a tool is needed. After observations, return JSON matching ReasoningOutput with exactly one proposal: call_tool, call_executor, spawn_subagent, ask_human, or finish. Use spawn_subagent only to delegate a focused sub-task to a single-skill helper, and only with a skill_id you already hold (it runs a bounded read-only reasoning helper and hands its contribution back). For file-readonly and workspace tools, stay inside sandbox_profile.workspace_root and permission_boundary.allowed_paths; do not invent paths outside that workspace.",
         });
         if let Some(observation) = ctx.observation {
             user_payload["previous_observation"] = serde_json::json!(observation);

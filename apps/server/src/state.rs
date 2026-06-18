@@ -44,6 +44,15 @@ impl AppState {
                 std::env::var("COEVO_ENABLE_MOCK_ADAPTERS"),
                 Ok(value) if value == "1"
             );
+        // In server tests the worker crate is a dependency compiled WITHOUT its own
+        // `cfg!(test)`, so its GovernGate would otherwise fall back to the fail-closed
+        // DenyAllPolicyEngine and block work-order execution. Opt the worker into the
+        // keyword MockPolicyEngine here, the same way acceptance suites do. Never set
+        // in release/dev binaries — gated on the server crate's own test cfg.
+        #[cfg(test)]
+        if std::env::var("COEVO_ENABLE_MOCK_POLICY_ENGINE").is_err() {
+            std::env::set_var("COEVO_ENABLE_MOCK_POLICY_ENGINE", "1");
+        }
         let mcp_manager = Arc::new(shared_mcp_client_manager());
         let provider_pool = pool.clone();
         Self {
