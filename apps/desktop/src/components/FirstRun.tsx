@@ -34,8 +34,18 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
   const [foundationReady, setFoundationReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // When the company was created but a later foundation write failed, we keep the
+  // company id so a retry doesn't double-create. This drives the compensation hint.
+  const [partialCompanyId, setPartialCompanyId] = useState("");
+
+  const stepOrder: WizardStep[] = ["identity", "foundation", "handoff"];
+  const activeStepIndex = stepOrder.indexOf(step);
 
   async function continueToFoundation() {
+    if (!opcName.trim()) {
+      setError(t("first_run.err_name_required"));
+      return;
+    }
     const nextIdentity = createLocalOpc({ opcName, userName: ownerName, language });
     setLanguage(language);
     setIdentity(nextIdentity);
@@ -61,14 +71,22 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
     const domain = companyDomain.trim() || t("first_run.company_domain_default");
     setBusy(true);
     setError("");
+    // Track how far the multi-step foundation got so a partial failure can tell the
+    // user exactly what is and isn't saved, and a retry can skip the company create.
+    let companyCreated = Boolean(partialCompanyId);
     try {
-      const createdCompany = await createCompany({
-        name: current.opcName,
-        mission,
-      });
-      const canonicalOpcId = String(createdCompany?.opc_id || "").trim();
+      let canonicalOpcId = partialCompanyId;
       if (!canonicalOpcId) {
-        throw new Error("Company creation did not return an opc_id.");
+        const createdCompany = await createCompany({
+          name: current.opcName,
+          mission,
+        });
+        canonicalOpcId = String(createdCompany?.opc_id || "").trim();
+        if (!canonicalOpcId) {
+          throw new Error(t("first_run.err_no_opc_id"));
+        }
+        companyCreated = true;
+        setPartialCompanyId(canonicalOpcId);
       }
       setActiveOpcId(canonicalOpcId);
       await updateUserProfile({
@@ -138,8 +156,12 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
         linked_adr_id: null,
       });
       setStep("handoff");
+      setPartialCompanyId("");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      const detail = e instanceof Error ? e.message : String(e);
+      // If the company exists but a later write failed, tell the user precisely what
+      // is saved and that pressing the button again will resume (not re-create).
+      setError(companyCreated ? `${t("first_run.err_partial")} ${detail}` : detail);
     } finally {
       setBusy(false);
     }
@@ -163,12 +185,26 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
             {t("first_run.subtitle")}
           </p>
           <div className="mt-8 grid max-w-2xl gap-3 sm:grid-cols-3">
-            {[t("first_run.step_identity"), t("first_run.step_foundation"), t("first_run.step_provider")].map((label, i) => (
-              <div key={label} className="rounded-lg border p-3 text-xs" style={{ background: "var(--bg-card)", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
-                <div className="mb-1 font-mono" style={{ color: "var(--text-muted)" }}>0{i + 1}</div>
-                {label}
-              </div>
-            ))}
+            {[t("first_run.step_identity"), t("first_run.step_foundation"), t("first_run.step_provider")].map((label, i) => {
+              const isActive = i === activeStepIndex;
+              const isDone = i < activeStepIndex;
+              return (
+                <div
+                  key={label}
+                  aria-current={isActive ? "step" : undefined}
+                  className="rounded-lg border p-3 text-xs transition-colors"
+                  style={{
+                    background: isActive ? "var(--cv-surface-raised)" : "var(--bg-card)",
+                    borderColor: isActive ? "var(--border-accent)" : "var(--border-subtle)",
+                    color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                    opacity: isDone ? 0.65 : 1,
+                  }}
+                >
+                  <div className="mb-1 font-mono" style={{ color: isActive ? "var(--accent)" : "var(--text-muted)" }}>0{i + 1}</div>
+                  {label}
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -199,6 +235,7 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
                   <option value="zh">中文</option>
                 </select>
               </div>
+              {error && <div className="text-xs" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <button onClick={continueToFoundation} className="w-full rounded-md py-3 text-sm font-semibold" style={{ background: "var(--cv-text)", color: "var(--cv-bg)" }}>
                 {t("first_run.continue_foundation")}
               </button>
@@ -251,9 +288,9 @@ export default function FirstRun({ onDone }: { onDone: () => void }) {
               <div className="rounded-md border p-3 text-xs leading-5" style={{ borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
                 {t("first_run.rules_context_note")}
               </div>
-              {error && <div className="text-xs" style={{ color: "var(--red)" }}>{error}</div>}
+              {error && <div className="text-xs" role="alert" style={{ color: "var(--red)" }}>{error}</div>}
               <button disabled={busy || !foundationReady} onClick={createFoundation} className="w-full rounded-md py-3 text-sm font-semibold disabled:opacity-50" style={{ background: "var(--cv-text)", color: "var(--cv-bg)" }}>
-                {busy ? t("mission.creating") : t("first_run.create_and_continue")}
+                {busy ? t("mission.creating") : partialCompanyId ? t("first_run.retry_foundation") : t("first_run.create_and_continue")}
               </button>
             </div>
           )}

@@ -31,6 +31,7 @@ const org = vi.hoisted(() => ({
   createCompanyConversation: vi.fn(),
   appendCompanyConversationMessage: vi.fn(),
   createCompanyWorkOrder: vi.fn(),
+  dispatchPlan: vi.fn(),
   executeCompanyWorkOrder: vi.fn(),
   getCompanyProfileById: vi.fn(),
   listCompanyConversationMessages: vi.fn(),
@@ -64,6 +65,7 @@ vi.mock("../api/org", () => ({
   createCompanyConversation: org.createCompanyConversation,
   appendCompanyConversationMessage: org.appendCompanyConversationMessage,
   createCompanyWorkOrder: org.createCompanyWorkOrder,
+  dispatchPlan: org.dispatchPlan,
   executeCompanyWorkOrder: org.executeCompanyWorkOrder,
   getCompanyProfileById: org.getCompanyProfileById,
   listCompanyConversationMessages: org.listCompanyConversationMessages,
@@ -145,6 +147,7 @@ describe("customer-facing desktop workbench", () => {
     org.listCompanyConversations.mockResolvedValue([]);
     org.listCompanyEmployees.mockResolvedValue([{ agent_id: "agent-founder-01", lifecycle_status: "Active", risk_ceiling: 0.3 }]);
     org.listCompanyWorkOrders.mockResolvedValue([]);
+    org.dispatchPlan.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -158,13 +161,13 @@ describe("customer-facing desktop workbench", () => {
     expect(screen.getByRole("heading", { name: "今天让 AI 员工帮你做什么？" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("例如：整理本周客户线索，并生成跟进清单")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument();
-    expect(screen.getByLabelText("自主度")).toBeInTheDocument();
-    expect(screen.getByLabelText("指派员工")).toBeInTheDocument();
-    expect(screen.getByLabelText("模型")).toBeInTheDocument();
+    // Default (non-advanced) mode keeps technical controls (autonomy/model/assign)
+    // hidden — they live behind Advanced mode now.
+    expect(screen.queryByLabelText("自主度")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("模型")).not.toBeInTheDocument();
     expect(screen.getByText("今日进展")).toBeInTheDocument();
     expect(screen.getByText("我的公司")).toBeInTheDocument();
     expect(screen.getByText("项目")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("agent-founder-01")).toBeInTheDocument());
     expect(document.body.textContent).not.toMatch(INTERNAL_TERMS);
   });
 
@@ -188,9 +191,9 @@ describe("customer-facing desktop workbench", () => {
       expect(screen.getByText("任务已创建，正在准备给你确认的执行方案。")).toBeInTheDocument(),
     );
     expect(screen.getByText(/我会先整理客户线索/)).toBeInTheDocument();
-    expect(screen.getByText("安全状态")).toBeInTheDocument();
-    expect(screen.getByText("打开任务")).toBeInTheDocument();
-    expect(screen.getByText("执行时间线")).toBeInTheDocument();
+    // The governance verdict chip and span timeline are advanced-only; the default
+    // surface stays calm and jargon-free.
+    expect(screen.queryByText("安全状态")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(INTERNAL_TERMS);
   });
 
@@ -204,10 +207,9 @@ describe("customer-facing desktop workbench", () => {
     );
 
     expect(screen.getByRole("link", { name: "新对话" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "我的公司" })).toHaveAttribute("href", "/company");
+    expect(screen.getByRole("link", { name: "我的团队" })).toHaveAttribute("href", "/team");
     expect(screen.getByRole("link", { name: "项目" })).toHaveAttribute("href", "/projects");
-    expect(screen.getByRole("link", { name: "任务" })).toHaveAttribute("href", "/work-orders");
-    expect(screen.getByRole("link", { name: "时间线" })).toHaveAttribute("href", "/timeline");
+    expect(screen.getByRole("link", { name: "今天的事" })).toHaveAttribute("href", "/tasks");
     expect(screen.getByRole("link", { name: "设置" })).toHaveAttribute("href", "/settings/general");
     await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
   });

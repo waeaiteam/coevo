@@ -11,6 +11,7 @@ import {
   createCompanyConversation,
   createCompanyWorkOrder,
   cancelCompanyWorkOrder,
+  dispatchPlan,
   executeCompanyWorkOrder,
   getCompanyProfileById,
   listCompanyConversationMessages,
@@ -18,13 +19,16 @@ import {
   listCompanyEmployees,
   listCompanyWorkOrders,
 } from "../api/org";
-import { getActiveOpcId } from "../api/companies";
+import { getActiveOpcId, listCompanies, setActiveOpcId, type Company } from "../api/companies";
 import { getTauriInvoke } from "../api/tauri";
 import Icon from "../components/Icon";
+import { ApprovalCard, type ApprovalCardState } from "../components/ApprovalCard";
+import { SimpleMarkdown } from "../components/SimpleMarkdown";
 import SlashCommandMenu from "../components/SlashCommandMenu";
 import GovernanceTimeline, { type TimelineSpan } from "../components/GovernanceTimeline";
 import { WorkerStreamView } from "../components/WorkerStreamView";
 import { useGovernance } from "../hooks/useGovernance";
+import { useAdvancedMode } from "../hooks/useAdvancedMode";
 import { getLocalIdentity } from "../settings/identity";
 import { t, useLanguage } from "../settings/i18n";
 import { listField } from "../utils/productSurface";
@@ -64,6 +68,17 @@ type GovernanceVerdict = {
 
 const autonomyOptions: AutonomyCeiling[] = ["read_only", "workspace_write", "full_access"];
 const modelOptions: ModelPreference[] = ["fast", "standard", "reasoning"];
+const AUTONOMY_STORAGE_KEY = "coevo-mission-autonomy";
+
+function readStoredAutonomy(): AutonomyCeiling {
+  try {
+    const stored = localStorage.getItem(AUTONOMY_STORAGE_KEY);
+    if (stored === "read_only" || stored === "workspace_write" || stored === "full_access") return stored;
+  } catch {
+    // Fall back to the safe default.
+  }
+  return "read_only";
+}
 
 function publicText(text: string) {
   return text
@@ -261,11 +276,15 @@ function buildLocalSpans(verdict: GovernanceVerdict | undefined, cognitionText: 
 
 export default function MissionChat() {
   const language = useLanguage();
+  const advancedMode = useAdvancedMode();
   const navigate = useNavigate();
   const params = useParams();
   const routeConversationId = params.conversationId ? decodeURIComponent(params.conversationId) : "";
   const identity = useMemo(() => getLocalIdentity(), []);
-  const activeOpcId = useMemo(() => getActiveOpcId(), []);
+  // The active company is reactive: switching it from the header/composer reloads the
+  // conversation, employees, and projects for that company.
+  const [activeOpcId, setActiveOpcIdState] = useState(() => getActiveOpcId());
+  const [companies, setCompanies] = useState<Company[]>([]);
   const stateKey = useMemo(() => missionStateKey(activeOpcId, identity.userId), [activeOpcId, identity.userId]);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -274,7 +293,7 @@ export default function MissionChat() {
   const [activeRunId, setActiveRunId] = useState("");
   const [conversationId, setConversationId] = useState("");
   const [lastApprovalId, setLastApprovalId] = useState("");
-  const [autonomy, setAutonomy] = useState<AutonomyCeiling>("read_only");
+  const [autonomy, setAutonomy] = useState<AutonomyCeiling>(() => readStoredAutonomy());
   const [modelPreference, setModelPreference] = useState<ModelPreference>("standard");
   const [assignedAgentId, setAssignedAgentId] = useState("auto");
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
@@ -287,14 +306,63 @@ export default function MissionChat() {
   const [lastWorkOrderStatus, setLastWorkOrderStatus] = useState("");
   const [slashDismissedQuery, setSlashDismissedQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
+  // Inline approval state for the in-thread confirmation card (Yellow/Red without
+  // full-access). Keeps the founder in the conversation instead of bouncing to the
+  // task center.
+  const [approvalState, setApprovalState] = useState<ApprovalCardState | null>(null);
   const { set: setGovernance } = useGovernance();
 
   const preview = useMemo(() => inferTrackFromIntent(input), [input]);
   const employeeGroups = useMemo(() => groupEmployees(employees), [employees]);
   const hasTask = Boolean(lastWorkOrderId || messages.length > 0);
+  const activeCompanyName = useMemo(
+    () => companies.find((c) => c.opc_id === activeOpcId)?.name || identity.opcName,
+    [companies, activeOpcId, identity.opcName],
+  );
+  const resolvedAgentName = useMemo(() => {
+    const id = lastVerdict?.resolved_agent_id;
+    if (!id) return t("mission.default_employee");
+    const match = employees.find((e) => String(e.agent_id || "") === id);
+    return match ? employeeName(match) : t("mission.default_employee");
+  }, [lastVerdict, employees]);
   const slashMenuInput = input.trimStart();
   const slashMenuOpen = isSlashCommandInput(input) && slashMenuInput !== slashDismissedQuery;
   const slashCommands = useMemo(() => getSlashCommandMatches(input), [input]);
+
+  // Persist the founder's autonomy choice so "full access" sticks across sessions and
+  // they are not re-prompted to pick it every time.
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTONOMY_STORAGE_KEY, autonomy);
+    } catch {
+      // Non-persistent is fine.
+    }
+  }, [autonomy]);
+
+  // Load the company list once so the selector has names to show.
+  useEffect(() => {
+    let alive = true;
+    listCompanies()
+      .then((rows) => {
+        if (alive) setCompanies(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (alive) setCompanies([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  function switchCompany(opcId: string) {
+    if (!opcId || opcId === activeOpcId) return;
+    setActiveOpcId(opcId);
+    setActiveOpcIdState(opcId);
+    // Switching company means a different workspace — clear the in-memory thread so we
+    // don't show one company's conversation under another.
+    resetMissionView();
+    setApprovalState(null);
+  }
 
   useEffect(() => {
     setSlashIndex(0);
@@ -349,12 +417,14 @@ export default function MissionChat() {
         last_work_order_id?: string;
         conversation_id?: string;
         last_approval_id?: string;
+        project_name?: string;
       };
       const restoredMessages = Array.isArray(parsed.messages) ? parsed.messages.filter((m) => typeof m?.text === "string") : [];
       if (restoredMessages.length > 0) setMessages(restoredMessages);
       if (typeof parsed.last_work_order_id === "string") setLastWorkOrderId(parsed.last_work_order_id);
       if (typeof parsed.conversation_id === "string") setConversationId(parsed.conversation_id);
       if (typeof parsed.last_approval_id === "string") setLastApprovalId(parsed.last_approval_id);
+      if (typeof parsed.project_name === "string") setProjectName(parsed.project_name);
     } catch {
       // Ignore local snapshot parse failures.
     }
@@ -377,11 +447,12 @@ export default function MissionChat() {
         last_work_order_id: lastWorkOrderId,
         conversation_id: conversationId,
         last_approval_id: lastApprovalId,
+        project_name: projectName,
       }));
     } catch {
       // Ignore local persistence failures.
     }
-  }, [stateKey, messages, lastWorkOrderId, conversationId, lastApprovalId]);
+  }, [stateKey, messages, lastWorkOrderId, conversationId, lastApprovalId, projectName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -444,11 +515,89 @@ export default function MissionChat() {
     setLastApprovalId("");
     setLastVerdict(undefined);
     setTimelineSpans([]);
+    setApprovalState(null);
   }
 
   function startFreshConversation() {
     clearMissionSession(activeOpcId, identity.userId);
     resetMissionView();
+  }
+
+  // Execute a created work order inline. With full access this also auto-confirms any
+  // approval the server raises (any track). For lower autonomy, callers use
+  // requestApprovalInline() instead so the founder confirms in the thread.
+  async function executeInline(workOrderId: string, convId: string) {
+    const execResult = (await executeCompanyWorkOrder(activeOpcId, workOrderId, {})) as Record<string, unknown>;
+    const status = String(execResult.status || "").trim();
+    const approvalId = String(execResult.approval_id || execResult.approval_receipt || "").trim();
+    if (approvalId) setLastApprovalId(approvalId);
+    if (status === "WaitingApproval" && approvalId) {
+      // Server wants a confirmation; under full access we auto-approve right away.
+      return resolveApproval(workOrderId, convId, approvalId, "approve", "");
+    }
+    const runId = extractExecuteRunId(execResult);
+    if (runId) setActiveRunId(runId);
+    if (status) setLastWorkOrderStatus(status);
+    return { runId, status };
+  }
+
+  // Kick off execution just far enough to obtain the server's approval receipt, then
+  // stop and surface the inline ApprovalCard. The founder approves/rejects in-thread.
+  async function requestApprovalInline(workOrderId: string) {
+    try {
+      const execResult = (await executeCompanyWorkOrder(activeOpcId, workOrderId, {})) as Record<string, unknown>;
+      const status = String(execResult.status || "").trim();
+      const approvalId = String(execResult.approval_id || execResult.approval_receipt || "").trim();
+      if (approvalId) setLastApprovalId(approvalId);
+      if (status) setLastWorkOrderStatus(status);
+      if (status === "WaitingApproval" && approvalId) {
+        setApprovalState("pending");
+      } else {
+        // Server resolved it without a confirmation step (e.g. resumed directly).
+        const runId = extractExecuteRunId(execResult);
+        if (runId) setActiveRunId(runId);
+        setApprovalState(null);
+      }
+    } catch {
+      // Could not reach the approval step — fall back to the task-page CTA.
+      setApprovalState(null);
+    }
+  }
+
+  async function resolveApproval(
+    workOrderId: string,
+    convId: string,
+    approvalId: string,
+    decision: "approve" | "reject",
+    comment: string,
+  ) {
+    setApprovalState("deciding");
+    try {
+      const result = await decideAndResume(activeOpcId, workOrderId, { approvalId, decision, comment });
+      if (decision === "reject") {
+        setApprovalState("rejected");
+        setLastWorkOrderStatus("Cancelled");
+        const text = t("approval.rejected_thread");
+        appendSystemMessage(text);
+        if (convId) {
+          await appendCompanyConversationMessage(activeOpcId, convId, { role: "assistant", content: text }).catch(() => undefined);
+        }
+        return { runId: "", status: "Cancelled" };
+      }
+      setApprovalState("approved");
+      if (result.runId) setActiveRunId(result.runId);
+      setLastWorkOrderStatus(result.status || "Running");
+      const text = t("approval.running");
+      appendSystemMessage(text);
+      if (convId) {
+        await appendCompanyConversationMessage(activeOpcId, convId, { role: "assistant", content: text }).catch(() => undefined);
+      }
+      return { runId: result.runId, status: result.status };
+    } catch (e: unknown) {
+      setApprovalState("pending");
+      appendSystemMessage(`${t("approval.resume_failed")} ${publicText(e instanceof Error ? e.message : String(e))}`);
+      return { runId: "", status: "" };
+    }
   }
 
   function appendSystemMessage(text: string) {
@@ -623,6 +772,7 @@ export default function MissionChat() {
     setLastVerdict(undefined);
     setLastWorkOrderStatus("");
     setTimelineSpans([]);
+    setApprovalState(null);
     setMessages((prev) => [...prev, { role: "user", text }, { role: "system", text: t("mission.compiling") }]);
 
     let activeConversationId = conversationId;
@@ -639,6 +789,25 @@ export default function MissionChat() {
       setMessages((prev) => [...prev, { role: "system", text: t("mission.progress_route") }]);
       const routed = await routePlan(contract, selectedAgentIds, contractHash) as { plan_hash?: string };
       const planHash = String(routed.plan_hash || "");
+
+      // Secretary (intelligent dispatcher): understand the intent and propose which
+      // department head(s) should handle it. Best-effort — null when the endpoint or
+      // model is unavailable, in which case we just skip the dispatch summary.
+      const plan = await dispatchPlan(activeOpcId, taskIntent);
+      if (plan && plan.understanding) {
+        const deptList = plan.subtasks
+          .map((s) => `- ${departmentLabel(s.department)}: ${s.goal}`)
+          .join("\n");
+        const secretaryMsg = deptList
+          ? `${t("mission.secretary_understanding")}${publicText(plan.understanding)}\n\n${t("mission.secretary_dispatch")}\n${deptList}`
+          : `${t("mission.secretary_understanding")}${publicText(plan.understanding)}`;
+        setMessages((prev) => [...prev, { role: "system", text: secretaryMsg }]);
+        await appendCompanyConversationMessage(activeOpcId, activeConversationId, {
+          role: "assistant",
+          content: secretaryMsg,
+        }).catch(() => undefined);
+      }
+
       let cognitionError = "";
       setMessages((prev) => [...prev, { role: "system", text: t("mission.progress_model") }]);
       const cognition = await modelChat({
@@ -718,16 +887,38 @@ export default function MissionChat() {
       setAttachments([]);
       setProjectFolder("");
 
-      // Auto-execute green-track tasks and wire streaming
-      if (verdict && !verdict.blocked && verdict.effective_track === "green" && workOrderId) {
-        try {
-          const execResult = await executeCompanyWorkOrder(activeOpcId, workOrderId, {}) as Record<string, unknown>;
-          const runId = extractExecuteRunId(execResult);
-          const executeStatus = String(execResult.status || "").trim();
-          if (runId) setActiveRunId(runId);
-          if (executeStatus) setLastWorkOrderStatus(executeStatus);
-        } catch {
-          // Execution may not be ready — user can still trigger from the task page
+      // Decide how the task proceeds, keeping the founder in the conversation:
+      //  - blocked/red verdict: never auto-run; the founder must explicitly confirm.
+      //  - green track: always auto-execute (low-risk read/analyze).
+      //  - full access: the founder pre-authorized everything, so auto-execute and
+      //    auto-confirm any approval the server raises (any track).
+      //  - otherwise (yellow/red without full access): show an inline ApprovalCard.
+      const fullAccess = autonomy === "full_access";
+      if (workOrderId && verdict) {
+        if (verdict.blocked) {
+          // Hard-blocked by the server: it cannot run even under full access. Leave the
+          // TaskNextStep "paused by safety rules" card to explain and offer a rewrite.
+          setApprovalState(null);
+        } else if (verdict.effective_track === "green") {
+          try {
+            await executeInline(workOrderId, activeConversationId);
+          } catch {
+            // Execution may not be ready — the founder can still trigger it from the task page.
+          }
+        } else if (fullAccess) {
+          // "Never ask" — run and auto-approve inline, transparently noted in the thread.
+          const note = t("mission.auto_ran_full_access");
+          appendSystemMessage(note);
+          await appendCompanyConversationMessage(activeOpcId, activeConversationId, { role: "assistant", content: note }).catch(() => undefined);
+          try {
+            await executeInline(workOrderId, activeConversationId);
+          } catch {
+            // Leave the task ready; the founder can retry from the task page.
+          }
+        } else {
+          // Needs a human confirmation: fetch the approval receipt and show the inline
+          // ApprovalCard right here in the chat (no jump to the task center).
+          await requestApprovalInline(workOrderId);
         }
       }
     } catch (e: unknown) {
@@ -749,21 +940,51 @@ export default function MissionChat() {
 
   return (
     <div className="mission-page">
-      <div className={`mission-stage ${hasTask ? "has-task" : ""}`}>
+      <div className={`mission-stage ${hasTask && advancedMode ? "has-task" : ""}`}>
         <section className="mission-left">
           <div className="mission-thread">
             {messages.length === 0 ? (
               <div className="mission-hero">
+                {companies.length > 1 && (
+                  <div className="mission-hero-company">
+                    <span className="mission-hero-company-label">{t("mission.company_label")}</span>
+                    <select
+                      className="select-control"
+                      aria-label={t("mission.company_label")}
+                      value={activeOpcId}
+                      onChange={(event) => switchCompany(event.target.value)}
+                    >
+                      {companies.map((company) => (
+                        <option key={company.opc_id} value={company.opc_id}>{company.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <h1 className="mission-title">{t("mission.hero_title")}</h1>
                 <p className="mission-subtitle">
                   {t("mission.hero_desc")}
                 </p>
+                <div className="mission-examples">
+                  <div className="mission-examples-label">{t("mission.examples_label")}</div>
+                  <div className="mission-examples-row">
+                    {[t("mission.example_task_1"), t("mission.example_task_2"), t("mission.example_task_3")].map((example) => (
+                      <button
+                        key={example}
+                        type="button"
+                        className="mission-example-chip"
+                        onClick={() => setInput(example)}
+                      >
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="mission-cards">
-                  <Link to="/work-orders" className="mission-card mission-card-link">
+                  <Link to="/tasks" className="mission-card mission-card-link">
                     <div className="mission-card-title">{t("mission.card_progress_title")}</div>
                     <div className="mission-card-text">{t("mission.card_progress_desc")}</div>
                   </Link>
-                  <Link to="/company" className="mission-card mission-card-link">
+                  <Link to="/team" className="mission-card mission-card-link">
                     <div className="mission-card-title">{t("mission.card_company_title")}</div>
                     <div className="mission-card-text">{t("mission.card_company_desc")}</div>
                   </Link>
@@ -775,7 +996,21 @@ export default function MissionChat() {
               </div>
             ) : (
               <>
-                {lastVerdict && (
+                {(companies.length > 1 || projectName) && (
+                  <div className="mission-scope-badge">
+                    <span className="mission-scope-item">
+                      <Icon name="building" />
+                      {activeCompanyName}
+                    </span>
+                    {projectName && (
+                      <span className="mission-scope-item">
+                        <Icon name="folder" />
+                        {projectName}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {advancedMode && lastVerdict && (
                   <div className="mb-4">
                     <span className={`verdict-chip ${lastVerdict.blocked ? "blocked" : ""}`}>
                       <strong>{t("mission.verdict")}</strong>
@@ -788,16 +1023,27 @@ export default function MissionChat() {
                   <div key={`${message.role}-${index}`} className={`message-row ${message.role}`}>
                     <div className={`chat-msg ${message.role}`}>
                       <div className="message-author">{message.role === "user" ? t("mission.user") : t("mission.system")}</div>
-                      <div>{message.text}</div>
+                      {message.role === "system"
+                        ? <SimpleMarkdown content={message.text} />
+                        : <div>{message.text}</div>}
                     </div>
                   </div>
                 ))}
+                {approvalState && approvalState !== "approved" && lastWorkOrderId && lastApprovalId && (
+                  <ApprovalCard
+                    track={(lastVerdict?.effective_track as "green" | "yellow" | "red") || "yellow"}
+                    riskSummary={t("approval.summary_with_employee").replace("{employee}", resolvedAgentName)}
+                    state={approvalState}
+                    onApprove={(comment) => void resolveApproval(lastWorkOrderId, conversationId, lastApprovalId, "approve", comment)}
+                    onReject={(comment) => void resolveApproval(lastWorkOrderId, conversationId, lastApprovalId, "reject", comment)}
+                  />
+                )}
                 {activeRunId && (
                   <div className="mission-stream-section">
                     <WorkerStreamView runId={activeRunId} />
                   </div>
                 )}
-                {!creating && lastWorkOrderId && (
+                {!creating && lastWorkOrderId && !approvalState && (
                   <TaskNextStep workOrderId={lastWorkOrderId} verdict={lastVerdict} status={lastWorkOrderStatus} />
                 )}
               </>
@@ -806,6 +1052,10 @@ export default function MissionChat() {
           <Composer
             input={input}
             creating={creating}
+            advancedMode={advancedMode}
+            companies={companies}
+            activeOpcId={activeOpcId}
+            onSwitchCompany={switchCompany}
             onNewChat={startFreshConversation}
             slashMenuOpen={slashMenuOpen}
             slashCommands={slashCommands}
@@ -838,7 +1088,7 @@ export default function MissionChat() {
             }}
           />
         </section>
-        {hasTask && (
+        {hasTask && advancedMode && (
           <aside className="mission-right">
             <GovernanceTimeline spans={timelineSpans} title={t("mission.timeline_title")} />
           </aside>
@@ -892,7 +1142,7 @@ function TaskNextStep({
             {t("workorders.view_result")}
           </Link>
         ) : !blocked && (
-          <Link to="/work-orders" className="primary-button product-action">
+          <Link to="/tasks" className="primary-button product-action">
             {needsConfirmation ? t("mission.confirm_task") : t("mission.start_task")}
           </Link>
         )}
@@ -904,6 +1154,10 @@ function TaskNextStep({
 function Composer({
   input,
   creating,
+  advancedMode,
+  companies,
+  activeOpcId,
+  onSwitchCompany,
   onNewChat,
   slashMenuOpen,
   slashCommands,
@@ -932,6 +1186,10 @@ function Composer({
 }: {
   input: string;
   creating: boolean;
+  advancedMode: boolean;
+  companies: Company[];
+  activeOpcId: string;
+  onSwitchCompany: (opcId: string) => void;
   onNewChat: () => void;
   slashMenuOpen: boolean;
   slashCommands: SlashCommandSpec[];
@@ -1067,35 +1325,46 @@ function Composer({
           <button type="button" className="icon-button" aria-label={t("nav.new_chat")} title={t("nav.new_chat")} onClick={onNewChat}>
             <Icon name="sparkles" />
           </button>
-          <button type="button" className="icon-button" aria-label={t("mission.choose_folder")} title={t("mission.choose_folder")} onClick={chooseProjectFolder}>
-            <Icon name="folder" />
-          </button>
-          <select className="select-control model-select" aria-label={t("mission.model")} value={modelPreference} onChange={(event) => onModelPreference(event.target.value as ModelPreference)}>
-            {modelOptions.map((option) => <option key={option} value={option}>{t(`mission.model_${option}`)}</option>)}
-          </select>
-          <details className="composer-options">
-            <summary>{t("mission.task_options")}</summary>
-            <div className="composer-options-panel">
-              <select className="select-control" aria-label={t("mission.autonomy")} value={autonomy} onChange={(event) => onAutonomy(event.target.value as AutonomyCeiling)}>
-                {autonomyOptions.map((option) => <option key={option} value={option}>{tierLabel(option)}</option>)}
-              </select>
-              <select className="select-control" aria-label={t("mission.assign_employee")} value={assignedAgentId} onChange={(event) => onAssignedAgent(event.target.value)}>
-                <option value="auto">{t("mission.auto_assign")}</option>
-                {Object.entries(employeeGroups).map(([department, employees]) => (
-                  <optgroup key={department} label={department}>
-                    {employees.map((employee) => {
-                      const id = String(employee.agent_id || "");
-                      return <option key={id} value={id}>{employeeName(employee)}</option>;
-                    })}
-                  </optgroup>
-                ))}
-              </select>
-              <select className="select-control project-select" aria-label={t("mission.project")} value={projectName} onChange={(event) => onProjectName(event.target.value)}>
-                <option value="">{t("mission.no_project")}</option>
-                {knownProjects.map((project) => <option key={project} value={project}>{project}</option>)}
-              </select>
-            </div>
-          </details>
+          {advancedMode && (
+            <button type="button" className="icon-button" aria-label={t("mission.choose_folder")} title={t("mission.choose_folder")} onClick={chooseProjectFolder}>
+              <Icon name="folder" />
+            </button>
+          )}
+          {advancedMode && (
+            <select className="select-control model-select" aria-label={t("mission.model")} value={modelPreference} onChange={(event) => onModelPreference(event.target.value as ModelPreference)}>
+              {modelOptions.map((option) => <option key={option} value={option}>{t(`mission.model_${option}`)}</option>)}
+            </select>
+          )}
+          {advancedMode && (
+            <details className="composer-options">
+              <summary>{t("mission.task_options")}</summary>
+              <div className="composer-options-panel">
+                <select className="select-control" aria-label={t("mission.autonomy")} value={autonomy} onChange={(event) => onAutonomy(event.target.value as AutonomyCeiling)}>
+                  {autonomyOptions.map((option) => <option key={option} value={option}>{tierLabel(option)}</option>)}
+                </select>
+                <select className="select-control" aria-label={t("mission.assign_employee")} value={assignedAgentId} onChange={(event) => onAssignedAgent(event.target.value)}>
+                  <option value="auto">{t("mission.auto_assign")}</option>
+                  {Object.entries(employeeGroups).map(([department, employees]) => (
+                    <optgroup key={department} label={department}>
+                      {employees.map((employee) => {
+                        const id = String(employee.agent_id || "");
+                        return <option key={id} value={id}>{employeeName(employee)}</option>;
+                      })}
+                    </optgroup>
+                  ))}
+                </select>
+                <select className="select-control project-select" aria-label={t("mission.project")} value={projectName} onChange={(event) => onProjectName(event.target.value)}>
+                  <option value="">{t("mission.no_project")}</option>
+                  {knownProjects.map((project) => <option key={project} value={project}>{project}</option>)}
+                </select>
+              </div>
+            </details>
+          )}
+          {companies.length > 1 && (
+            <select className="select-control company-select" aria-label={t("mission.company_label")} value={activeOpcId} onChange={(event) => onSwitchCompany(event.target.value)}>
+              {companies.map((company) => <option key={company.opc_id} value={company.opc_id}>{company.name}</option>)}
+            </select>
+          )}
           {(attachments.length > 0 || projectFolder || projectName) && (
             <span className="intent-preview context-chips">
               {projectName && <span className="context-chip">{t("mission.project")}: {projectName}</span>}
@@ -1105,7 +1374,7 @@ function Composer({
               {projectFolder && <span className="context-chip">{t("mission.folder_selected")}: {projectFolder}</span>}
             </span>
           )}
-          <span className="intent-preview">{previewText}</span>
+          {advancedMode && <span className="intent-preview">{previewText}</span>}
           {creating && (
             <span className="streaming-indicator" aria-live="polite">
               <Icon name="spinner" className="icon-spin" />

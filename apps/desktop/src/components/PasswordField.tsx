@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../settings/i18n";
 
 export default function PasswordField({
   id,
@@ -10,6 +11,7 @@ export default function PasswordField({
   onChange: (v: string) => void;
 }) {
   const [show, setShow] = useState(false);
+  const label = show ? t("common.hide") : t("common.show");
   return (
     <div className="flex min-w-0 items-center gap-1">
       <input
@@ -22,12 +24,16 @@ export default function PasswordField({
         placeholder="sk-..."
       />
       <button
+        type="button"
         onClick={() => setShow(!show)}
+        aria-label={label}
+        aria-pressed={show}
         className="px-2 py-1 text-xs rounded"
         style={{ color: "var(--text-muted)" }}
       >
-        {show ? "Hide" : "Show"}
+        {label}
       </button>
     </div>
   );
 }
+

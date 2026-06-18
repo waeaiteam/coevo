@@ -85,7 +85,7 @@ describe("Workflows page", () => {
 
     await waitFor(() => expect(org.listCompanyWorkOrders).toHaveBeenCalledWith("opc-live"));
     expect(screen.getByText("Publish release note", { selector: ".product-row-main" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /tasks/i })).toHaveAttribute("href", "/work-orders");
+    expect(screen.getByRole("link", { name: /Today's Work/i })).toHaveAttribute("href", "/tasks");
     expect(screen.queryByText(/not connected to a backend runner/i)).not.toBeInTheDocument();
     expect(screen.getByText("Trace waterfall")).toBeInTheDocument();
   });

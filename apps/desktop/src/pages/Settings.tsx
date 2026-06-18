@@ -26,6 +26,8 @@ import {
 } from "../api/client";
 import { getTauriInvoke } from "../api/tauri";
 import { SettingsProvider, useSettings } from "../hooks/useSettings";
+import { useAdvancedMode } from "../hooks/useAdvancedMode";
+import { setAdvancedMode } from "../settings/appMode";
 import { setLanguage, t, useLanguage } from "../settings/i18n";
 import { chooseModelRoles, isKnownProvider, presetFor, providerOptions, type DiscoveredModel } from "../settings/modelPresets";
 import { markModelProviderConfigured } from "../settings/onboarding";
@@ -84,10 +86,14 @@ function GeneralPanel() {
 function AppearancePanel() {
   const { settings, update } = useSettings();
   const a = settings.appearance;
+  const advancedMode = useAdvancedMode();
   return (
     <SettingsSection title={t("settings.appearance")}>
       <SettingRow label={t("settings.language")} htmlFor="appearance-language">
         <SelectField id="appearance-language" value={a.language} options={[{ value: "en", label: "English" }, { value: "zh", label: "中文" }]} onChange={(v) => { update("appearance", { language: v as never }); setLanguage(v as never); }} />
+      </SettingRow>
+      <SettingRow label={t("settings.advanced_mode")} desc={t("settings.advanced_mode_desc")}>
+        <ToggleField checked={advancedMode} onChange={(v) => setAdvancedMode(v)} label={t("settings.advanced_mode")} />
       </SettingRow>
     </SettingsSection>
   );
@@ -164,11 +170,14 @@ function ModelProviderPanel() {
   return (
     <SettingsSection title={t("settings.model_provider")}>
       <SettingRow label={t("settings.provider")} htmlFor="provider-select"><SelectField id="provider-select" value={selectedProvider} options={providerOptions()} onChange={changeProvider} /></SettingRow>
-      <SettingRow label={t("settings.api_key")} desc={t("settings.api_key_warning")} htmlFor="provider-api-key"><PasswordField id="provider-api-key" value={m.api_key} onChange={(v) => update("model_provider", { api_key: v })} /></SettingRow>
-      <SettingRow label={t("settings.default_model")} htmlFor="provider-default-model"><SelectField id="provider-default-model" value={defaultModel} options={modelOptions} onChange={(v) => update("model_provider", { default_model: v })} /></SettingRow>
-      <SettingRow label={t("settings.fast_model")} htmlFor="provider-fast-model"><SelectField id="provider-fast-model" value={fastModel} options={modelOptions} onChange={(v) => update("model_provider", { fast_model: v })} /></SettingRow>
-      <SettingRow label={t("settings.reasoning_model")} htmlFor="provider-reasoning-model"><SelectField id="provider-reasoning-model" value={reasoningModel} options={modelOptions} onChange={(v) => update("model_provider", { reasoning_model: v })} /></SettingRow>
-      <SettingRow label={t("settings.structured_model")} htmlFor="provider-structured-model"><SelectField id="provider-structured-model" value={structuredModel} options={modelOptions} onChange={(v) => update("model_provider", { structured_output_model: v })} /></SettingRow>
+      <SettingRow label={t("settings.api_key")} desc={t("settings.api_key_warning")} htmlFor="provider-api-key">
+        <div className="flex flex-col gap-1">
+          <PasswordField id="provider-api-key" value={m.api_key} onChange={(v) => update("model_provider", { api_key: v })} />
+          <a href={preset.apiKeyHelpUrl || "https://platform.openai.com/api-keys"} target="_blank" rel="noreferrer" className="text-xs" style={{ color: "var(--accent)" }}>
+            {t("settings.api_key_help")}
+          </a>
+        </div>
+      </SettingRow>
       <SettingRow label={t("settings.connection")}>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={handleSaveAndTestConnection} className="px-3 py-1.5 text-xs rounded-md border" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("settings.test_discover")}</button>
@@ -180,6 +189,12 @@ function ModelProviderPanel() {
       <SettingRow label={t("settings.advanced_toggle")}><button type="button" onClick={() => setAdvanced((v) => !v)} className="px-3 py-1.5 text-xs rounded-md border">{advanced ? t("settings.hide_advanced") : t("settings.advanced_toggle")}</button></SettingRow>
       {advanced && (
         <>
+          {/* Model-role selection is auto-filled by Test/Discover; only power users who
+              want to override which model fills each role need these, so they live here. */}
+          <SettingRow label={t("settings.default_model")} htmlFor="provider-default-model"><SelectField id="provider-default-model" value={defaultModel} options={modelOptions} onChange={(v) => update("model_provider", { default_model: v })} /></SettingRow>
+          <SettingRow label={t("settings.fast_model")} htmlFor="provider-fast-model"><SelectField id="provider-fast-model" value={fastModel} options={modelOptions} onChange={(v) => update("model_provider", { fast_model: v })} /></SettingRow>
+          <SettingRow label={t("settings.reasoning_model")} htmlFor="provider-reasoning-model"><SelectField id="provider-reasoning-model" value={reasoningModel} options={modelOptions} onChange={(v) => update("model_provider", { reasoning_model: v })} /></SettingRow>
+          <SettingRow label={t("settings.structured_model")} htmlFor="provider-structured-model"><SelectField id="provider-structured-model" value={structuredModel} options={modelOptions} onChange={(v) => update("model_provider", { structured_output_model: v })} /></SettingRow>
           <SettingRow label={t("settings.base_url")} htmlFor="provider-base-url"><TextField id="provider-base-url" monospace value={m.base_url || preset.baseUrl} onChange={(v) => update("model_provider", { base_url: v })} /></SettingRow>
           <SettingRow label={t("settings.max_tokens")} htmlFor="provider-max-tokens"><NumberField id="provider-max-tokens" value={m.max_tokens || preset.maxTokens} onChange={(v) => update("model_provider", { max_tokens: v })} min={1} max={1000000} step={1024} /></SettingRow>
           <SettingRow label={t("settings.max_cost_per_task")}><NumberField value={m.max_cost_per_task_usd} onChange={(v) => update("model_provider", { max_cost_per_task_usd: v })} min={0} max={100} step={0.1} /></SettingRow>

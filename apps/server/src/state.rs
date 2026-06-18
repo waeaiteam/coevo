@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use coevo_adapters::a2a::MockA2aAdapter;
+use coevo_adapters::a2a_router::InProcessA2aRouter;
 use coevo_adapters::identity::MockIdentityProvider;
+use coevo_adapters::identity_ed25519::Ed25519IdentityProvider;
 use coevo_adapters::mcp::MockMcpAdapter;
 use coevo_adapters::mcp_client::{McpClientManager, RealMcpClient};
 use coevo_adapters::mcp_client::{McpServerConfig, McpServerRow};
@@ -61,7 +63,9 @@ fn build_a2a_provider(use_mocks: bool) -> Arc<dyn A2aProvider> {
     if use_mocks {
         Arc::new(MockA2aAdapter::new())
     } else {
-        Arc::new(DenyAllA2aProvider)
+        // Production: a real in-process message bus for manager-to-manager (A2A) delivery.
+        // Heads register on demand; cross-system A2A would layer a transport over this.
+        Arc::new(InProcessA2aRouter::new(vec![]))
     }
 }
 
@@ -81,8 +85,54 @@ fn build_identity_provider(use_mocks: bool) -> Arc<dyn IdentityProvider> {
     if use_mocks {
         Arc::new(MockIdentityProvider::new())
     } else {
-        Arc::new(DenyAllIdentityProvider)
+        // Production: a real Ed25519 verifier seeded from an optional agent-keys file
+        // (COEVO_IDENTITY_KEYS, JSON: {"agent_id": {"public_key_hex","roles","tenant_id"}}).
+        // With no file the registry is empty, so verify_proof fails closed for every agent
+        // exactly like the previous DenyAll provider — but the verification path is real
+        // and ready to accept registered keys, instead of being a hard stub.
+        Arc::new(load_ed25519_identity_provider())
     }
+}
+
+fn load_ed25519_identity_provider() -> Ed25519IdentityProvider {
+    let mut provider = Ed25519IdentityProvider::new();
+    let Ok(path) = std::env::var("COEVO_IDENTITY_KEYS") else {
+        return provider;
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return provider;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return provider;
+    };
+    if let Some(map) = parsed.as_object() {
+        for (agent_id, entry) in map {
+            let public_key_hex = entry
+                .get("public_key_hex")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if public_key_hex.is_empty() {
+                continue;
+            }
+            let roles = entry
+                .get("roles")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|r| r.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let tenant_id = entry
+                .get("tenant_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("coevo-default-tenant")
+                .to_string();
+            provider = provider.with_agent(agent_id.clone(), public_key_hex, roles, tenant_id);
+        }
+    }
+    provider
 }
 
 fn build_policy_engine(use_mocks: bool) -> Arc<dyn PolicyEngine> {
@@ -93,6 +143,7 @@ fn build_policy_engine(use_mocks: bool) -> Arc<dyn PolicyEngine> {
     }
 }
 
+#[allow(dead_code)]
 struct DenyAllA2aProvider;
 
 #[async_trait]
@@ -179,6 +230,9 @@ fn mcp_record_to_config(record: &McpServerRecord) -> Result<McpServerConfig, Str
     })
 }
 
+// Retained as the hard fail-closed alternative. Production now uses the real
+// Ed25519IdentityProvider (empty registry = same fail-closed behavior, but verifiable).
+#[allow(dead_code)]
 struct DenyAllIdentityProvider;
 
 #[async_trait]

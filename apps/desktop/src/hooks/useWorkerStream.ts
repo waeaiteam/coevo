@@ -10,6 +10,7 @@ export interface ToolExecution {
   status: 'running' | 'completed' | 'failed';
   result?: string;
   duration_ms?: number;
+  execution_id?: string;
 }
 
 export interface StreamUsage {
@@ -74,6 +75,14 @@ export function useWorkerStream({
   const contentRef = useRef('');
   const reasoningRef = useRef('');
   const toolCallsRef = useRef<Array<{ index: number; arguments: string }>>([]);
+  // Hold the latest callbacks in a ref so `start` keeps a stable identity even when the
+  // parent passes new inline closures each render. Without this, a parent that doesn't
+  // memoize onDelta/onComplete/onError would rebuild `start` every render and the
+  // autoStart effect would tear down and re-subscribe the stream — a reconnect storm.
+  const callbacksRef = useRef({ onDelta, onComplete, onError });
+  useEffect(() => {
+    callbacksRef.current = { onDelta, onComplete, onError };
+  }, [onDelta, onComplete, onError]);
 
   useEffect(() => {
     stateRef.current = state;
@@ -116,7 +125,7 @@ export function useWorkerStream({
             contentRef.current += delta;
             setContent(contentRef.current);
             setState('streaming');
-            onDelta?.(delta);
+            callbacksRef.current.onDelta?.(delta);
             break;
           }
           case 'ReasoningDelta': {
@@ -146,24 +155,37 @@ export function useWorkerStream({
               arguments: String(payload.arguments ?? ''),
               status: 'running',
             };
+            // Prefer a server-provided execution id for exact ToolEnd matching; fall
+            // back to the running index so concurrent same-named tools don't collide.
+            const execId = String(payload.execution_id ?? payload.tool_call_id ?? payload.id ?? '');
+            if (execId) exec.execution_id = execId;
             setToolExecutions((prev) => [...prev, exec]);
             setState('streaming');
             break;
           }
           case 'ToolEnd': {
             const toolName = String(payload.tool_name ?? payload.name ?? '');
-            setToolExecutions((prev) =>
-              prev.map((te) =>
-                te.tool_name === toolName && te.status === 'running'
-                  ? {
-                      ...te,
-                      status: (payload.error ? 'failed' : 'completed') as ToolExecution['status'],
-                      result: String(payload.result ?? payload.output ?? ''),
-                      duration_ms: Number(payload.duration_ms ?? 0),
-                    }
-                  : te,
-              ),
-            );
+            const execId = String(payload.execution_id ?? payload.tool_call_id ?? payload.id ?? '');
+            setToolExecutions((prev) => {
+              // Match by unique execution id when present; otherwise update the FIRST
+              // still-running tool with the matching name (FIFO), so two concurrent
+              // calls to the same tool resolve in order instead of overwriting each other.
+              let matched = false;
+              return prev.map((te) => {
+                if (matched) return te;
+                const isMatch = execId
+                  ? te.execution_id === execId
+                  : te.tool_name === toolName && te.status === 'running';
+                if (!isMatch) return te;
+                matched = true;
+                return {
+                  ...te,
+                  status: (payload.error ? 'failed' : 'completed') as ToolExecution['status'],
+                  result: String(payload.result ?? payload.output ?? ''),
+                  duration_ms: Number(payload.duration_ms ?? 0),
+                };
+              });
+            });
             break;
           }
           case 'Usage': {
@@ -177,7 +199,7 @@ export function useWorkerStream({
           case 'LifecycleEnd': {
             setState('completed');
             if (reasoningRef.current) setReasoning(reasoningRef.current);
-            onComplete?.(contentRef.current);
+            callbacksRef.current.onComplete?.(contentRef.current);
             closeRef.current = null;
             break;
           }
@@ -190,7 +212,7 @@ export function useWorkerStream({
         setError(err);
         setState('error');
         setReconnecting(false);
-        onError?.(err);
+        callbacksRef.current.onError?.(err);
       },
       {
         onReconnecting: (attempt) => {
@@ -204,7 +226,7 @@ export function useWorkerStream({
     );
 
     closeRef.current = cleanup;
-  }, [runId, onDelta, onComplete, onError]);
+  }, [runId]);
 
   const retry = useCallback(() => {
     stop();

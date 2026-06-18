@@ -657,6 +657,7 @@ impl AgentSubHarness {
                     .into_iter()
                     .collect::<Vec<_>>(),
                 ActionProposal::CallExecutor { .. }
+                | ActionProposal::SpawnSubagent { .. }
                 | ActionProposal::Finish { .. }
                 | ActionProposal::AskHuman { .. } => vec![],
             };
@@ -1472,6 +1473,104 @@ impl AgentSubHarness {
                             observation = Some(next_observation);
                             termination_reason = "executor_executed".to_string();
                         }
+                        ActionProposal::SpawnSubagent {
+                            skill_id,
+                            task,
+                            ..
+                        } => {
+                            if is_run_cancelled(
+                                pool,
+                                &authorization.run_id,
+                                &authorization.session_id,
+                            )
+                            .await?
+                            {
+                                termination_reason = "cancelled".to_string();
+                                last_tool_summary =
+                                    "Run cancelled by server before subagent spawn".to_string();
+                                break;
+                            }
+                            loop_history.push(assistant_history_message.clone());
+                            // Governance guard: a department head may only delegate a skill it
+                            // actually holds for this run. This keeps subagent creation inside
+                            // the head's authorized skill envelope (no privilege escalation).
+                            let skill_authorized =
+                                loaded_skills.iter().any(|(sid, _)| sid == &skill_id);
+                            if !skill_authorized {
+                                WorkerEventRepo::append(
+                                    pool,
+                                    &authorization.run_id,
+                                    "WorkerBlocked",
+                                    &serde_json::to_string(&serde_json::json!({
+                                        "round": round,
+                                        "reason": format!(
+                                            "Subagent spawn denied: skill '{skill_id}' is not in the head's authorized skill set"
+                                        ),
+                                    }))
+                                    .unwrap(),
+                                )
+                                .await
+                                .map_err(|e| WorkerError::Internal(e.to_string()))?;
+                                let next_observation = format!(
+                                    "Subagent spawn for skill '{skill_id}' was denied by governance (skill not authorized). Proceed yourself or finish."
+                                );
+                                loop_history.push(observation_history_message(
+                                    next_observation.clone(),
+                                    streamed_tool_calls.first().and_then(|call| call.id.clone()),
+                                ));
+                                observation = Some(next_observation);
+                                continue;
+                            }
+                            // Record the governed delegation. The ephemeral sub-agent is a
+                            // bounded, single-skill helper created under this head; it cannot
+                            // itself spawn further agents (no recursion).
+                            let subagent_id = format!(
+                                "sub-{}-{}",
+                                authorization.agent_id,
+                                &uuid::Uuid::new_v4().to_string()[..8]
+                            );
+                            let _ = AuditLogger::log_json(
+                                pool,
+                                "worker.subagent.spawn",
+                                Some(&authorization.contract_hash),
+                                Some(&authorization.agent_id),
+                                None,
+                                &run_contract.opc_id,
+                                &serde_json::json!({
+                                    "run_id": authorization.run_id,
+                                    "work_order_id": run_contract.work_order_id,
+                                    "round": round,
+                                    "supervisor_agent_id": authorization.agent_id,
+                                    "subagent_id": subagent_id,
+                                    "skill_id": skill_id,
+                                    "task": task,
+                                }),
+                            )
+                            .await;
+                            WorkerEventRepo::append(
+                                pool,
+                                &authorization.run_id,
+                                "SubagentSpawned",
+                                &serde_json::to_string(&serde_json::json!({
+                                    "round": round,
+                                    "subagent_id": subagent_id,
+                                    "skill_id": skill_id,
+                                    "task": task,
+                                }))
+                                .unwrap(),
+                            )
+                            .await
+                            .map_err(|e| WorkerError::Internal(e.to_string()))?;
+                            let next_observation = format!(
+                                "Spawned subagent {subagent_id} with skill '{skill_id}' for: {task}. The subagent operates under your authority and skill envelope; incorporate its focus into your next step."
+                            );
+                            loop_history.push(observation_history_message(
+                                next_observation.clone(),
+                                streamed_tool_calls.first().and_then(|call| call.id.clone()),
+                            ));
+                            observation = Some(next_observation);
+                            termination_reason = "subagent_spawned".to_string();
+                        }
                         ActionProposal::AskHuman { question, .. } => {
                             loop_history.push(assistant_history_message.clone());
                             tool_failed = true;
@@ -2070,6 +2169,18 @@ fn parse_reasoning_output(
                     "rationale": proposal_rationale(&value, "call_executor"),
                 }),
                 _ => finish_for_incomplete_string_proposal(&kind, &["executor_id", "task"]),
+            },
+            "spawn_subagent" => match (
+                value.get("skill_id").and_then(|value| value.as_str()),
+                value.get("task").and_then(|value| value.as_str()),
+            ) {
+                (Some(skill_id), Some(task)) => serde_json::json!({
+                    "kind": "spawn_subagent",
+                    "skill_id": skill_id,
+                    "task": task,
+                    "rationale": proposal_rationale(&value, "spawn_subagent"),
+                }),
+                _ => finish_for_incomplete_string_proposal(&kind, &["skill_id", "task"]),
             },
             "finish" => serde_json::json!({
                 "kind": "finish",
@@ -6075,8 +6186,51 @@ mod tests {
     }
 
     #[test]
-    fn parse_reasoning_output_rebuilds_string_call_tool_when_payload_fields_exist() {
+    fn parse_reasoning_output_rebuilds_string_spawn_subagent() {
         let parsed = parse_reasoning_output(
+            serde_json::json!({
+                "thought": "I need a focused helper for this.",
+                "proposal": "spawn_subagent",
+                "skill_id": "skill-research",
+                "task": "Summarize the competitor landscape",
+                "confidence": 0.6
+            }),
+            &[],
+            false,
+        )
+        .expect("string spawn_subagent with skill_id and task should parse");
+        match parsed.proposal {
+            ActionProposal::SpawnSubagent { skill_id, task, .. } => {
+                assert_eq!(skill_id, "skill-research");
+                assert_eq!(task, "Summarize the competitor landscape");
+            }
+            other => panic!("unexpected proposal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_reasoning_output_spawn_subagent_missing_fields_finishes_with_error() {
+        let parsed = parse_reasoning_output(
+            serde_json::json!({
+                "thought": "spawn without a task",
+                "proposal": "spawn_subagent",
+                "skill_id": "skill-research",
+                "confidence": 0.6
+            }),
+            &[],
+            false,
+        )
+        .expect("incomplete spawn_subagent should parse to a finish-with-error, not crash");
+        match parsed.proposal {
+            ActionProposal::Finish { summary, .. } => {
+                assert!(summary.contains("spawn_subagent"));
+            }
+            other => panic!("expected finish fallback, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_reasoning_output_rebuilds_string_call_tool_when_payload_fields_exist() {        let parsed = parse_reasoning_output(
             serde_json::json!({
                 "thought": "I can use the tool directly.",
                 "proposal": "call_tool",

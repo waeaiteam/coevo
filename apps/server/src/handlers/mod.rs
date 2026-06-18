@@ -1,5 +1,6 @@
 pub mod compile;
 pub mod conversations;
+pub mod dispatch;
 pub mod evaluate;
 pub mod evaluations;
 pub mod health;

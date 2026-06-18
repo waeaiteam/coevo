@@ -304,7 +304,7 @@ fn founder_placeholder(profile: Option<UserProfile>) -> serde_json::Value {
     }
 }
 
-async fn company_pool(
+pub(crate) async fn company_pool(
     state: &AppState,
     opc_id: &str,
 ) -> Result<sqlx::SqlitePool, (StatusCode, Json<serde_json::Value>)> {
@@ -1468,12 +1468,30 @@ pub async fn create_company(
                     return err!(StatusCode::INTERNAL_SERVER_ERROR, e);
                 }
             }
+            // Seed the default org for the new company: the secretary (intelligent
+            // dispatcher) plus one head per department. Every company starts with a
+            // working org chart so the secretary can route the founder's first task.
+            let mut employee_count = 0usize;
+            if let Err(e) = agent_employee_repo::AgentEmployeeRepo::seed(&pool).await {
+                pool.close().await;
+                return err!(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+            if let Ok(employees) = agent_employee_repo::AgentEmployeeRepo::list(&pool).await {
+                employee_count = employees.len();
+                for employee in &employees {
+                    if let Err(error) = ensure_company_employee_files(&s, &company.opc_id, employee)
+                    {
+                        pool.close().await;
+                        return err!(StatusCode::INTERNAL_SERVER_ERROR, error);
+                    }
+                }
+            }
             pool.close().await;
             ok!(serde_json::json!({
                 "opc_id": company.opc_id,
                 "name": company.name,
                 "mission": req.mission.unwrap_or_default(),
-                "employee_count": 0,
+                "employee_count": employee_count,
                 "created_at_ms": company.created_at_ms,
                 "dir": company.dir,
             }))
@@ -2376,6 +2394,25 @@ pub async fn create_company_employee(
     let now = chrono::Utc::now().timestamp_millis() as u64;
     employee.created_at_ms = now;
     employee.updated_at_ms = now;
+    // One-department-one-head rule: every non-Custom department has a single head. If this
+    // department already has a head and the new hire didn't declare a supervisor, attach
+    // them under the existing head as a team member (subagent) rather than a rival head.
+    if !matches!(employee.department, coevo_core::opc::Department::Custom)
+        && employee
+            .supervisor_agent_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
+        if let Ok(existing) = agent_employee_repo::AgentEmployeeRepo::list(&pool).await {
+            if let Some(head) = existing.iter().find(|e| {
+                e.department == employee.department && e.agent_id != employee.agent_id
+            }) {
+                employee.supervisor_agent_id = Some(head.agent_id.clone());
+            }
+        }
+    }
     let result = agent_employee_repo::AgentEmployeeRepo::upsert(&pool, &employee)
         .await
         .map_err(|e| e.to_string())
@@ -4387,10 +4424,12 @@ mod tests {
         )
         .unwrap();
         let opc_id = created["opc_id"].as_str().unwrap().to_string();
+        // create_company now auto-seeds the default org (secretary + department heads).
+        let seeded_count = coevo_store::seed::seed_employees().len() as u64;
         assert!(opc_id.starts_with("opc-"));
         assert_eq!(created["name"], "Alpha Labs");
         assert_eq!(created["mission"], "Build alpha");
-        assert_eq!(created["employee_count"], 0);
+        assert_eq!(created["employee_count"], seeded_count);
         let company_skill_path = state
             .company_workspace
             .company_skill_markdown_path(&opc_id, "skill-mission-draft");
@@ -4419,7 +4458,7 @@ mod tests {
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["opc_id"], opc_id);
         assert_eq!(listed[0]["name"], "Alpha Labs");
-        assert_eq!(listed[0]["employee_count"], 0);
+        assert_eq!(listed[0]["employee_count"], seeded_count);
 
         let detail_response = app
             .clone()
@@ -4442,7 +4481,7 @@ mod tests {
         assert_eq!(detail["opc_id"], opc_id);
         assert_eq!(detail["name"], "Alpha Labs");
         assert_eq!(detail["charter_md"], "# Alpha Labs\n\nBuild alpha");
-        assert_eq!(detail["employee_count"], 0);
+        assert_eq!(detail["employee_count"], seeded_count);
 
         let delete_response = app
             .clone()

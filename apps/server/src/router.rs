@@ -174,6 +174,10 @@ pub fn build_router_with_sidecar_token(state: AppState, sidecar_token: Option<St
                 .post(handlers::opc::create_company_work_order),
         )
         .route(
+            "/companies/{opc_id}/dispatch",
+            post(handlers::dispatch::dispatch_plan),
+        )
+        .route(
             "/companies/{opc_id}/work-orders/{id}/execute",
             post(handlers::opc::execute_company_work_order),
         )
@@ -2332,7 +2336,10 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(before_seed.as_array().unwrap().len(), 0);
+        // create_company now auto-seeds the default org, so the company already has its
+        // secretary + department heads before any explicit seed call.
+        let initial_count = before_seed.as_array().unwrap().len();
+        assert!(initial_count > 0);
 
         let seed_response = app
             .clone()
@@ -2576,8 +2583,10 @@ mod tests {
 
         let alpha_before = list_employees(&app, &alpha).await;
         let beta_before = list_employees(&app, &beta).await;
-        assert_eq!(alpha_before.as_array().unwrap().len(), 0);
-        assert_eq!(beta_before.as_array().unwrap().len(), 0);
+        // Both companies auto-seed their default org on creation, isolated per company.
+        let seeded_len = coevo_store::seed::seed_employees().len();
+        assert_eq!(alpha_before.as_array().unwrap().len(), seeded_len);
+        assert_eq!(beta_before.as_array().unwrap().len(), seeded_len);
 
         let seed_alpha = app
             .clone()
@@ -2594,8 +2603,9 @@ mod tests {
 
         let alpha_after_seed = list_employees(&app, &alpha).await;
         let beta_after_alpha_seed = list_employees(&app, &beta).await;
+        // Re-seeding Alpha is idempotent and must not touch Beta's isolated org.
         assert!(!alpha_after_seed.as_array().unwrap().is_empty());
-        assert_eq!(beta_after_alpha_seed.as_array().unwrap().len(), 0);
+        assert_eq!(beta_after_alpha_seed.as_array().unwrap().len(), seeded_len);
 
         let delete_beta = app
             .clone()

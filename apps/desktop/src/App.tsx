@@ -24,6 +24,7 @@ import TaskDetail from "./pages/TaskDetail";
 import FounderProfile from "./pages/FounderProfile";
 import CompanyMemory from "./pages/CompanyMemory";
 import AIEmployees from "./pages/AIEmployees";
+import Team from "./pages/Team";
 import TalentMarket from "./pages/TalentMarket";
 import SkillsPage from "./pages/SkillsPage";
 import ExternalExecutors from "./pages/ExternalExecutors";
@@ -86,10 +87,12 @@ export default function App() {
           <Route path="/companies/:opcId/cost" element={<CostManagement />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
+          <Route path="/tasks" element={<WorkOrders />} />
           <Route path="/tasks/:workOrderId" element={<TaskDetail />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/founder" element={<FounderProfile />} />
           <Route path="/memory" element={<CompanyMemory />} />
+          <Route path="/team" element={<Team />} />
           <Route path="/employees" element={<AIEmployees />} />
           <Route path="/market" element={<TalentMarket />} />
           <Route path="/employees/:agentId/growth" element={<EmployeeGrowth />} />

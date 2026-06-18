@@ -77,7 +77,7 @@ export default function Audit() {
           ) : events.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon"><Icon name="clipboard" /></div>
-              <p>{t("traces.empty")}</p>
+              <p>{t("audit.empty")}</p>
             </div>
           ) : (
             <div className="product-list">
@@ -112,7 +112,7 @@ export default function Audit() {
           {!activeEvent ? (
             <div className="empty-state">
               <div className="empty-state-icon"><Icon name="layers" /></div>
-              <p>{error || t("traces.select")}</p>
+              <p>{error || t("audit.select")}</p>
             </div>
           ) : (
             <div className="space-y-4">

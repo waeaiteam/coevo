@@ -47,7 +47,7 @@ export default function SkillsPage() {
       </div>
       <div className="text-xs p-3 rounded" style={{ background: "var(--accent-dim)", color: "var(--accent)" }}>{t("skills.desc")}</div>
       {result && <div className="card"><pre className="text-xs" style={{ color: "var(--text-secondary)" }}>{result}</pre></div>}
-      {loading && <div className="text-xs" style={{ color: "var(--text-muted)" }}>Loading...</div>}
+      {loading && <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("settings.loading")}</div>}
 
       <h3 className="text-sm font-semibold">{t("skills.packages")}</h3>
       <div className="grid gap-2 md:grid-cols-2">

@@ -6,6 +6,7 @@ import { GovernanceProvider } from "../hooks/useGovernance";
 import MissionChat from "../pages/MissionChat";
 import * as bootstrap from "../api/bootstrap";
 import { setLanguage } from "../settings/i18n";
+import { setAdvancedMode } from "../settings/appMode";
 
 const client = vi.hoisted(() => ({
   compileContract: vi.fn(),
@@ -25,6 +26,7 @@ const org = vi.hoisted(() => ({
   createCompanyConversation: vi.fn(),
   appendCompanyConversationMessage: vi.fn(),
   createCompanyWorkOrder: vi.fn(),
+  dispatchPlan: vi.fn(),
   executeCompanyWorkOrder: vi.fn(),
   getCompanyProfileById: vi.fn(),
   listCompanyConversationMessages: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock("../api/org", () => ({
   createCompanyConversation: org.createCompanyConversation,
   appendCompanyConversationMessage: org.appendCompanyConversationMessage,
   createCompanyWorkOrder: org.createCompanyWorkOrder,
+  dispatchPlan: org.dispatchPlan,
   executeCompanyWorkOrder: org.executeCompanyWorkOrder,
   getCompanyProfileById: org.getCompanyProfileById,
   listCompanyConversationMessages: org.listCompanyConversationMessages,
@@ -61,6 +64,8 @@ vi.mock("../api/org", () => ({
 
 vi.mock("../api/companies", () => ({
   getActiveOpcId: () => localStorage.getItem("coevo-opc-id") || "default-opc",
+  setActiveOpcId: (id: string) => localStorage.setItem("coevo-opc-id", id),
+  listCompanies: vi.fn(async () => []),
 }));
 
 vi.mock("../api/bootstrap", () => ({
@@ -93,10 +98,17 @@ function missionStateKey() {
   return `coevo-missionchat-state:${opcId}:${userId}`;
 }
 
+// Advanced mode reveals the technical controls (folder picker, task options, model).
+// Set it before rendering for tests that exercise those controls.
+function enableAdvancedMode() {
+  setAdvancedMode(true);
+}
+
 describe("MissionChat WorkOrder creation", () => {
   beforeEach(() => {
     localStorage.clear();
     setLanguage("en");
+    setAdvancedMode(false);
     localStorage.setItem("coevo-user-id", "default-founder");
     localStorage.setItem("coevo-opc-id", "default-opc");
 
@@ -158,6 +170,7 @@ describe("MissionChat WorkOrder creation", () => {
       { agent_id: "agent-risk-01", display_name: "Risk Reviewer", department: "Governance", lifecycle_status: "Active", risk_ceiling: 0.6 },
     ]);
     org.listCompanyWorkOrders.mockResolvedValue([]);
+    org.dispatchPlan.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -234,7 +247,6 @@ describe("MissionChat WorkOrder creation", () => {
     );
     expect(await screen.findByText(/This is a read-only analysis mission/i)).toBeInTheDocument();
     expect(await screen.findByText("Task created. Preparing the action plan for your review.")).toBeInTheDocument();
-    expect(await screen.findByText(/Effective permission/i)).toBeInTheDocument();
   });
 
   it("keeps frontend intent inference as preview and lets the server resolve assignment", async () => {
@@ -286,7 +298,7 @@ describe("MissionChat WorkOrder creation", () => {
 
     await waitFor(() => expect(org.createCompanyWorkOrder).toHaveBeenCalledTimes(1));
     expect(org.createCompanyWorkOrder.mock.calls[0][1]).not.toHaveProperty("track");
-    expect(await screen.findByText("Needs human review")).toBeInTheDocument();
+    expect(await screen.findByText("Paused by safety rules")).toBeInTheDocument();
   });
 
   it("does not let model cognition add WorkOrder authorization fields", async () => {
@@ -355,6 +367,7 @@ describe("MissionChat WorkOrder creation", () => {
   });
 
   it("uses the desktop folder picker when Tauri provides one", async () => {
+    enableAdvancedMode();
     Object.defineProperty(window, "__TAURI__", {
       configurable: true,
       value: {
@@ -404,7 +417,7 @@ describe("MissionChat WorkOrder creation", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByText("Needs human review")).toBeInTheDocument();
+    expect(await screen.findByText("Paused by safety rules")).toBeInTheDocument();
   });
 
   it("creates the WorkOrder and tells the user when model cognition is unavailable", async () => {
@@ -529,13 +542,28 @@ describe("MissionChat WorkOrder creation", () => {
     expect(org.createCompanyWorkOrder).not.toHaveBeenCalled();
   });
 
-  it("renders the chat composer in English with attachment and project folder entry points", async () => {
+  it("default composer stays calm: attachment + send, no technical controls", async () => {
     setLanguage("en");
 
     renderMissionChat();
 
     expect(screen.getByRole("heading", { name: "What should your AI employees help with today?" })).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Example: organize this week's customer leads and create a follow-up list")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add attachment" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    // Technical controls are hidden in the default founder surface.
+    expect(screen.queryByRole("button", { name: "Choose project folder" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Task options")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Autonomy")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+  });
+
+  it("advanced composer exposes attachment, folder, model, and task options", async () => {
+    setLanguage("en");
+    enableAdvancedMode();
+
+    renderMissionChat();
+
     expect(screen.getByRole("button", { name: "Add attachment" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Choose project folder" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();

@@ -116,11 +116,10 @@ export default function CompanyMemory() {
 
       {showCreate && (
         <div className="card space-y-2">
-          <select value={newScope} onChange={(event) => setNewScope(event.target.value)} className="input">
-            <option>Company</option>
-            <option>Task</option>
-            <option>Agent</option>
-            <option>User</option>
+          <select value={newScope} onChange={(event) => setNewScope(event.target.value)} className="input" aria-label={t("memory.scope_label")}>
+            {SCOPES.map((scope) => (
+              <option key={scope} value={scope}>{scope}</option>
+            ))}
           </select>
           <input placeholder={t("memory.title_placeholder")} value={newTitle} onChange={(event) => setNewTitle(event.target.value)} className="input" />
           <textarea placeholder={t("memory.content_placeholder")} value={newContent} onChange={(event) => setNewContent(event.target.value)} className="input" rows={3} />

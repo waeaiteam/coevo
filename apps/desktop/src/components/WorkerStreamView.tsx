@@ -14,7 +14,6 @@ export function WorkerStreamView({ runId }: { runId: string }) {
 }
 
 export function StreamDisplay({ stream }: { stream: StreamController }) {
-  const [thinkingOpen, setThinkingOpen] = useState(true);
   const isStreaming = stream.state === "streaming" || stream.state === "connecting";
   const isDone = stream.state === "completed";
   const hasReasoning = Boolean(stream.reasoning);
@@ -22,14 +21,8 @@ export function StreamDisplay({ stream }: { stream: StreamController }) {
   return (
     <div className="stream-view">
       {hasReasoning && (
-        <details className="stream-thinking" open={thinkingOpen}>
-          <summary
-            className="stream-thinking-summary"
-            onClick={(event) => {
-              event.preventDefault();
-              setThinkingOpen((open) => !open);
-            }}
-          >
+        <details className="stream-thinking" open>
+          <summary className="stream-thinking-summary">
             <Icon name="sparkles" />
             <span>{isStreaming ? t("stream.thinking") : t("stream.thinking_done")}</span>
             {isStreaming && <Icon name="spinner" className="icon-spin" />}

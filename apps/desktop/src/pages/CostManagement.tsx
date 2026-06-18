@@ -62,6 +62,10 @@ export default function CostManagement() {
         }
         setDrafts(seed);
       })
+      .catch(() => {
+        // Leave the overview empty; the empty-state copy explains there's nothing yet.
+        if (alive) setOverview({ by_department: [], total: 0 });
+      })
       .finally(() => {
         if (alive) setLoading(false);
       });

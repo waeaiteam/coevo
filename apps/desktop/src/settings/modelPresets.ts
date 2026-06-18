@@ -11,6 +11,7 @@ export type ProviderPreset = {
   structuredModel: string;
   maxTokens: number;
   advancedBaseUrl: boolean;
+  apiKeyHelpUrl: string;
 };
 
 export type DiscoveredModel = {
@@ -34,6 +35,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "gpt-4o",
     maxTokens: 16384,
     advancedBaseUrl: false,
+    apiKeyHelpUrl: "https://platform.openai.com/api-keys",
   },
   deepseek: {
     provider: "deepseek",
@@ -46,6 +48,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "deepseek-chat",
     maxTokens: 8192,
     advancedBaseUrl: false,
+    apiKeyHelpUrl: "https://platform.deepseek.com/api_keys",
   },
   "openai-compatible": {
     provider: "openai-compatible",
@@ -58,6 +61,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "gpt-4o",
     maxTokens: 16384,
     advancedBaseUrl: true,
+    apiKeyHelpUrl: "https://platform.openai.com/api-keys",
   },
   anthropic: {
     provider: "anthropic",
@@ -70,6 +74,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "claude-3-5-sonnet-latest",
     maxTokens: 8192,
     advancedBaseUrl: true,
+    apiKeyHelpUrl: "https://console.anthropic.com/settings/keys",
   },
   gemini: {
     provider: "gemini",
@@ -82,6 +87,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "gemini-1.5-pro",
     maxTokens: 8192,
     advancedBaseUrl: true,
+    apiKeyHelpUrl: "https://aistudio.google.com/app/apikey",
   },
   ollama: {
     provider: "ollama",
@@ -94,6 +100,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "llama3.1",
     maxTokens: 4096,
     advancedBaseUrl: true,
+    apiKeyHelpUrl: "https://ollama.com/download",
   },
   local: {
     provider: "local",
@@ -106,6 +113,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     structuredModel: "local-model",
     maxTokens: 4096,
     advancedBaseUrl: true,
+    apiKeyHelpUrl: "http://127.0.0.1:8080",
   },
 };
 

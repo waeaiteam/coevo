@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme, type ThemeMode } from "../hooks/useTheme";
+import { useAdvancedMode } from "../hooks/useAdvancedMode";
 import { getActiveOpcId } from "../api/companies";
 import { t, useLanguage } from "../settings/i18n";
 import Icon, { type IconName } from "./Icon";
@@ -14,15 +15,22 @@ type Command = {
   run: () => void;
 };
 
-const pages = [
+// Core commands shown to every founder. Calm, jargon-free navigation.
+const corePages = [
   { id: "new-chat", labelKey: "nav.new_chat", hintKey: "cmd.new_task_hint", path: "/", initials: "new chat new task xt xr xrw", icon: "plus" as IconName },
-  { id: "company", labelKey: "nav.my_company", hintKey: "cmd.my_company_hint", path: "/company", initials: "company opc wdgs wdopc", icon: "building" as IconName },
-  { id: "market", labelKey: "nav.talent_market", hintKey: "cmd.market_hint", path: "/market", initials: "market talent hire zhaopin scs ai yuangong shichang", icon: "users" as IconName },
+  { id: "team", labelKey: "nav.my_team", hintKey: "cmd.my_company_hint", path: "/team", initials: "team tuandui company opc employees", icon: "users" as IconName },
   { id: "projects", labelKey: "nav.projects", hintKey: "cmd.projects_hint", path: "/projects", initials: "projects xm", icon: "folder-tree" as IconName },
-  { id: "tasks", labelKey: "nav.tasks", hintKey: "cmd.tasks_hint", path: "/work-orders", initials: "tasks rw gd workorders", icon: "list-checks" as IconName },
-  { id: "timeline", labelKey: "nav.timeline", hintKey: "cmd.timeline_hint", path: "/timeline", initials: "timeline sjx audit sj", icon: "history" as IconName },
+  { id: "tasks", labelKey: "nav.today", hintKey: "cmd.tasks_hint", path: "/tasks", initials: "tasks rw gd workorders today", icon: "list-checks" as IconName },
+  { id: "market", labelKey: "nav.talent_market", hintKey: "cmd.market_hint", path: "/market", initials: "market talent hire zhaopin scs ai yuangong shichang", icon: "users" as IconName },
   { id: "settings", labelKey: "nav.settings", hintKey: "cmd.settings_hint", path: "/settings/general", initials: "settings sz", icon: "settings" as IconName },
-  { id: "dashboard", labelKey: "nav.advanced", hintKey: "cmd.dashboard_hint", path: "/dashboard", initials: "dashboard opc gzt advanced", icon: "gauge" as IconName },
+  { id: "model", labelKey: "settings.model_provider", hintKey: "cmd.model_hint", path: "/settings/model_provider", initials: "model mx llm", icon: "brain" as IconName },
+];
+
+// Advanced commands surface the full operator console; only shown in Advanced mode.
+const advancedPages = [
+  { id: "company", labelKey: "nav.my_company", hintKey: "cmd.my_company_hint", path: "/company", initials: "company opc wdgs wdopc", icon: "building" as IconName },
+  { id: "timeline", labelKey: "nav.timeline", hintKey: "cmd.timeline_hint", path: "/timeline", initials: "timeline sjx audit sj", icon: "history" as IconName },
+  { id: "dashboard", labelKey: "nav.dashboard", hintKey: "cmd.dashboard_hint", path: "/dashboard", initials: "dashboard opc gzt advanced", icon: "gauge" as IconName },
   { id: "founder", labelKey: "adv.founder_profile", hintKey: "adv.founder_profile_desc", path: "/founder", initials: "founder cshr", icon: "user" as IconName },
   { id: "memory", labelKey: "adv.company_memory", hintKey: "adv.company_memory_desc", path: "/memory", initials: "company memory gsjy", icon: "database" as IconName },
   { id: "skills", labelKey: "adv.skills", hintKey: "adv.skills_desc", path: "/skills", initials: "skills jn", icon: "puzzle" as IconName },
@@ -35,7 +43,6 @@ const pages = [
   { id: "traces", labelKey: "traces.title", hintKey: "traces.desc", path: "/traces", initials: "traces trace span lianlu zhuizong", icon: "history" as IconName },
   { id: "workflows", labelKey: "workflows.title", hintKey: "workflows.desc", path: "/workflows", initials: "workflows dag gongzuoliu bianpai", icon: "git-branch" as IconName },
   { id: "performance", labelKey: "perf.title", hintKey: "perf.desc", path: "/performance", initials: "performance perf xingneng sandbox shapan", icon: "gauge" as IconName },
-  { id: "model", labelKey: "settings.model_provider", hintKey: "cmd.model_hint", path: "/settings/model_provider", initials: "model mx llm", icon: "brain" as IconName },
   { id: "mcp", labelKey: "settings.mcp_servers", hintKey: "settings.mcp_servers_desc", path: "/settings/mcp_servers", initials: "mcp servers tools jsonrpc stdio http", icon: "puzzle" as IconName },
   { id: "data", labelKey: "settings.data_management", hintKey: "adv.data_management_desc", path: "/settings/data_management", initials: "data sj", icon: "database" as IconName },
 ];
@@ -48,6 +55,7 @@ function matches(command: Command, query: string) {
 
 export default function CommandPalette() {
   const language = useLanguage();
+  const advancedMode = useAdvancedMode();
   const navigate = useNavigate();
   const { setMode } = useTheme();
   const [open, setOpen] = useState(false);
@@ -55,6 +63,7 @@ export default function CommandPalette() {
   const [activeIndex, setActiveIndex] = useState(0);
 
   const commands = useMemo<Command[]>(() => {
+    const pages = advancedMode ? [...corePages, ...advancedPages] : corePages;
     const navCommands = pages.map((page) => ({
       id: page.id,
       label: t(page.labelKey),
@@ -64,12 +73,13 @@ export default function CommandPalette() {
       run: () => navigate(page.path),
     }));
     const opc = getActiveOpcId();
-    const orgCommands = ([
+    // Org-ecosystem destinations are advanced surfaces; only offer them in Advanced mode.
+    const orgCommands = (advancedMode ? ([
       ["org-meetings", "org.meetings", "meet.subtitle", "meetings huiyi hys debate", "/meetings", "users"],
       ["org-performance", "org.performance", "kpi.subtitle", "performance kpi jixiao", "/performance", "gauge"],
       ["org-reports", "org.reports", "report.subtitle", "reports briefings jianbao ribao yuebao", "/reports", "file-text"],
       ["org-cost", "org.cost", "cost.subtitle", "cost budget chengben token", "/cost", "database"],
-    ] as const).map(([id, labelKey, hintKey, initials, suffix, icon]) => ({
+    ] as const) : []).map(([id, labelKey, hintKey, initials, suffix, icon]) => ({
       id,
       label: t(labelKey),
       hint: t(hintKey),
@@ -90,7 +100,7 @@ export default function CommandPalette() {
       run: () => setMode(mode as ThemeMode),
     }));
     return [...navCommands, ...orgCommands, ...themeCommands];
-  }, [navigate, setMode, language]);
+  }, [navigate, setMode, language, advancedMode]);
 
   const filtered = commands.filter((command) => matches(command, query));
 

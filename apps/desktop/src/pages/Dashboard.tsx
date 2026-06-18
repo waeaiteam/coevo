@@ -15,7 +15,7 @@ export default function Dashboard() {
             <Icon name="gauge" />
           </div>
           <div>
-            <div className="product-kicker">{t("nav.opc")}</div>
+            <div className="product-kicker">{t("dashboard.kicker")}</div>
             <h2>{t("opc.identity")}</h2>
           </div>
         </div>

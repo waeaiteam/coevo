@@ -11,6 +11,7 @@ import {
   type MeetingTurn,
 } from "../api/org";
 import { getActiveOpcId } from "../api/companies";
+import { useToast } from "../components/ToastProvider";
 import { t, useLanguage } from "../settings/i18n";
 
 function stanceClass(stance: string): "for" | "against" | "neutral" {
@@ -35,6 +36,7 @@ function statusLabel(status: string): string {
 
 export default function MeetingRoom() {
   useLanguage();
+  const toast = useToast();
   const params = useParams();
   const opcId = params.opcId ? decodeURIComponent(params.opcId) : getActiveOpcId();
 
@@ -105,8 +107,9 @@ export default function MeetingRoom() {
       await reloadList(false);
       setTopic("");
       setSelectedId(res.meeting_id);
-    } catch {
-      /* keep the composer state so the founder can retry */
+    } catch (e: unknown) {
+      // Keep the composer state so the founder can retry, and surface the failure.
+      toast.error(`${t("meet.start_failed")}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setStarting(false);
     }
@@ -175,13 +178,15 @@ export default function MeetingRoom() {
             ) : meetings.length === 0 ? (
               <div className="product-empty">{t("meet.empty")}</div>
             ) : (
-              <div className="product-list">
+              <div className="product-list" role="listbox" aria-label={t("meet.list")}>
                 {meetings.map((meeting) => {
                   const selected = meeting.meeting_id === selectedId;
                   return (
                     <button
                       key={meeting.meeting_id}
                       type="button"
+                      role="option"
+                      aria-selected={selected}
                       className="product-list-row"
                       onClick={() => setSelectedId(meeting.meeting_id)}
                       style={selected ? { borderColor: "var(--accent)" } : undefined}

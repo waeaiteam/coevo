@@ -278,9 +278,10 @@ fn parse_meeting_draft(json: &serde_json::Value, participants: &[String]) -> Opt
             return None;
         }
     }
+    // A resolution can only close once a scrutiny role has actually voiced opposition —
+    // role-derived, so any company's risk/governance head qualifies.
     if !turns.iter().any(|turn| {
-        (turn.agent_id == "agent-critic-01" || turn.agent_id == "agent-risk-01")
-            && turn.stance.eq_ignore_ascii_case("oppose")
+        inferred_stance(&turn.agent_id) == "oppose" && turn.stance.eq_ignore_ascii_case("oppose")
     }) {
         return None;
     }
@@ -411,8 +412,15 @@ fn normalize_meeting_participant_id(value: &str, participants: &[String]) -> Opt
     }
 }
 
-fn inferred_stance(agent_id: &str) -> String {
-    if agent_id == "agent-critic-01" || agent_id == "agent-risk-01" {
+/// A participant's default debate stance, derived from their role rather than a fixed id
+/// list. Governance/risk/compliance/critic-type roles scrutinize (oppose) by their nature;
+/// everyone else advocates (support). This lets any company's heads debate autonomously —
+/// the dissent comes from what a role *is*, not from a hardcoded agent id.
+fn inferred_stance(agent_id_or_role: &str) -> String {
+    let lower = agent_id_or_role.to_lowercase();
+    const SCRUTINY_MARKERS: [&str; 6] =
+        ["critic", "risk", "compliance", "governance", "audit", "legal"];
+    if SCRUTINY_MARKERS.iter().any(|m| lower.contains(m)) {
         "oppose".to_string()
     } else {
         "support".to_string()
@@ -526,7 +534,7 @@ async fn generate_meeting_turn(
         messages: vec![
             ModelMessage {
                 role: "system".to_string(),
-                content: "You generate one participant's meeting statement for a backend collaboration platform. Return JSON only. Keep the assigned stance. agent-critic-01 or agent-risk-01 must oppose with a concrete risk argument.".to_string(),
+                content: "You generate one participant's meeting statement for a backend collaboration platform. Return JSON only. Keep the assigned stance. A participant in a risk, compliance, governance, audit, or critic role must oppose with a concrete risk argument.".to_string(),
                 ..Default::default()
             },
             ModelMessage {
@@ -780,14 +788,16 @@ pub async fn create_meeting(
             "close_mode must be vote or chair"
         );
     }
+    // A debate needs a built-in dissenter. Accept any participant whose id/role implies a
+    // scrutiny function (risk/compliance/governance/audit/legal/critic), not just two fixed ids.
     if !req
         .participants
         .iter()
-        .any(|id| id == "agent-critic-01" || id == "agent-risk-01")
+        .any(|id| inferred_stance(id) == "oppose")
     {
         return err!(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "meetings must include agent-critic-01 or agent-risk-01 as a dissenting participant"
+            "meetings must include a scrutiny role (risk, compliance, governance, audit, legal, or critic) as a dissenting participant"
         );
     }
 

@@ -32,9 +32,20 @@ export function useAutoSave<T>({
   const [error, setError] = useState<Error | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSerializedRef = useRef<string>('');
   const pendingRef = useRef<T | null>(null);
   const savingRef = useRef(false);
+
+  // Serialize defensively: a circular structure must not crash auto-save. On failure we
+  // treat the value as "always changed" (unique sentinel) so a real save is still attempted.
+  const serialize = useCallback((value: T): string => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return `__unserializable__:${Date.now()}`;
+    }
+  }, []);
 
   const flush = useCallback(async () => {
     if (savingRef.current) return;
@@ -46,18 +57,28 @@ export function useAutoSave<T>({
     setError(null);
     try {
       await onSave(payload);
-      lastSerializedRef.current = JSON.stringify(payload);
+      lastSerializedRef.current = serialize(payload);
       pendingRef.current = null;
       setStatus('saved');
       setLastSaved(Date.now());
+      if (retryRef.current) {
+        clearTimeout(retryRef.current);
+        retryRef.current = null;
+      }
     } catch (e) {
-      // Keep payload in the queue for the next attempt.
+      // Keep payload in the queue and schedule a background retry so a transient
+      // failure recovers without requiring another edit or manual save.
       setStatus('error');
       setError(e instanceof Error ? e : new Error(String(e)));
+      if (retryRef.current) clearTimeout(retryRef.current);
+      retryRef.current = setTimeout(() => {
+        retryRef.current = null;
+        void flush();
+      }, Math.max(2000, delay * 2));
     } finally {
       savingRef.current = false;
     }
-  }, [onSave]);
+  }, [onSave, serialize, delay]);
 
   const saveNow = useCallback(async () => {
     if (timerRef.current) {
@@ -70,7 +91,7 @@ export function useAutoSave<T>({
 
   useEffect(() => {
     if (!enabled) return;
-    const serialized = JSON.stringify(data);
+    const serialized = serialize(data);
     if (serialized === lastSerializedRef.current) return;
 
     pendingRef.current = data;
@@ -84,7 +105,14 @@ export function useAutoSave<T>({
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [data, delay, enabled, flush]);
+  }, [data, delay, enabled, flush, serialize]);
+
+  // Clean up any pending retry on unmount.
+  useEffect(() => {
+    return () => {
+      if (retryRef.current) clearTimeout(retryRef.current);
+    };
+  }, []);
 
   return { status, lastSaved, error, saveNow };
 }

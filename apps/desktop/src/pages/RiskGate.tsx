@@ -96,20 +96,20 @@ export default function RiskGate() {
         <div className="feature-hero-icon"><Icon name="shield-check" /></div>
         <div>
           <h2>{t("risk.title")}</h2>
-          <p>Current approval queue, governance outcomes, and audit records from live work orders.</p>
+          <p>{t("riskgate.hero_desc")}</p>
         </div>
       </section>
 
       <div className="product-grid-2">
         <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>Governance queue</h2>
+            <h2>{t("riskgate.queue")}</h2>
             <span>{summary.total}</span>
           </div>
           <div className="product-grid-3 mb-3">
-            <MiniMetric label="Waiting approval" value={summary.waiting} />
-            <MiniMetric label="Blocked" value={summary.blocked} />
-            <MiniMetric label="Completed" value={summary.completed} />
+            <MiniMetric label={t("riskgate.waiting")} value={summary.waiting} />
+            <MiniMetric label={t("riskgate.blocked")} value={summary.blocked} />
+            <MiniMetric label={t("riskgate.completed")} value={summary.completed} />
           </div>
           {loading ? (
             <div className="empty-state">
@@ -135,7 +135,7 @@ export default function RiskGate() {
                   >
                     <span className="min-w-0">
                       <span className="product-row-main block truncate">
-                        {stringField(row, "mission_intent") || "Untitled work order"}
+                        {stringField(row, "mission_intent") || t("riskgate.untitled")}
                       </span>
                       <span className="mt-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
                         {timeLabel(row)}
@@ -154,13 +154,13 @@ export default function RiskGate() {
 
         <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>Recent audit</h2>
+            <h2>{t("riskgate.recent_audit")}</h2>
             <span>{summary.audits}</span>
           </div>
           {auditEvents.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon"><Icon name="history" /></div>
-              <p>No governance audit records yet.</p>
+              <p>{t("audit.empty")}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -194,12 +194,12 @@ export default function RiskGate() {
               </div>
             ) : (
               <div className="product-grid-2">
-                <InfoRow label="Work order" value={stringField(selected, "work_order_id") || "-"} mono />
-                <InfoRow label="Intent" value={stringField(selected, "mission_intent") || "-"} />
-                <InfoRow label="Track" value={stringField(selected, "track") || "-"} />
-                <InfoRow label="Status" value={stringField(selected, "status") || "-"} />
-                <InfoRow label="Assigned" value={stringField(selected, "selected_agents") || "-"} />
-                <InfoRow label="Skills" value={stringField(selected, "required_skills") || "-"} />
+                <InfoRow label={t("riskgate.work_order")} value={stringField(selected, "work_order_id") || "-"} mono />
+                <InfoRow label={t("riskgate.intent")} value={stringField(selected, "mission_intent") || "-"} />
+                <InfoRow label={t("riskgate.track")} value={stringField(selected, "track") || "-"} />
+                <InfoRow label={t("riskgate.status")} value={stringField(selected, "status") || "-"} />
+                <InfoRow label={t("riskgate.assigned")} value={stringField(selected, "selected_agents") || "-"} />
+                <InfoRow label={t("riskgate.skills")} value={stringField(selected, "required_skills") || "-"} />
               </div>
             )}
           </div>

@@ -63,7 +63,11 @@ export default function ProjectDetail() {
     [company, conversations, memories, tasks, user],
   );
   const requestedId = params.projectId ? decodeURIComponent(params.projectId) : "";
-  const project = projects.find((item) => item.id === requestedId) || projects[0];
+  // Only fall back to the first project when no specific id was requested; otherwise an
+  // unknown id should surface "not found" rather than silently showing another project.
+  const project = requestedId
+    ? projects.find((item) => item.id === requestedId)
+    : projects[0];
   const waiting = project?.tasks.filter((task) => stringField(task, "status") === "WaitingApproval").length || 0;
   const completed = project?.tasks.filter((task) => stringField(task, "status") === "Completed").length || 0;
 

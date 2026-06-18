@@ -4,18 +4,10 @@ import { getActiveOpcId } from "../api/companies";
 import { getCompanyTraceSpans, listCompanyTraces } from "../api/client";
 import { listCompanyWorkOrders } from "../api/org";
 import Icon from "../components/Icon";
+import { TraceWaterfall, type TraceSpan } from "../components/TraceWaterfall";
 import { t, useLanguage } from "../settings/i18n";
 
 type Row = Record<string, unknown>;
-type TraceSpan = {
-  span_id: string;
-  parent_span_id?: string | null;
-  name: string;
-  kind: string;
-  status: string;
-  started_at_ms: number;
-  ended_at_ms?: number | null;
-};
 
 function stringField(row: Row | undefined, key: string): string {
   const value = row?.[key];
@@ -108,8 +100,8 @@ export default function Workflows() {
           <h1 className="product-title">{t("workflows.title")}</h1>
         </div>
         <div className="product-actions">
-          <Link to="/work-orders" className="product-link-button">
-            <Icon name="layers" /> {t("nav.tasks")}
+          <Link to="/tasks" className="product-link-button">
+            <Icon name="layers" /> {t("nav.today")}
           </Link>
         </div>
       </header>
@@ -118,20 +110,20 @@ export default function Workflows() {
         <div className="feature-hero-icon"><Icon name="history" /></div>
         <div>
           <h2>{t("workflows.title")}</h2>
-          <p>Operational workflow traces and work-order activity pulled from the live company scope.</p>
+          <p>{t("workflows.hero_desc")}</p>
         </div>
       </section>
 
       <div className="product-grid-2">
         <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>Operational flows</h2>
+            <h2>{t("workflows.flows")}</h2>
             <span>{summary.workOrders}</span>
           </div>
           <div className="product-grid-3 mb-3">
-            <MiniMetric label="Traces" value={summary.traces} />
-            <MiniMetric label="Running" value={summary.running} />
-            <MiniMetric label="Completed" value={summary.completed} />
+            <MiniMetric label={t("workflows.traces")} value={summary.traces} />
+            <MiniMetric label={t("workflows.running")} value={summary.running} />
+            <MiniMetric label={t("workflows.completed")} value={summary.completed} />
           </div>
           {loading ? (
             <div className="empty-state"><p>{t("settings.loading")}</p></div>
@@ -151,12 +143,14 @@ export default function Workflows() {
                     key={id}
                     type="button"
                     className="product-list-row text-left"
+                    disabled={!traceId}
+                    title={traceId ? undefined : t("workflows.no_traces")}
                     onClick={() => traceId && setSelectedTraceId(traceId)}
-                    style={{ borderColor: active ? "var(--accent)" : undefined }}
+                    style={{ borderColor: active ? "var(--accent)" : undefined, opacity: traceId ? 1 : 0.55, cursor: traceId ? "pointer" : "default" }}
                   >
                     <span className="min-w-0">
                       <span className="product-row-main block truncate">
-                        {stringField(row, "mission_intent") || "Untitled flow"}
+                        {stringField(row, "mission_intent") || t("workflows.untitled")}
                       </span>
                       <span className="mt-1 block text-[11px]" style={{ color: "var(--text-muted)" }}>
                         {stringField(row, "status") || "-"} · {stringField(row, "track") || "-"}
@@ -174,12 +168,12 @@ export default function Workflows() {
 
         <section className="product-panel">
           <div className="product-panel-heading">
-            <h2>Trace waterfall</h2>
+            <h2>{t("workflows.waterfall")}</h2>
           </div>
           {traces.length === 0 ? (
             <div className="empty-state">
               <div className="empty-state-icon"><Icon name="layers" /></div>
-              <p>No company traces were returned yet.</p>
+              <p>{t("workflows.no_traces")}</p>
             </div>
           ) : (
             <>
@@ -204,10 +198,10 @@ export default function Workflows() {
               </div>
               {spans.length === 0 ? (
                 <div className="empty-state">
-                  <p>No trace spans were returned for the selected record.</p>
+                  <p>{t("workflows.no_spans")}</p>
                 </div>
               ) : (
-                <Waterfall spans={spans} />
+                <TraceWaterfall spans={spans} />
               )}
             </>
           )}
@@ -224,63 +218,4 @@ function MiniMetric({ label, value }: { label: string; value: number }) {
       <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{label}</div>
     </div>
   );
-}
-
-function Waterfall({ spans }: { spans: TraceSpan[] }) {
-  const minStart = Math.min(...spans.map((span) => span.started_at_ms));
-  const maxEnd = Math.max(...spans.map((span) => span.ended_at_ms || Date.now()));
-  const totalDuration = Math.max(1, maxEnd - minStart);
-  const depthMap = new Map<string, number>();
-  const sorted = [...spans].sort((a, b) => a.started_at_ms - b.started_at_ms);
-
-  for (const span of sorted) {
-    const parentDepth = span.parent_span_id ? depthMap.get(span.parent_span_id) ?? 0 : -1;
-    depthMap.set(span.span_id, parentDepth + 1);
-  }
-
-  return (
-    <div className="trace-waterfall">
-      {sorted.map((span) => {
-        const offset = ((span.started_at_ms - minStart) / totalDuration) * 100;
-        const width = (((span.ended_at_ms || Date.now()) - span.started_at_ms) / totalDuration) * 100;
-        const depth = depthMap.get(span.span_id) ?? 0;
-        const color = span.status === "error" ? "var(--red)" : span.status === "running" ? "var(--blue)" : "var(--accent)";
-        return (
-          <div key={span.span_id} className="trace-span-row">
-            <div className="trace-span-label" style={{ paddingLeft: depth * 14 }}>
-              <Icon name={kindIcon(span.kind)} />
-              <span className="truncate">{span.name}</span>
-            </div>
-            <div className="trace-span-track">
-              <div
-                className="trace-span-bar"
-                style={{ marginLeft: `${offset}%`, width: `${Math.max(2, width)}%`, background: color }}
-                title={`${(span.ended_at_ms || Date.now()) - span.started_at_ms}ms`}
-              />
-            </div>
-            <span className="trace-span-time">
-              {span.ended_at_ms != null ? `${span.ended_at_ms - span.started_at_ms}ms` : t("traces.running")}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function kindIcon(kind: string) {
-  switch (kind) {
-    case "mission":
-      return "sparkles" as const;
-    case "subtask":
-      return "list-checks" as const;
-    case "model_call":
-      return "brain" as const;
-    case "tool_call":
-      return "wrench" as const;
-    case "governance":
-      return "shield-check" as const;
-    default:
-      return "info" as const;
-  }
 }

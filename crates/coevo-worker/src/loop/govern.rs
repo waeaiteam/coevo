@@ -105,6 +105,9 @@ impl GovernGate {
     ) -> GateOutcome {
         match proposal {
             ActionProposal::Finish { .. } => GateOutcome::Allow,
+            // Subagent spawn is a delegation, not a resource action: the harness enforces
+            // the skill-authorization guard. The gate allows it to proceed.
+            ActionProposal::SpawnSubagent { .. } => GateOutcome::Allow,
             ActionProposal::AskHuman { question, .. } => GateOutcome::NeedApproval {
                 reason: format!("Human input required: {question}"),
                 action_digest: "ask-human".to_string(),
@@ -136,6 +139,8 @@ impl GovernGate {
     ) -> Result<(Option<&'a Tool>, Option<GateOutcome>), GateOutcome> {
         match proposal {
             ActionProposal::Finish { .. } => Ok((None, None)),
+            // Subagent spawn polices no tool; the harness applies the skill guard.
+            ActionProposal::SpawnSubagent { .. } => Ok((None, None)),
             ActionProposal::AskHuman { question, .. } => Ok((
                 None,
                 Some(GateOutcome::NeedApproval {
@@ -210,6 +215,10 @@ fn action_proposal_spec(proposal: &ActionProposal, tool: &Tool) -> ActionProposa
             input.clone(),
         ),
         ActionProposal::CallExecutor { task, .. } => ("call_executor".to_string(), task.clone()),
+        ActionProposal::SpawnSubagent { skill_id, task, .. } => (
+            "spawn_subagent".to_string(),
+            serde_json::json!({ "skill_id": skill_id, "task": task }),
+        ),
         ActionProposal::Finish { result, .. } => ("finish".to_string(), result.clone()),
         ActionProposal::AskHuman { .. } => ("ask_human".to_string(), serde_json::json!({})),
     };

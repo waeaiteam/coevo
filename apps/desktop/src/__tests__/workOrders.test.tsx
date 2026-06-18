@@ -384,7 +384,7 @@ describe("WorkOrders", () => {
 
     renderWorkOrders();
 
-    expect(await screen.findByText("Task Center")).toBeInTheDocument();
+    expect(await screen.findByText("Today's Work")).toBeInTheDocument();
     expect(screen.getByText("3 all tasks")).toBeInTheDocument();
     expect(screen.getByText("1 needs your confirmation")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Draft customer notification/i }));
@@ -423,7 +423,7 @@ describe("WorkOrders", () => {
     fireEvent.click(await screen.findByRole("button", { name: "View Timeline" }));
 
     expect(await screen.findByText("Previous run needed attention")).toBeInTheDocument();
-    expect(screen.getByText("Blocked")).toBeInTheDocument();
+    expect(screen.getByText("Paused")).toBeInTheDocument();
     expect(screen.queryByText("LifecycleError")).not.toBeInTheDocument();
   });
 
@@ -449,7 +449,7 @@ describe("WorkOrders", () => {
 
     renderWorkOrders();
 
-    expect(await screen.findByText("Task Center")).toBeInTheDocument();
+    expect(await screen.findByText("Today's Work")).toBeInTheDocument();
     expect(screen.getByText("Advanced settings")).toBeInTheDocument();
     expect(screen.queryByText(/^green$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Planned$/)).not.toBeInTheDocument();

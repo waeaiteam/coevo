@@ -41,7 +41,7 @@ export function StreamingText({
   return (
     <div className={className}>
       {displayedContent}
-      {isStreaming && <span className="streaming-cursor">▊</span>}
+      {isStreaming && <span className="streaming-cursor" aria-hidden="true">▊</span>}
     </div>
   );
 }

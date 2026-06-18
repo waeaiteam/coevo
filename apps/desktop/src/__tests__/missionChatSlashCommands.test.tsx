@@ -24,6 +24,7 @@ const org = vi.hoisted(() => ({
   createCompanyConversation: vi.fn(),
   appendCompanyConversationMessage: vi.fn(),
   createCompanyWorkOrder: vi.fn(),
+  dispatchPlan: vi.fn(),
   executeCompanyWorkOrder: vi.fn(),
   cancelCompanyWorkOrder: vi.fn(),
   decideCompanyWorkOrderApproval: vi.fn(),
@@ -57,6 +58,7 @@ vi.mock("../api/org", () => ({
   createCompanyConversation: org.createCompanyConversation,
   appendCompanyConversationMessage: org.appendCompanyConversationMessage,
   createCompanyWorkOrder: org.createCompanyWorkOrder,
+  dispatchPlan: org.dispatchPlan,
   executeCompanyWorkOrder: org.executeCompanyWorkOrder,
   cancelCompanyWorkOrder: org.cancelCompanyWorkOrder,
   decideCompanyWorkOrderApproval: org.decideCompanyWorkOrderApproval,
@@ -81,6 +83,8 @@ vi.mock("../api/bootstrap", () => ({
 
 vi.mock("../api/companies", () => ({
   getActiveOpcId: () => localStorage.getItem("coevo-opc-id") || "default-opc",
+  setActiveOpcId: (id: string) => localStorage.setItem("coevo-opc-id", id),
+  listCompanies: vi.fn(async () => []),
 }));
 
 vi.mock("../api/tauri", () => ({
@@ -153,6 +157,7 @@ describe("MissionChat slash commands", () => {
       title: "Analyze the README",
     });
     org.appendCompanyConversationMessage.mockResolvedValue({ ok: true });
+    org.dispatchPlan.mockResolvedValue(null);
     org.createCompanyWorkOrder.mockResolvedValue({
       ok: true,
       work_order_id: "wo-mission-1",

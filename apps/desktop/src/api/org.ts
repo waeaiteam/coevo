@@ -211,6 +211,34 @@ export async function createCompanyWorkOrder(opcId: string, payload: Row): Promi
   return isRecord(created) ? created : {};
 }
 
+export type DispatchSubtask = {
+  department: string;
+  assignee_agent_id: string;
+  goal: string;
+  rationale: string;
+};
+
+export type DispatchPlan = {
+  understanding: string;
+  subtasks: DispatchSubtask[];
+  model_backed: boolean;
+  secretary_agent_id: string;
+};
+
+/**
+ * Ask the company secretary (intelligent dispatcher) to understand the founder's intent
+ * and propose which department head(s) should handle it. Returns null if the endpoint is
+ * unavailable, so the caller can fall back to the plain compile flow.
+ */
+export async function dispatchPlan(opcId: string, intent: string): Promise<DispatchPlan | null> {
+  try {
+    const plan = await post<DispatchPlan>(`${companyPath(opcId)}/dispatch`, { intent });
+    return plan && Array.isArray(plan.subtasks) ? plan : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listMeetings(opcId: string): Promise<MeetingSummary[]> {
   const rows = await get<MeetingSummary[]>(`${companyPath(opcId)}/meetings`);
   return asArray<MeetingSummary>(rows);

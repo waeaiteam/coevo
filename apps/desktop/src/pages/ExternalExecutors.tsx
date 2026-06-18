@@ -13,7 +13,9 @@ export default function ExternalExecutors() {
   const [showReg, setShowReg] = useState(false);
   const [regForm, setRegForm] = useState<Record<string, string>>({ executor_id: "", display_name: "", source_type: "OpenClaw", risk_ceiling: "0.5", sandbox_level: "None" });
   const [workOrders, setWorkOrders] = useState<Record<string, unknown>[]>([]);
-  const [dryRunId, setDryRunId] = useState("");
+  // dry-run target work order, isolated per executor card so selecting one card's
+  // target does not change another's.
+  const [dryRunIds, setDryRunIds] = useState<Record<string, string>>({});
   const [dryRunResult, setDryRunResult] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -34,6 +36,9 @@ export default function ExternalExecutors() {
 
   async function reg() {
     if (!regForm.display_name) return;
+    // Honor the risk ceiling the user typed (clamped to 0..1); fall back to 0.5.
+    const parsedCeiling = Number(regForm.risk_ceiling);
+    const riskCeiling = Number.isFinite(parsedCeiling) ? Math.min(1, Math.max(0, parsedCeiling)) : 0.5;
     try {
       await registerExecutor({
         ...regForm,
@@ -41,7 +46,7 @@ export default function ExternalExecutors() {
         capabilities: ["read"],
         required_credentials: [],
         permission_boundary: {
-          max_risk_score: 0.5,
+          max_risk_score: riskCeiling,
           can_write_fact: false,
           can_write_decision: false,
           can_access_network: false,
@@ -57,6 +62,7 @@ export default function ExternalExecutors() {
         audit_callback_url: "",
         status: "Registered",
         runtime_endpoint: "",
+        risk_ceiling: riskCeiling,
         created_at_ms: Date.now(),
         updated_at_ms: Date.now(),
       });
@@ -78,7 +84,7 @@ export default function ExternalExecutors() {
       setDryRunResult(JSON.stringify(response));
       toast.success(t("toast.executor_dry_run_done"));
     } catch (e: unknown) {
-      setNotice("Dry run failed: " + (e instanceof Error ? e.message : String(e)));
+      setNotice(`${t("executors.dry_run_failed")}: ` + (e instanceof Error ? e.message : String(e)));
       toast.error(`${t("toast.executor_action_failed")}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
@@ -139,16 +145,16 @@ export default function ExternalExecutors() {
               <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: executor.status === "Registered" ? "var(--green-dim)" : "var(--yellow-dim)", color: executor.status === "Registered" ? "var(--green)" : "var(--yellow)" }}>{executor.status as string}</span>
             </div>
             <div className="text-xs space-y-0.5" style={{ color: "var(--text-muted)" }}>
-              <div>Type: {executor.source_type as string} | Sandbox: {executor.sandbox_level as string} | Risk: {String(executor.risk_ceiling)}</div>
+              <div>{t("executors.meta_type")}: {executor.source_type as string} | {t("executors.meta_sandbox")}: {executor.sandbox_level as string} | {t("executors.meta_risk")}: {String(executor.risk_ceiling)}</div>
               <div className="font-mono text-xs" style={{ color: "var(--accent)" }}>{executor.executor_id as string}</div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button onClick={() => runHealth(executor.executor_id as string)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{t("executors.health")}</button>
                 <button onClick={() => runDisable(executor.executor_id as string)} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{t("executors.disable")}</button>
-                <select value={dryRunId} onChange={(event) => setDryRunId(event.target.value)} className="text-xs px-1 py-1 rounded border" style={{ borderColor: "var(--border-accent)", color: "var(--text-secondary)" }}>
+                <select value={dryRunIds[executor.executor_id as string] || ""} onChange={(event) => setDryRunIds((prev) => ({ ...prev, [executor.executor_id as string]: event.target.value }))} className="text-xs px-1 py-1 rounded border" style={{ borderColor: "var(--border-accent)", color: "var(--text-secondary)" }}>
                   <option value="">{t("executors.select_work_order")}</option>
                   {workOrders.map((workOrder, itemIndex) => <option key={itemIndex} value={workOrder.work_order_id as string}>{(workOrder.mission_intent as string || "").slice(0, 30)}</option>)}
                 </select>
-                <button onClick={() => dryRun(executor.executor_id as string, dryRunId)} disabled={!dryRunId} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--yellow)", color: "var(--yellow)" }}>{t("executors.dry_run")}</button>
+                <button onClick={() => dryRun(executor.executor_id as string, dryRunIds[executor.executor_id as string] || "")} disabled={!dryRunIds[executor.executor_id as string]} className="text-xs px-2 py-1 rounded border" style={{ borderColor: "var(--yellow)", color: "var(--yellow)" }}>{t("executors.dry_run")}</button>
               </div>
             </div>
           </div>

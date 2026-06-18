@@ -71,6 +71,19 @@ impl ToolPolicyEngine {
                 required_approval: false,
             };
         }
+        // Write/execute-class local tools (workspace-write-file, workspace-shell) require
+        // the workspace_write sandbox tier, which only the Yellow track grants. Green maps
+        // to a read-only sandbox tier (SandboxProfile::from_track), so a Green task must not
+        // be able to reach these tools — otherwise it could mutate the workspace while the
+        // OS write-deny guard is only armed for read-only runs.
+        if track != "yellow" && matches!(tool.tool_type, ToolType::LocalProcessSandbox) {
+            return ToolPolicyDecision {
+                allowed: false,
+                reason: "Workspace write/execute tools require the Yellow track".into(),
+                hidden_from_model: true,
+                required_approval: false,
+            };
+        }
         let risk = Self::track_risk(track);
         if tool.risk_ceiling < risk {
             return ToolPolicyDecision {
@@ -282,6 +295,34 @@ mod tests {
             vec!["execute"],
         );
         assert!(!ToolPolicyEngine::evaluate(&t, "red", &[], &[]).allowed);
+    }
+    #[test]
+    fn green_blocks_workspace_write_tools() {
+        // A Green-track run maps to a read-only sandbox tier, so local write/execute
+        // tools must be hidden — otherwise the workspace could be mutated with no guard.
+        let t = make_tool(
+            "workspace-write-file",
+            0.3,
+            true,
+            false,
+            ToolType::LocalProcessSandbox,
+            vec!["WriteFile"],
+        );
+        let decision = ToolPolicyEngine::evaluate(&t, "green", &[], &[]);
+        assert!(!decision.allowed);
+        assert!(decision.hidden_from_model);
+    }
+    #[test]
+    fn yellow_allows_workspace_write_tools() {
+        let t = make_tool(
+            "workspace-write-file",
+            0.6,
+            true,
+            false,
+            ToolType::LocalProcessSandbox,
+            vec!["WriteFile"],
+        );
+        assert!(ToolPolicyEngine::evaluate(&t, "yellow", &[], &[]).allowed);
     }
     #[test]
     fn credential_missing() {

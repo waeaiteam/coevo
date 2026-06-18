@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>coevo OPC 架构闭环 — 真实流程图</title>
+<style>
+  :root {
+    --bg: #0b1020; --surface: #141a2e; --surface2: #1b2236; --border: #2a3350;
+    --text: #e6ebf5; --muted: #93a0bd; --accent: #6ea8fe;
+    --green: #4ade80; --yellow: #fbbf24; --red: #f87171; --purple: #c084fc;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    line-height: 1.6; padding: 32px 20px 80px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 28px; }
+  h2 { font-size: 18px; margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h2 .num { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+  p { font-size: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 24px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  .real { background: var(--green); } .orch { background: var(--accent); }
+  .stub { background: var(--muted); } .gate { background: var(--yellow); }
+
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .node {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 18px; position: relative;
+  }
+  .node.lane { border-left: 4px solid var(--accent); }
+  .node .title { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .node .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .node .file { font-family: var(--mono); font-size: 11px; color: var(--accent); margin-top: 6px; word-break: break-all; }
+  .arrow { text-align: center; color: var(--muted); font-size: 20px; padding: 4px 0; }
+  .arrow small { display:block; font-size: 11px; color: var(--muted); }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+
+  .tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+  .tag.real { background: rgba(74,222,128,.15); color: var(--green); }
+  .tag.orch { background: rgba(110,168,254,.15); color: var(--accent); }
+  .tag.stub { background: rgba(147,160,189,.15); color: var(--muted); }
+  .tag.gate { background: rgba(251,191,36,.15); color: var(--yellow); }
+
+  .track-bar { display: flex; gap: 10px; margin: 14px 0; }
+  .track { flex: 1; border-radius: 10px; padding: 12px; border: 1px solid var(--border); }
+  .track.g { border-color: var(--green); background: rgba(74,222,128,.06); }
+  .track.y { border-color: var(--yellow); background: rgba(251,191,36,.06); }
+  .track.r { border-color: var(--red); background: rgba(248,113,113,.06); }
+  .track h4 { margin: 0 0 6px; font-size: 14px; }
+  .track p { margin: 0; font-size: 12px; color: var(--muted); }
+
+  .loop-box { border: 2px dashed var(--purple); border-radius: 14px; padding: 18px; background: rgba(192,132,252,.05); }
+  .loop-box .loop-title { color: var(--purple); font-weight: 700; font-size: 14px; margin-bottom: 12px; }
+  .step { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+  .step:last-child { border-bottom: none; }
+  .step .n { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--surface2); color: var(--purple);
+    display: grid; place-items: center; font-family: var(--mono); font-size: 12px; font-weight: 700; }
+  .step .body { flex: 1; }
+  .step .body b { font-size: 13px; }
+  .step .body div { font-size: 12px; color: var(--muted); }
+
+  .callout { background: var(--surface2); border-radius: 10px; padding: 14px 16px; margin: 16px 0; font-size: 13px; border-left: 3px solid var(--accent); }
+  .callout.warn { border-left-color: var(--yellow); }
+  code { font-family: var(--mono); background: var(--surface2); padding: 1px 6px; border-radius: 5px; font-size: 12px; color: var(--purple); }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  td .file { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+  .footer { margin-top: 50px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>coevo OPC 闭环架构（真实代码版）</h1>
+  <p class="sub">基于当前代码逐行核对绘制 · OPC = One-Person Company（一人公司）· 标注每个环节的真实文件位置</p>
+
+  <div class="legend">
+    <span><i class="dot real"></i>真实可用</span>
+    <span><i class="dot orch"></i>服务端编排</span>
+    <span><i class="dot gate"></i>治理闸门</span>
+    <span><i class="dot stub"></i>占位/未接通</span>
+  </div>
+
+  <!-- ============ SECTION 1: 主执行脊柱 ============ -->
+  <h2><span class="num">01</span>主执行脊柱：从一句话到受治理的执行</h2>
+  <p>用户在对话入口说一句话（"整理本周客户线索"），到 AI 员工真正动手，要走完下面这条链。这是整个平台的<strong>主闭环</strong>，每一步都真实存在。</p>
+
+  <div class="flow">
+    <div class="node lane">
+      <div class="title">① 客户对话入口 <span class="tag orch">前端</span></div>
+      <div class="meta">创始人用自然语言描述任务。完全权限下自动执行；否则就地确认。</div>
+      <div class="file">apps/desktop/src/pages/MissionChat.tsx</div>
+    </div>
+    <div class="arrow">↓ <small>POST /mcl/compile</small></div>
+
+    <div class="node lane">
+      <div class="title">② MCL 编译 <span class="tag real">真实</span></div>
+      <div class="meta">把自然语言意图编译成结构化任务合约（MCL Contract），算出 contract_hash。这是"意图 → 可审计契约"的转换。</div>
+      <div class="file">apps/server/src/handlers/compile.rs · router.rs:559 /mcl/compile</div>
+    </div>
+    <div class="arrow">↓ <small>POST /router/route</small></div>
+
+    <div class="node lane">
+      <div class="title">③ 路由规划 <span class="tag real">真实</span></div>
+      <div class="meta">根据合约选出能胜任的 AI 员工，生成 plan_hash。决定"这活儿派给谁"。</div>
+      <div class="file">apps/server/src/handlers/route.rs · router.rs:560 /router/route</div>
+    </div>
+    <div class="arrow">↓ <small>POST /companies/{opc}/work-orders</small></div>
+
+    <div class="node lane">
+      <div class="title">④ 创建工单 + 治理裁定 <span class="tag gate">闸门</span></div>
+      <div class="meta">服务端权威地给任务分轨道（绿/黄/红），算出 governance_verdict。<strong>客户端无法篡改轨道</strong>。</div>
+      <div class="file">apps/server/src/handlers/opc.rs · resolve_governance_verdict()</div>
+    </div>
+    <div class="arrow">↓ <small>POST .../work-orders/{id}/execute</small></div>
+
+    <div class="node lane">
+      <div class="title">⑤ WorkerHarness 产品级闸门 <span class="tag gate">闸门</span></div>
+      <div class="meta">执行前最后一道关：黄/红轨没有人工确认回执就拦下（YellowApprovalRequired）。绿轨直接放行。</div>
+      <div class="file">crates/coevo-worker/src/harness.rs:336 run_work_order · :373 审批检查</div>
+    </div>
+    <div class="arrow">↓ <small>AgentSubHarness::execute</small></div>
+
+    <div class="node lane" style="border-left-color: var(--purple);">
+      <div class="title">⑥ AgentSubHarness — ReAct 治理循环 <span class="tag real">真实</span></div>
+      <div class="meta">AI 员工真正干活的地方：思考 → 提议动作 → 过治理门 → 调工具/执行器 → 观察 → 再思考。详见第 03 节。</div>
+      <div class="file">crates/coevo-worker/src/harness.rs:586 · agent_harness.rs</div>
+    </div>
+    <div class="arrow">↓ <small>worker_events 表 · 750ms 轮询 SSE</small></div>
+
+    <div class="node lane">
+      <div class="title">⑦ 流式回传 UI <span class="tag real">真实</span></div>
+      <div class="meta">每一步思考/工具调用写入 worker_events 表，前端通过 SSE 实时看到"AI 在干活"。</div>
+      <div class="file">GET /opc/workers/runs/{run_id}/events/stream · WorkerStreamView.tsx</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>持久化全程真实：</strong>每个任务的会话、运行、步骤、事件、工具调用、成长证据都落 SQLite
+    （worker_sessions / worker_runs / worker_steps / worker_events / worker_tool_calls）。可完整回放、可审计。
+  </div>
+
+  <!-- ============ SECTION 2: 三轨治理 ============ -->
+  <h2><span class="num">02</span>三轨治理：风险决定自动化程度</h2>
+  <p>第 ④ 步服务端按任务风险（关键词 + 风险打分）把每个任务分到一条轨道，决定它能不能自动跑。</p>
+
+  <div class="track-bar">
+    <div class="track g">
+      <h4>🟢 绿轨 · 自动执行</h4>
+      <p>只读 / 分析类低风险任务。直接在受治理沙箱里自动跑完，无需确认。读文件、查资料、总结。</p>
+    </div>
+    <div class="track y">
+      <h4>🟡 黄轨 · 需确认</h4>
+      <p>会改动工作区的任务（写文件、执行 shell）。必须有人工确认回执才执行。完全权限下前端自动代为确认。</p>
+    </div>
+    <div class="track r">
+      <h4>🔴 红轨 · 高风险</h4>
+      <p>生产/删数据/支付类。需显式人工批准 + 紧急租约 + 真 Ed25519 双签（监控签 + 诊断签）才放行。</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>关键安全修复（本轮）：</strong>绿轨任务映射到<strong>只读</strong>沙箱，此前却能调用 <code>workspace-write-file</code>/<code>workspace-shell</code> 写盘——已修：非黄轨一律禁用写/执行类工具。
+    <div class="file" style="margin-top:6px;">crates/coevo-worker/src/tool_policy.rs evaluate()</div>
+  </div>
+
+  <!-- ============ SECTION 3: ReAct 循环 ============ -->
+  <h2><span class="num">03</span>AgentSubHarness 内部：ReAct 治理循环</h2>
+  <p>这是单个 AI 员工"干活"的真实循环（最多约 16 轮）。<strong>每一次工具调用都必须穿过治理门 GovernGate，没有旁路。</strong></p>
+
+  <div class="loop-box">
+    <div class="loop-title">⟳ ReAct Loop（crates/coevo-worker/src/agent_harness.rs · loop/govern.rs）</div>
+    <div class="step"><div class="n">1</div><div class="body"><b>BuildContext 构建上下文</b><div>装载公司记忆、技能、员工护照、任务合约。</div></div></div>
+    <div class="step"><div class="n">2</div><div class="body"><b>ModelCall 调真实大模型</b><div>OpenAI / DeepSeek / Anthropic 真 HTTP+SSE 流式。模型返回"思考 + 提议的动作"。</div></div></div>
+    <div class="step"><div class="n">3</div><div class="body"><b>GovernGate.adjudicate 治理裁定</b> <span class="tag gate">闸门</span><div>对提议的动作裁定：<b>允许 / 拒绝 / 需审批</b>。先过 ToolPolicy（工具粗筛），再过 RiskGate（策略引擎 → 一票否决 → 信心 vs 风险）。</div></div></div>
+    <div class="step"><div class="n">4</div><div class="body"><b>执行工具 / 外部执行器</b><div>本地 5 工具（读文件/HTTP/写文件/shell/GitHub）或绑定的外部执行器（Docker/本地进程/HTTP 运行时）。只读轨在 OS 沙箱守卫内（Windows icacls / Unix chmod）。</div></div></div>
+    <div class="step"><div class="n">5</div><div class="body"><b>Observation 观察结果</b><div>工具结果写回历史，作为下一轮的输入。</div></div></div>
+    <div class="step"><div class="n">6</div><div class="body"><b>判定：继续循环 or finish</b><div>没完成就回到第 2 步；完成则产出结果 + 反思（Reflection）+ 可能的技能进化提议。</div></div></div>
+  </div>
+
+  <div class="callout">
+    <strong>治理不变量（写死在架构里）：</strong>① 轨道由服务端权威判定，客户端不可信；② 一切工具调用必经 GovernGate 且落 worker_events；③ 模型输出永远不等于授权；④ 事实写入必须有来源证明（认知海关）。
+  </div>
+
+  <!-- ============ SECTION 4: 多 agent 协作真相 ============ -->
+  <h2><span class="num">04</span>AI 员工之间怎么"通信"？（三层智能协作）</h2>
+  <p>已从"写死的脚本编排"升级为<strong>三层智能组织</strong>：秘书智能调度 → 部门主管 → 主管按 skill 动态建子团队，主管之间通过真实 A2A 总线通信。</p>
+
+  <div class="row">
+    <div class="node">
+      <div class="title">秘书智能调度 <span class="tag real">真实</span></div>
+      <div class="meta">建公司自动创建的秘书 agent，用<b>真大模型</b>理解创始人意图，产出"分派计划"（understanding + 该派哪些部门）。关键词分类降级为兜底。</div>
+      <div class="file">handlers/dispatch.rs · seed.rs SECRETARY_AGENT_ID</div>
+    </div>
+    <div class="node">
+      <div class="title">主管动态建 subagent <span class="tag real">真实</span></div>
+      <div class="meta">ReAct 循环新增 <code>spawn_subagent</code> 提议：主管按 skill 临时召集子助手。治理守卫：只能委派主管自己持有的 skill，不可递归。</div>
+      <div class="file">loop/proposal.rs · agent_harness.rs SpawnSubagent 臂</div>
+    </div>
+    <div class="node">
+      <div class="title">主管间 A2A 通信 <span class="tag real">真实</span></div>
+      <div class="meta">真·进程内消息总线：注册表 + 真实投递到收件箱（不再是 echo）。会议室/辩论的立场由<b>角色</b>自然产生（风控/治理类天然质疑），非写死 critic 必反对。</div>
+      <div class="file">coevo-adapters/a2a_router.rs InProcessA2aRouter · organization.rs inferred_stance</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>三种通信，各归其位：</strong>
+    <b>调度</b>（秘书→主管，dispatch.rs LLM 规划）·
+    <b>A2A</b>（主管↔主管，InProcessA2aRouter 真投递）·
+    <b>subagent</b>（主管→子助手，spawn_subagent 受治理）。
+    治理不变量仍在：秘书/主管/subagent 只"提议"，轨道与授权永远由服务端治理判定。
+    跨系统/跨公司的标准 A2A（Google 协议）是未来在此进程内总线之上加传输层的扩展点。
+  </div>
+
+  <!-- ============ SECTION 5: 组件真实性地图 ============ -->
+  <h2><span class="num">05</span>组件真实性地图</h2>
+  <table>
+    <thead><tr><th>组件</th><th>状态</th><th>说明 / 位置</th></tr></thead>
+    <tbody>
+      <tr><td>MCL 编译 → 路由 → 工单 → 执行</td><td><span class="tag real">真实</span></td><td>主执行脊柱，端到端跑通<div class="file">handlers/compile.rs · route.rs · opc.rs · harness.rs</div></td></tr>
+      <tr><td>三轨治理门 GovernGate</td><td><span class="tag real">真实</span></td><td>每次工具调用必经，无旁路<div class="file">loop/govern.rs adjudicate()</div></td></tr>
+      <tr><td>真实大模型网关（OpenAI/DeepSeek/Anthropic）</td><td><span class="tag real">真实</span></td><td>真 HTTP + SSE 流式解析<div class="file">crates/coevo-models</div></td></tr>
+      <tr><td>SSE 流式回传 + 持久化</td><td><span class="tag real">真实</span></td><td>worker_events 表 + 750ms 轮询<div class="file">handlers/workers.rs</div></td></tr>
+      <tr><td>本地工具（读文件/HTTP/写文件/shell/GitHub）</td><td><span class="tag real">真实</span></td><td>5 个硬编码工具<div class="file">tool_registry.rs</div></td></tr>
+      <tr><td>MCP 客户端（JSON-RPC 2.0）</td><td><span class="tag real">真实</span></td><td>initialize/tools-list/call，stdio + HTTP<div class="file">coevo-adapters/mcp_client</div></td></tr>
+      <tr><td>外部执行器（Docker/本地进程/HTTP）</td><td><span class="tag real">真实</span></td><td>运行时绑定 build_executor_ref<div class="file">coevo-executors</div></td></tr>
+      <tr><td>OpenAPI 导入器（本轮新增）</td><td><span class="tag real">真实</span></td><td>第三方 spec → 工具，真 HTTP 已测<div class="file">openapi_import.rs</div></td></tr>
+      <tr><td>Ed25519 身份验证（本轮新增）</td><td><span class="tag real">真实</span></td><td>真椭圆曲线验签，已装为生产 provider<div class="file">identity_ed25519.rs</div></td></tr>
+      <tr><td>红轨双签（Ed25519 lease）</td><td><span class="tag real">真实</span></td><td>监控签 + 诊断签真验证<div class="file">coevo-risk/lease.rs</div></td></tr>
+      <tr><td>多 agent 协作（秘书调度/subagent/A2A）</td><td><span class="tag real">真实</span></td><td>三层智能组织，主管间真投递<div class="file">dispatch.rs · a2a_router.rs · proposal.rs</div></td></tr>
+      <tr><td>策略引擎</td><td><span class="tag stub">占位</span></td><td>关键词 mock；生产 fail-closed 全拒；真 OPA 需业务定红线<div class="file">coevo-policy/mock.rs</div></td></tr>
+      <tr><td>A2A 跨系统标准协议</td><td><span class="tag stub">占位</span></td><td>内部进程内总线已真实；跨公司/跨系统标准协议待加传输层<div class="file">coevo-adapters/a2a_router.rs</div></td></tr>
+    </tbody>
+  </table>
+
+
+</div>
+<div class="footer">本图由实际代码路径生成，非概念图 · coevo OPC 平台</div>
+</body>
+</html>

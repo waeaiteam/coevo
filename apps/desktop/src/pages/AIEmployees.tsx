@@ -89,7 +89,7 @@ export default function AIEmployees() {
   const [emps, setEmps] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
-  const [seedResult, setSeedResult] = useState("");
+  const [seedResult, setSeedResult] = useState<{ text: string; ok: boolean } | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [agentMemory, setAgentMemory] = useState<Record<string, unknown> | null>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -114,13 +114,13 @@ export default function AIEmployees() {
 
   async function seed() {
     setSeeding(true);
-    setSeedResult("");
+    setSeedResult(null);
     try {
       const r = await seedEmployees() as Record<string, unknown>;
-      setSeedResult(t("employees.seed_result").replace("{inserted}", String(r.inserted ?? 0)).replace("{total}", String(r.total ?? 0)));
+      setSeedResult({ text: t("employees.seed_result").replace("{inserted}", String(r.inserted ?? 0)).replace("{total}", String(r.total ?? 0)), ok: true });
       await load();
     } catch(e: unknown) {
-      setSeedResult("Error: " + (e instanceof Error ? e.message : String(e)));
+      setSeedResult({ text: e instanceof Error ? e.message : String(e), ok: false });
     }
     setSeeding(false);
   }
@@ -174,7 +174,7 @@ export default function AIEmployees() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {seedResult && <span className="text-xs" style={{ color: seedResult.startsWith("Error") ? "var(--red)" : "var(--green)" }}>{seedResult}</span>}
+          {seedResult && <span className="text-xs" style={{ color: seedResult.ok ? "var(--green)" : "var(--red)" }}>{seedResult.text}</span>}
           <button onClick={() => setShowCreate(true)} className="product-link-button">
             <Icon name="plus" /> {t("workbench.new_employee")}
           </button>
@@ -194,7 +194,7 @@ export default function AIEmployees() {
         {t("employees.company_hub_note")}
       </div>
 
-      {loading && <div className="text-xs" style={{ color: "var(--text-muted)" }}>Loading...</div>}
+      {loading && <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("settings.loading")}</div>}
       {!loading && emps.length === 0 && <div className="text-xs" style={{ color: "var(--text-muted)" }}>{t("employees.empty")}</div>}
 
       <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">

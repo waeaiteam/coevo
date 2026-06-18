@@ -4,9 +4,24 @@
 use coevo_core::opc::*;
 use coevo_core::reputation::ReputationVector;
 
+/// The company secretary's agent id. Created for every company; reports to the founder.
+pub const SECRETARY_AGENT_ID: &str = "agent-secretary-01";
+
+/// System prompt that makes the secretary an intelligent dispatcher rather than a worker.
+pub const SECRETARY_SYSTEM_PROMPT: &str = "You are the company Secretary, the founder's chief of staff. \
+You do not do the work yourself. Your job is to truly understand what the founder is asking for \
+(in plain language, not keywords), decide which department(s) should handle it, and break the request \
+into clear sub-tasks for the responsible department heads. Consider the company's existing departments, \
+employees, and skills. Be decisive but never expand scope beyond what the founder asked. You only propose \
+who should do what — you never decide risk levels or grant authority; the governance layer does that.";
+
 pub fn seed_employees() -> Vec<AgentEmployee> {
     let now = chrono::Utc::now().timestamp_millis() as u64;
     vec![
+        // Company secretary: the intelligent dispatcher. Created for every company,
+        // reports directly to the founder, understands intent and routes work to the
+        // right department heads. See coevo-server dispatch.rs.
+        secretary(now),
         employee(
             "agent-founder-01",
             "Founder Assistant",
@@ -169,4 +184,24 @@ fn employee(
         created_at_ms: now,
         updated_at_ms: now,
     }
+}
+
+/// Build the company secretary employee: the dispatcher that reports to the founder.
+fn secretary(now: u64) -> AgentEmployee {
+    let mut s = employee(
+        SECRETARY_AGENT_ID,
+        "Secretary",
+        Department::FounderOffice,
+        "Secretary",
+        vec!["Suggestion"],
+        vec!["DRAFT_ONLY"],
+        0.3,
+        now,
+    );
+    // The secretary answers to the founder directly, not to the founder-assistant.
+    s.supervisor_agent_id = None;
+    s.system_prompt = SECRETARY_SYSTEM_PROMPT.to_string();
+    s.passport.roles = vec!["Secretary".to_string(), "Dispatcher".to_string()];
+    s.passport.capabilities = vec!["planning".to_string(), "dispatch".to_string()];
+    s
 }

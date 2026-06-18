@@ -155,7 +155,7 @@ export default function EmployeePlayground({
                 onChange={(e) => updateModel(index, e.target.value)}
               />
               {models.length > 1 && (
-                <button type="button" className="icon-button" onClick={() => removeModel(index)} aria-label="remove">
+                <button type="button" className="icon-button" onClick={() => removeModel(index)} aria-label={t("play.remove_model")}>
                   <Icon name="x" />
                 </button>
               )}

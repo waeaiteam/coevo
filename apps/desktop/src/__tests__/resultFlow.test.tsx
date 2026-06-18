@@ -162,7 +162,7 @@ describe("Result flow coherence", () => {
     await waitFor(() => expect(org.listCompanyWorkOrders).toHaveBeenCalled());
     expect(await screen.findByText("Ready to start")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Task" })).toHaveAttribute("href", "/tasks/wo-1");
-    expect(screen.getByRole("link", { name: "Open Task Center" })).toHaveAttribute("href", "/work-orders");
+    expect(screen.getByRole("link", { name: "Open Task Center" })).toHaveAttribute("href", "/tasks");
     expect(screen.queryByRole("link", { name: "Start Task" })).not.toBeInTheDocument();
   });
 

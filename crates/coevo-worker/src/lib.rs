@@ -5,6 +5,7 @@ pub mod event_stream;
 pub mod harness;
 pub mod r#loop;
 pub mod memory_context;
+pub mod openapi_import;
 pub mod queue;
 pub mod reflection;
 pub mod self_upgrade;

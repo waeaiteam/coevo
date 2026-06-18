@@ -5,17 +5,20 @@ import { MemoryRouter } from "react-router-dom";
 import CommandPalette from "../components/CommandPalette";
 import { ThemeProvider } from "../hooks/useTheme";
 import { setLanguage } from "../settings/i18n";
+import { setAdvancedMode } from "../settings/appMode";
 
 describe("CommandPalette", () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    setAdvancedMode(false);
     document.documentElement.removeAttribute("data-theme");
     setLanguage("en");
   });
 
-  it("opens with ctrl+k and keeps advanced pages discoverable", () => {
+  it("opens with ctrl+k and keeps advanced pages discoverable in advanced mode", () => {
     setLanguage("en");
+    setAdvancedMode(true);
     render(
       <MemoryRouter>
         <ThemeProvider>
@@ -52,6 +55,29 @@ describe("CommandPalette", () => {
 
     expect(screen.getByText("No results")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Risk Gate/i })).not.toBeInTheDocument();
+  });
+
+  it("hides advanced pages in the default (non-advanced) surface", () => {
+    setLanguage("en");
+    setAdvancedMode(false);
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <CommandPalette />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "contracts" },
+    });
+    expect(screen.getByText("No results")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search pages or commands..."), {
+      target: { value: "team" },
+    });
+    expect(screen.getByRole("button", { name: /My Team/i })).toBeInTheDocument();
   });
 
   it("uses the theme context to switch data-theme", () => {

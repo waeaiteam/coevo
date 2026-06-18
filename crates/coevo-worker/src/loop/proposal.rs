@@ -14,6 +14,16 @@ pub enum ActionProposal {
         task: serde_json::Value,
         rationale: String,
     },
+    /// A department head temporarily assembling a sub-agent to handle a focused piece of
+    /// work that needs a specific skill. The sub-agent runs a bounded, governed sub-loop
+    /// and hands its result back; it is ephemeral and cannot itself spawn further agents.
+    SpawnSubagent {
+        /// Skill the head wants the sub-agent to apply (must exist & be within the head's ceiling).
+        skill_id: String,
+        /// The focused goal handed to the sub-agent.
+        task: String,
+        rationale: String,
+    },
     Finish {
         summary: String,
         #[serde(default = "empty_json_object")]

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "./Icon";
+import { t } from "../settings/i18n";
 
 export type ToastKind = "success" | "error" | "info";
 
@@ -18,6 +19,9 @@ export interface ToastApi {
 }
 
 const AUTO_DISMISS_MS = 5000;
+// Errors stay until dismissed (auto-dismiss = 0). Cap the visible stack so a burst of
+// failures can't bury the screen.
+const MAX_VISIBLE = 5;
 
 // A no-op fallback so components can call useToast() outside a ToastProvider
 // (e.g. isolated unit tests) without crashing. Real UI is provided by the
@@ -46,8 +50,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  const dismiss = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  const clearTimer = useCallback((id: string) => {
     const timer = timersRef.current.get(id);
     if (timer) {
       clearTimeout(timer);
@@ -55,17 +58,37 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const dismiss = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    clearTimer(id);
+  }, [clearTimer]);
+
+  const scheduleDismiss = useCallback((id: string, kind: ToastKind) => {
+    // Errors require an explicit close so the user can read and act on them.
+    if (kind === "error") return;
+    clearTimer(id);
+    const timer = setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
+    timersRef.current.set(id, timer);
+  }, [clearTimer, dismiss]);
+
   const show = useCallback(
     (message: string, kind: ToastKind = "info") => {
       const text = String(message || "").trim();
       if (!text) return "";
       const id = crypto.randomUUID();
-      setToasts((prev) => [...prev, { id, kind, message: text }]);
-      const timer = setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
-      timersRef.current.set(id, timer);
+      setToasts((prev) => {
+        const next = [...prev, { id, kind, message: text }];
+        // Trim oldest beyond the cap (and clear their timers).
+        while (next.length > MAX_VISIBLE) {
+          const removed = next.shift();
+          if (removed) clearTimer(removed.id);
+        }
+        return next;
+      });
+      scheduleDismiss(id, kind);
       return id;
     },
-    [dismiss],
+    [scheduleDismiss, clearTimer],
   );
 
   const api = useMemo<ToastApi>(
@@ -90,9 +113,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-stack" role="region" aria-live="polite" aria-label="Notifications">
+      <div className="toast-stack" role="region" aria-live="polite" aria-label={t("toast.region_label")}>
         {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast-${toast.kind}`} role="status">
+          <div
+            key={toast.id}
+            className={`toast toast-${toast.kind}`}
+            role={toast.kind === "error" ? "alert" : "status"}
+            onMouseEnter={() => clearTimer(toast.id)}
+            onMouseLeave={() => scheduleDismiss(toast.id, toast.kind)}
+          >
             <span className="toast-icon">
               <Icon name={iconForKind[toast.kind]} />
             </span>
@@ -100,7 +129,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               className="toast-close"
-              aria-label="Dismiss notification"
+              aria-label={t("toast.dismiss")}
               onClick={() => dismiss(toast.id)}
             >
               <Icon name="x" />

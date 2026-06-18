@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>coevo — One-Person Company AI Workspace</title>
+    <style>
+      /* Paint a neutral background that follows the OS theme before the app CSS loads,
+         so there is no white flash on launch (especially in dark mode). */
+      :root { color-scheme: light dark; background: #ffffff; }
+      @media (prefers-color-scheme: dark) { :root { background: #0b1020; } }
+      html, body { margin: 0; height: 100%; background: inherit; }
+    </style>
   </head>
   <body class="antialiased">
     <div id="root"></div>

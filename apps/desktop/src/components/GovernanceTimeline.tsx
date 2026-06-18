@@ -147,7 +147,7 @@ export default function GovernanceTimeline({
                   aria-label={span.type === "ApprovalRequired" ? t("timeline.approval_title") : normalizeEventLabel(span.type, span.label || span.type)}
                   onClick={() => setExpanded((prev) => ({ ...prev, [span.id]: !isOpen }))}
                 >
-                  <span className="span-icon" aria-hidden="true">{spanIcons[span.type] || "•"}</span>
+                  <span className="span-icon" aria-hidden="true"><Icon name={spanIcons[span.type] ?? "info"} /></span>
                   <span className="min-w-0">
                     <span className="span-type block truncate">{normalizeEventLabel(span.type, span.label || span.type)}</span>
                     {span.subtitle && <span className="span-meta block truncate">{span.subtitle}</span>}
@@ -177,7 +177,7 @@ export default function GovernanceTimeline({
                       <TimelineField label={t("timeline.field_gate")} value={span.gate} />
                     </div>
                     {isApproval && (
-                      <ApprovalCard
+                      <TimelineApprovalControl
                         span={span}
                         comment={comments[span.id] || ""}
                         onComment={(value) => setComments((prev) => ({ ...prev, [span.id]: value }))}
@@ -205,7 +205,10 @@ function TimelineField({ label, value, full = false }: { label: string; value: u
   );
 }
 
-function ApprovalCard({
+// Inline approval control embedded in a timeline span. This is distinct from the
+// standalone components/ApprovalCard.tsx (used by MissionChat/WorkOrders): this one is
+// span-scoped with a controlled comment, driven by the timeline's onApprove/onReject.
+function TimelineApprovalControl({
   span,
   comment,
   onComment,

@@ -98,7 +98,12 @@ export default function TaskDetail() {
   }, [activeOpcId]);
 
   const task = useMemo(
-    () => tasks.find((row) => stringField(row, "work_order_id") === requestedId) || tasks[0],
+    () => {
+      // When a specific task id is in the URL, only show that task — never silently
+      // fall back to the first one (which would misrepresent which task you opened).
+      if (requestedId) return tasks.find((row) => stringField(row, "work_order_id") === requestedId);
+      return tasks[0];
+    },
     [requestedId, tasks],
   );
   const taskId = stringField(task, "work_order_id");

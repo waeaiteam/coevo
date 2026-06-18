@@ -20,6 +20,7 @@ const org = vi.hoisted(() => ({
   appendCompanyConversationMessage: vi.fn(),
   createCompanyConversation: vi.fn(),
   createCompanyWorkOrder: vi.fn(),
+  dispatchPlan: vi.fn(),
   executeCompanyWorkOrder: vi.fn(),
   getCompanyProfileById: vi.fn(),
   listCompanyConversationMessages: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("../api/org", () => ({
   appendCompanyConversationMessage: org.appendCompanyConversationMessage,
   createCompanyConversation: org.createCompanyConversation,
   createCompanyWorkOrder: org.createCompanyWorkOrder,
+  dispatchPlan: org.dispatchPlan,
   executeCompanyWorkOrder: org.executeCompanyWorkOrder,
   getCompanyProfileById: org.getCompanyProfileById,
   listCompanyConversationMessages: org.listCompanyConversationMessages,
@@ -139,6 +141,7 @@ describe("mission session behavior", () => {
     client.executeWorkOrder.mockResolvedValue({ run_id: "run-a-1" });
     org.executeCompanyWorkOrder.mockResolvedValue({ run_id: "run-a-1", status: "Running" });
     org.listCompanyWorkOrders.mockResolvedValue([]);
+    org.dispatchPlan.mockResolvedValue(null);
   });
 
   afterEach(() => {

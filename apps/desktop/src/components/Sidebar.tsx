@@ -3,20 +3,30 @@ import { Link, NavLink } from "react-router-dom";
 import { getActiveOpcId } from "../api/companies";
 import { listCompanyConversations } from "../api/org";
 import { getLocalIdentity } from "../settings/identity";
+import { useAdvancedMode } from "../hooks/useAdvancedMode";
 import { t, useLanguage } from "../settings/i18n";
 import { clearMissionSession, writeActiveConversationId } from "../utils/missionSession";
 import { formatRelativeTime, shortText, stringField, type ProductRow } from "../utils/productSurface";
 
-type IconName = "new-chat" | "company" | "market" | "projects" | "tasks" | "timeline" | "settings" | "advanced" | "workflows";
+type IconName = "new-chat" | "company" | "market" | "projects" | "tasks" | "timeline" | "settings" | "advanced" | "workflows" | "team" | "audit" | "executors" | "memory";
 
+// Default founder surface: the calm, jargon-free core workflow.
 const primaryLinks: Array<{ to: string; key: string; icon: IconName; end?: boolean }> = [
+  { to: "/team", key: "nav.my_team", icon: "team" },
+  { to: "/tasks", key: "nav.today", icon: "tasks" },
+  { to: "/projects", key: "nav.projects", icon: "projects" },
+  { to: "/settings/general", key: "nav.settings", icon: "settings" },
+];
+
+// Advanced mode adds the full operator console on top of the core workflow.
+const advancedLinks: Array<{ to: string; key: string; icon: IconName; end?: boolean }> = [
   { to: "/company", key: "nav.my_company", icon: "company" },
   { to: "/market", key: "nav.talent_market", icon: "market" },
-  { to: "/projects", key: "nav.projects", icon: "projects" },
-  { to: "/work-orders", key: "nav.tasks", icon: "tasks" },
   { to: "/workflows", key: "workflows.title", icon: "workflows" },
   { to: "/timeline", key: "nav.timeline", icon: "timeline" },
-  { to: "/settings/general", key: "nav.settings", icon: "settings" },
+  { to: "/audit", key: "nav.audit", icon: "audit" },
+  { to: "/executors", key: "nav.executors", icon: "executors" },
+  { to: "/memory", key: "nav.memory", icon: "memory" },
 ];
 
 function NavIcon({ name }: { name: IconName }) {
@@ -84,6 +94,31 @@ function NavIcon({ name }: { name: IconName }) {
         <path d="M18 9a9 9 0 0 1-9 9" />
       </>
     ),
+    team: (
+      <>
+        <circle cx="9" cy="7" r="3" />
+        <path d="M3 20v-1a6 6 0 0 1 12 0v1" />
+        <path d="M16 3.5a3 3 0 0 1 0 6" />
+        <path d="M19 20v-1a5 5 0 0 0-3-4.6" />
+      </>
+    ),
+    audit: (
+      <>
+        <path d="M9 11l2 2 4-5" />
+        <path d="M5 4h14v16l-7-3-7 3z" />
+      </>
+    ),
+    executors: (
+      <>
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M9 9h6v6H9z" />
+      </>
+    ),
+    memory: (
+      <>
+        <path d="M12 3a4 4 0 0 0-4 4v1a3 3 0 0 0 0 6 3 3 0 0 0 4 3 3 3 0 0 0 4-3 3 3 0 0 0 0-6V7a4 4 0 0 0-4-4z" />
+      </>
+    ),
   };
 
   return (
@@ -95,6 +130,7 @@ function NavIcon({ name }: { name: IconName }) {
 
 export default function Sidebar() {
   const language = useLanguage();
+  const advancedMode = useAdvancedMode();
   const [conversations, setConversations] = useState<ProductRow[]>([]);
   const identity = getLocalIdentity();
   const activeOpcId = getActiveOpcId();
@@ -169,13 +205,36 @@ export default function Sidebar() {
             <span className="sidebar-text truncate">{t(link.key)}</span>
           </NavLink>
         ))}
+        {advancedMode && (
+          <>
+            <div className="sidebar-section-title sidebar-text" style={{ marginTop: 12 }}>{t("nav.advanced")}</div>
+            {advancedLinks.map((link) => (
+              <NavLink
+                key={link.to}
+                to={link.to}
+                end={link.end}
+                className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+              >
+                <span className="nav-icon" aria-hidden="true"><NavIcon name={link.icon} /></span>
+                <span className="sidebar-text truncate">{t(link.key)}</span>
+              </NavLink>
+            ))}
+          </>
+        )}
       </nav>
 
       <div className="sidebar-footer px-2 py-2 text-[11px] leading-5" style={{ color: "var(--text-muted)" }}>
-        <NavLink to="/dashboard" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
-          <span className="nav-icon" aria-hidden="true"><NavIcon name="advanced" /></span>
-          <span className="sidebar-text truncate">{t("nav.advanced")}</span>
-        </NavLink>
+        {advancedMode ? (
+          <NavLink to="/dashboard" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+            <span className="nav-icon" aria-hidden="true"><NavIcon name="advanced" /></span>
+            <span className="sidebar-text truncate">{t("nav.dashboard")}</span>
+          </NavLink>
+        ) : (
+          <NavLink to="/settings/appearance" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+            <span className="nav-icon" aria-hidden="true"><NavIcon name="advanced" /></span>
+            <span className="sidebar-text truncate">{t("nav.enable_advanced")}</span>
+          </NavLink>
+        )}
       </div>
     </aside>
   );

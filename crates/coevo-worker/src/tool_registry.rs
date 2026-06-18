@@ -27,6 +27,27 @@ impl ToolRegistry {
             .insert(self.tools.last().unwrap().tool_id.clone(), handler);
         self.next_id += 1;
     }
+
+    /// Import every operation from an OpenAPI 3 JSON document and register each as a tool.
+    /// Returns the registered tool ids. `base_url_override` wins over the spec's server URL.
+    pub fn register_openapi_spec(
+        &mut self,
+        spec_json: &str,
+        base_url_override: Option<&str>,
+        risk_ceiling: f64,
+    ) -> Result<Vec<String>, WorkerError> {
+        let operations = crate::openapi_import::import_openapi_tools(
+            spec_json,
+            base_url_override,
+            risk_ceiling,
+        )?;
+        let mut ids = Vec::with_capacity(operations.len());
+        for op in operations {
+            ids.push(op.tool.tool_id.clone());
+            self.register(op.tool, Box::new(op.handler));
+        }
+        Ok(ids)
+    }
     pub fn list(&self) -> &[Tool] {
         &self.tools
     }
@@ -164,5 +185,28 @@ mod tests {
 
         assert_eq!(shell.supported_actions, vec!["RunShell"]);
         assert_eq!(shell.permission_boundary_json["scope"], "workspace-shell");
+    }
+
+    #[test]
+    fn register_openapi_spec_adds_one_tool_per_operation() {
+        let spec = r#"{
+            "openapi": "3.0.0",
+            "servers": [{ "url": "https://api.example.com" }],
+            "paths": {
+                "/ping": { "get": { "operationId": "ping" } },
+                "/items": { "post": { "operationId": "createItem" } }
+            }
+        }"#;
+        let mut registry = ToolRegistry::new();
+        let ids = registry.register_openapi_spec(spec, None, 0.4).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(registry.get("openapi-ping").is_some());
+        assert!(registry.get("openapi-createitem").is_some());
+    }
+
+    #[test]
+    fn register_openapi_spec_rejects_invalid_document() {
+        let mut registry = ToolRegistry::new();
+        assert!(registry.register_openapi_spec("not json", None, 0.4).is_err());
     }
 }

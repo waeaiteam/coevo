@@ -286,6 +286,8 @@ describe("Desktop onboarding", () => {
 
     expect(screen.getAllByRole("combobox")[0]).toHaveValue("openai");
     expect(screen.queryByRole("option", { name: /Mock/i })).not.toBeInTheDocument();
+    // Model-role selectors are under Advanced now.
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/i }));
     expect(screen.getByLabelText(/Default Model/i)).toHaveValue("gpt-4o");
     expect(screen.getByLabelText(/Fast Model/i)).toHaveValue("gpt-4o-mini");
   });
@@ -325,6 +327,8 @@ describe("Desktop onboarding", () => {
 
     await waitFor(() => expect(localStorage.getItem(MODEL_PROVIDER_CONFIGURED_KEY)).toBe("true"));
     expect(api.discoverModels).toHaveBeenCalledTimes(1);
+    // Model-role selectors live under Advanced now; expand to inspect them.
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/i }));
     expect(screen.getAllByRole("option", { name: "gpt-4o-mini" }).length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/Default Model/i)).toHaveValue("gpt-4o");
     expect(screen.getByLabelText(/Fast Model/i)).toHaveValue("gpt-4o-mini");

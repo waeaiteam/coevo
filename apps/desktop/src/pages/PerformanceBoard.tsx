@@ -197,13 +197,15 @@ export default function PerformanceBoard() {
           ) : employees.length === 0 ? (
             <div className="product-empty">{t("kpi.no_employees")}</div>
           ) : (
-            <div className="product-list">
+            <div className="product-list" role="listbox">
               {employees.map((emp) => {
                 const active = emp.agent_id === selectedId;
                 return (
                   <button
                     key={emp.agent_id}
                     type="button"
+                    role="option"
+                    aria-selected={active}
                     className="product-list-row"
                     onClick={() => setSelectedId(emp.agent_id)}
                     style={active ? { borderColor: "var(--accent)" } : undefined}

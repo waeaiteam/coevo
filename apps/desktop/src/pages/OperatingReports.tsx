@@ -154,12 +154,15 @@ export default function OperatingReports() {
           ) : reports.length === 0 ? (
             <div className="product-empty">{t("report.empty")}</div>
           ) : (
-            <div className="product-list">
+            <div className="product-list" role="listbox">
               {reports.map((report) => {
                 const active = report.report_id === selectedId;
                 return (
                   <button
                     key={report.report_id}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
                     className="product-list-row"
                     onClick={() => setSelectedId(report.report_id)}
                     style={active ? { borderColor: "var(--accent)" } : undefined}

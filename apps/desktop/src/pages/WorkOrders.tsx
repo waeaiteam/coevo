@@ -87,7 +87,7 @@ function timelineToSpans(items: WorkOrderRecord[]): TimelineSpan[] {
     return {
       id: String(details.step_id || details.event_id || `${eventType}-${index}`),
       type: eventType,
-      label: String(item.title || item.label || item.message || item.type || "步骤"),
+      label: String(item.title || item.label || item.message || item.type || t("timeline.step_fallback")),
       round: Number((outputRecord.round ?? (payload as Record<string, unknown>)?.round ?? 0) || 0),
       durationMs: Math.max(0, ended - started),
       tokens: Number((outputRecord.usage_total as Record<string, unknown> | undefined)?.total_tokens || (outputRecord.usage as Record<string, unknown> | undefined)?.total_tokens || 0),
@@ -379,7 +379,7 @@ export default function WorkOrders() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">{stringField(order, "mission_intent") || "Untitled task"}</div>
+                        <div className="truncate text-sm font-semibold">{stringField(order, "mission_intent") || t("tasks.untitled")}</div>
                         <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>{ownerLabel}</div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
@@ -397,7 +397,7 @@ export default function WorkOrders() {
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <h3 className="text-sm font-semibold">{t("workorders.selected_details")}</h3>
-                  <p className="mt-1 text-base font-semibold">{stringField(selected, "mission_intent") || "Untitled task"}</p>
+                  <p className="mt-1 text-base font-semibold">{stringField(selected, "mission_intent") || t("tasks.untitled")}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="rounded px-2 py-1 text-xs" style={statusTone(selectedStatus)}>{friendlyStatus(selectedStatus)}</span>
