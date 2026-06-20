@@ -34,6 +34,13 @@
 //! construction (it may be a `keyring:` ref consumed elsewhere). A missing env
 //! var is surfaced as a warning by `dry_run`, not a hard failure at parse time.
 //!
+//! ## LocalProcess binary allowlist
+//!
+//! LocalProcess executors must declare every binary they may start in
+//! `capabilities`. Supported forms are `binary:<name>`, `allow-binary:<name>`,
+//! and `process:binary:<name>`. The adapter rejects unlisted binaries before
+//! dry-run, health-check, or execution.
+//!
 //! ## Working directory & sandbox
 //!
 //! The working directory is the first entry of `file_scope` when present. The
@@ -146,6 +153,27 @@ pub fn parse_process_command(runtime_endpoint: &str) -> Option<ProcessCommand> {
         program,
         args: tokens.collect(),
     })
+}
+
+/// Parse LocalProcess binary allowlist declarations from passport capabilities.
+pub fn allowed_process_binaries(passport: &ExternalExecutorPassport) -> Vec<String> {
+    passport
+        .capabilities
+        .iter()
+        .filter_map(|cap| {
+            let trimmed = cap.trim();
+            let binary = trimmed
+                .strip_prefix("binary:")
+                .or_else(|| trimmed.strip_prefix("allow-binary:"))
+                .or_else(|| trimmed.strip_prefix("process:binary:"))?
+                .trim();
+            if binary.is_empty() {
+                None
+            } else {
+                Some(binary.to_string())
+            }
+        })
+        .collect()
 }
 
 /// A Docker image + optional in-container command parsed from `runtime_endpoint`.
@@ -269,6 +297,51 @@ mod tests {
 
         assert!(parse_process_command("   ").is_none());
         assert!(parse_process_command("proc:").is_none());
+    }
+
+    #[test]
+    fn allowed_process_binaries_reads_capability_declarations() {
+        let mut passport = ExternalExecutorPassport {
+            executor_id: "exec-local".to_string(),
+            display_name: "Local".to_string(),
+            source_type: coevo_core::opc::ExecutorSourceType::LocalProcess,
+            runtime_endpoint: "proc:cargo --version".to_string(),
+            capabilities: vec![
+                "executor.execute".to_string(),
+                "binary:cargo".to_string(),
+                "allow-binary:powershell".to_string(),
+                "process:binary:/usr/bin/env".to_string(),
+                "binary:".to_string(),
+            ],
+            required_credentials: vec![],
+            permission_boundary: coevo_core::opc::PermissionBoundary {
+                max_risk_score: 0.5,
+                can_write_fact: false,
+                can_write_decision: false,
+                can_access_network: false,
+                can_access_filesystem: false,
+                can_call_external_executor: false,
+                can_propose_skill: false,
+            },
+            file_scope: vec![],
+            network_scope: vec![],
+            memory_scope: coevo_core::opc::MemoryScope::Executor,
+            risk_ceiling: 0.5,
+            supported_actions: vec!["execute".to_string()],
+            sandbox_level: SandboxLevel::Process,
+            health_check_url: String::new(),
+            audit_callback_url: String::new(),
+            status: coevo_core::opc::ExecutorStatus::Registered,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        assert_eq!(
+            allowed_process_binaries(&passport),
+            vec!["cargo", "powershell", "/usr/bin/env"]
+        );
+
+        passport.capabilities = vec!["executor.execute".to_string()];
+        assert!(allowed_process_binaries(&passport).is_empty());
     }
 
     #[test]

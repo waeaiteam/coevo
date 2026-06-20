@@ -48,7 +48,11 @@ impl InProcessA2aRouter {
         let mut hasher = Sha256::new();
         hasher.update(msg.from_agent.as_bytes());
         hasher.update(msg.to_agent.as_bytes());
-        hasher.update(serde_json::to_string(&msg.payload).unwrap_or_default().as_bytes());
+        hasher.update(
+            serde_json::to_string(&msg.payload)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         hasher.update(msg.traceparent.as_bytes());
         hasher.update(msg.contract_hash.as_bytes());
         hex::encode(hasher.finalize())
@@ -104,6 +108,11 @@ impl A2aProvider for InProcessA2aRouter {
         guard.entry(agent_id.to_string()).or_default();
     }
 
+    fn unregister(&self, agent_id: &str) {
+        let mut guard = self.inboxes.lock().unwrap();
+        guard.remove(agent_id);
+    }
+
     fn drain_inbox(&self, agent_id: &str) -> Vec<DeliveredMessage> {
         let mut guard = self.inboxes.lock().unwrap();
         guard
@@ -131,7 +140,11 @@ mod tests {
     async fn delivers_message_into_recipient_inbox() {
         let bus = InProcessA2aRouter::new(vec!["agent-pm-01".into(), "agent-eng-01".into()]);
         let resp = bus
-            .send_message(msg("agent-pm-01", "agent-eng-01", serde_json::json!({"ask": "feasible?"})))
+            .send_message(msg(
+                "agent-pm-01",
+                "agent-eng-01",
+                serde_json::json!({"ask": "feasible?"}),
+            ))
             .await
             .unwrap();
         assert!(resp.success);
@@ -159,16 +172,49 @@ mod tests {
     async fn register_adds_a_new_recipient() {
         let bus = InProcessA2aRouter::new(vec![]);
         bus.register("agent-new-01");
-        bus.send_message(msg("agent-pm-01", "agent-new-01", serde_json::json!({"x": 1})))
-            .await
-            .unwrap();
+        bus.send_message(msg(
+            "agent-pm-01",
+            "agent-new-01",
+            serde_json::json!({"x": 1}),
+        ))
+        .await
+        .unwrap();
         assert_eq!(bus.inbox_len("agent-new-01"), 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_removes_agent_and_queued_messages() {
+        let bus = InProcessA2aRouter::new(vec!["agent-a".into(), "agent-b".into()]);
+        bus.send_message(msg(
+            "agent-b",
+            "agent-a",
+            serde_json::json!({"text": "stale meeting turn"}),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(bus.inbox_len("agent-a"), 1);
+
+        bus.unregister("agent-a");
+
+        assert!(!bus
+            .discover_agents()
+            .await
+            .unwrap()
+            .contains(&"agent-a".to_string()));
+        assert!(bus.drain_inbox("agent-a").is_empty());
+        assert!(bus
+            .send_message(msg("agent-b", "agent-a", serde_json::json!({})))
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn discover_returns_sorted_registry() {
         let bus = InProcessA2aRouter::new(vec!["agent-b".into(), "agent-a".into()]);
-        assert_eq!(bus.discover_agents().await.unwrap(), vec!["agent-a", "agent-b"]);
+        assert_eq!(
+            bus.discover_agents().await.unwrap(),
+            vec!["agent-a", "agent-b"]
+        );
     }
 
     #[tokio::test]

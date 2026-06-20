@@ -54,7 +54,7 @@ impl YellowTrackRunner {
         environment: &str,
     ) -> Result<YellowTrackResult, YellowTrackError> {
         let zero = "0000000000000000000000000000000000000000000000000000000000000000";
-        // Fail-closed by default: DenyAll unless tests / COEVO_ENABLE_MOCK_POLICY_ENGINE=1.
+        // Config-driven policy by default; tests may opt into COEVO_ENABLE_MOCK_POLICY_ENGINE=1.
         let policy = crate::policy_select::select_policy_engine();
         let compiler = MCLCompiler::new();
 

@@ -88,6 +88,11 @@ impl A2aProvider for MockA2aAdapter {
             guard.push(agent_id.to_string());
         }
     }
+
+    fn unregister(&self, agent_id: &str) {
+        let mut guard = self.registered_agents.lock().unwrap();
+        guard.retain(|registered| registered != agent_id);
+    }
 }
 
 #[cfg(test)]

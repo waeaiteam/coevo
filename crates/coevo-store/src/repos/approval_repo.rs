@@ -90,6 +90,26 @@ impl ApprovalRepo {
         Ok(())
     }
 
+    pub async fn consume_approved(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+    ) -> Result<(), sqlx::Error> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let result = sqlx::query(
+            "UPDATE approval_requests SET status = 'consumed' WHERE id = ? AND opc_id = ? AND status = 'approved' AND expires_at_ms >= ?",
+        )
+        .bind(id)
+        .bind(opc_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        Ok(())
+    }
+
     pub async fn expire_pending(pool: &SqlitePool) -> Result<Vec<ApprovalRequestRow>, sqlx::Error> {
         let now = chrono::Utc::now().timestamp_millis();
         let rows = sqlx::query_as::<_, ApprovalRequestRow>(
@@ -229,6 +249,45 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(row.status, "approved");
+        assert_eq!(row.approved_by.as_deref(), Some("approver-1"));
+    }
+
+    #[tokio::test]
+    async fn approved_receipts_are_consumed_once() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let contract_hash = "e".repeat(64);
+        insert_contract(&pool, &contract_hash).await;
+
+        let approval_id = ApprovalRepo::create(
+            &pool,
+            "opc-authz",
+            &contract_hash,
+            "urn:coevo:work-order:wo-consume:execute",
+            "EXPLICIT_APPROVAL",
+            "default-founder",
+            300_000,
+        )
+        .await
+        .unwrap();
+
+        ApprovalRepo::approve(&pool, "opc-authz", &approval_id, "approver-1")
+            .await
+            .unwrap();
+        ApprovalRepo::consume_approved(&pool, "opc-authz", &approval_id)
+            .await
+            .unwrap();
+
+        let err = ApprovalRepo::consume_approved(&pool, "opc-authz", &approval_id)
+            .await
+            .expect_err("consumed approval receipt should not be reusable");
+        assert!(matches!(err, sqlx::Error::RowNotFound));
+
+        let row = ApprovalRepo::find_by_id(&pool, "opc-authz", &approval_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "consumed");
         assert_eq!(row.approved_by.as_deref(), Some("approver-1"));
     }
 }

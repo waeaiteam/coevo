@@ -1,14 +1,9 @@
 //! Fail-closed policy engine.
 //!
 //! [`DenyAllPolicyEngine`] denies every contract and action. It is the
-//! production default wherever a real OPA policy engine is not wired in: a
+//! hard fail-closed fallback for callers that explicitly need no-policy denial: a
 //! missing/unconfigured policy engine must never silently authorize work.
-//! Callers select it instead of [`crate::mock::MockPolicyEngine`] unless running
-//! under tests or with `COEVO_ENABLE_MOCK_POLICY_ENGINE=1`.
-//!
-//! This mirrors the `DenyAllPolicyEngine` used by `coevo-worker`'s GovernGate so
-//! that the track runners enforce the same fail-closed default without taking a
-//! dependency on the worker crate.
+//! Production callers should prefer [`crate::config::ConfigDrivenPolicyEngine`].
 
 use async_trait::async_trait;
 use coevo_core::contract::MCLSpec;

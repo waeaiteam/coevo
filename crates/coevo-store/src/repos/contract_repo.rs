@@ -1,9 +1,50 @@
 use crate::models::ContractRow;
 use coevo_core::contract::MCLSpec;
+use serde::de::DeserializeOwned;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
 pub struct ContractRepo;
+
+fn decode_contract_field<T: DeserializeOwned>(field: &str, raw: &str) -> Result<T, sqlx::Error> {
+    serde_json::from_str(raw)
+        .map_err(|e| sqlx::Error::Protocol(format!("contract {field} decode failed: {e}")))
+}
+
+fn row_to_spec(row: &ContractRow) -> Result<MCLSpec, sqlx::Error> {
+    Ok(MCLSpec {
+        mcl_version: row.mcl_version.clone(),
+        mcl_state: decode_contract_field("mcl_state", &format!("\"{}\"", row.mcl_state))?,
+        parent_contract_hash: row.parent_contract_hash.clone(),
+        goal_tree: decode_contract_field("goal_tree_json", &row.goal_tree_json)?,
+        institution_policy_hash: row.institution_policy_hash.clone(),
+        data_boundary: decode_contract_field("data_boundary_json", &row.data_boundary_json)?,
+        allowed_action_modes: decode_contract_field(
+            "allowed_action_modes_json",
+            &row.allowed_action_modes_json,
+        )?,
+        human_approval_policy: decode_contract_field(
+            "human_approval_policy_json",
+            &row.human_approval_policy_json,
+        )?,
+        evidence_requirement: decode_contract_field(
+            "evidence_requirement_json",
+            &row.evidence_requirement_json,
+        )?,
+        risk_tolerance_profile: decode_contract_field(
+            "risk_tolerance_profile_json",
+            &row.risk_tolerance_profile_json,
+        )?,
+        termination_policy: decode_contract_field(
+            "termination_policy_json",
+            &row.termination_policy_json,
+        )?,
+        responsibility_anchor_policy: decode_contract_field(
+            "responsibility_anchor_policy_json",
+            &row.responsibility_anchor_policy_json,
+        )?,
+    })
+}
 
 impl ContractRepo {
     pub async fn insert(
@@ -56,6 +97,16 @@ impl ContractRepo {
             .bind(hash)
             .fetch_optional(pool)
             .await
+    }
+
+    pub async fn find_spec_by_hash(
+        pool: &SqlitePool,
+        hash: &str,
+    ) -> Result<Option<MCLSpec>, sqlx::Error> {
+        let Some(row) = Self::find_by_hash(pool, hash).await? else {
+            return Ok(None);
+        };
+        row_to_spec(&row).map(Some)
     }
 
     pub async fn update_state(

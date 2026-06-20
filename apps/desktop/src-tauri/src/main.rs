@@ -11,32 +11,98 @@ use tauri_plugin_shell::ShellExt;
 
 static API_BASE: Mutex<String> = Mutex::new(String::new());
 static API_TOKEN: Mutex<String> = Mutex::new(String::new());
+static CALLER_IDENTITY_PROOF: Mutex<String> = Mutex::new(String::new());
 static SIDECAR: Mutex<Option<tauri_plugin_shell::process::CommandChild>> = Mutex::new(None);
 static LAUNCH_LOCK: tauri::async_runtime::Mutex<()> = tauri::async_runtime::Mutex::const_new(());
 
+const LOCAL_IDENTITY_AGENT_ID: &str = "default-founder";
+
 /// Generate a random 32-byte token rendered as 64 lowercase hex chars.
-/// Used once per app start to authenticate the desktop → sidecar HTTP surface
+/// Used once per app start to authenticate the desktop -> sidecar HTTP surface
 /// via the `x-coevo-token` header (server reads `COEVO_AUTH_TOKEN`).
+fn fill_api_token_bytes(bytes: &mut [u8; 32]) -> Result<(), getrandom::Error> {
+    getrandom::fill(bytes)
+}
+
 fn generate_api_token() -> String {
     let mut seed = [0_u8; 32];
-    // Mix several entropy sources without pulling in an RNG crate.
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id() as u128;
-    let addr = &seed as *const _ as u128;
-    let mut state = now ^ (pid << 64) ^ addr ^ 0x9E3779B97F4A7C15;
-    for byte in seed.iter_mut() {
-        // SplitMix64-style scrambling for decent distribution.
-        state = state.wrapping_add(0x9E3779B97F4A7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-        z ^= z >> 31;
-        *byte = (z & 0xFF) as u8;
-    }
+    fill_api_token_bytes(&mut seed).expect("OS randomness is required for the sidecar API token");
     seed.iter().map(|b| format!("{:02x}", b)).collect()
+}
+fn identity_challenge(agent_id: &str) -> Vec<u8> {
+    format!("coevo:identity:{agent_id}").into_bytes()
+}
+
+fn local_identity_registry_json(public_key_hex: &str, tenant_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        LOCAL_IDENTITY_AGENT_ID: {
+            "public_key_hex": public_key_hex,
+            "roles": ["Admin", "HumanApprover"],
+            "tenant_id": tenant_id,
+        }
+    })
+}
+
+fn prepare_local_identity(home: &PathBuf) -> Result<(PathBuf, PathBuf, String), String> {
+    let keys_dir = home.join("keys");
+    fs::create_dir_all(&keys_dir).map_err(|e| e.to_string())?;
+    let signing_key_path = keys_dir.join("founder_identity.key");
+    std::env::set_var("COEVO_SIGNING_KEY_PATH", &signing_key_path);
+
+    let public_key_hex = coevo_core::crypto::platform_public_key_hex();
+    let signature = coevo_core::crypto::sign(&identity_challenge(LOCAL_IDENTITY_AGENT_ID));
+    let proof = format!("ed25519:{LOCAL_IDENTITY_AGENT_ID}:{signature}");
+
+    let registry_path = home.join("config").join("identity_keys.json");
+    if let Some(parent) = registry_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let registry = local_identity_registry_json(&public_key_hex, "local-desktop");
+    let registry_bytes = serde_json::to_vec_pretty(&registry).map_err(|e| e.to_string())?;
+    fs::write(&registry_path, registry_bytes).map_err(|e| e.to_string())?;
+
+    Ok((registry_path, signing_key_path, proof))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_token_is_64_lowercase_hex_chars() {
+        let token = generate_api_token();
+
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert_eq!(token, token.to_ascii_lowercase());
+    }
+
+    #[test]
+    fn api_token_bytes_are_filled_by_os_randomness() {
+        let mut bytes = [0_u8; 32];
+
+        fill_api_token_bytes(&mut bytes).expect("OS randomness should be available");
+
+        assert!(bytes.iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn local_identity_registry_contains_founder_public_key_and_approval_roles() {
+        let value = local_identity_registry_json("abc123", "tenant-local");
+
+        assert_eq!(value[LOCAL_IDENTITY_AGENT_ID]["public_key_hex"], "abc123");
+        assert_eq!(value[LOCAL_IDENTITY_AGENT_ID]["tenant_id"], "tenant-local");
+        assert!(value[LOCAL_IDENTITY_AGENT_ID]["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|role| role == "Admin"));
+        assert!(value[LOCAL_IDENTITY_AGENT_ID]["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|role| role == "HumanApprover"));
+    }
 }
 
 fn coevo_home() -> PathBuf {
@@ -139,6 +205,11 @@ fn get_api_token() -> String {
 }
 
 #[tauri::command]
+fn get_caller_identity_proof() -> String {
+    CALLER_IDENTITY_PROOF.lock().unwrap().clone()
+}
+
+#[tauri::command]
 async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
     let _launch_guard = LAUNCH_LOCK.lock().await;
     {
@@ -152,6 +223,9 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
     *API_TOKEN.lock().unwrap() = api_token.clone();
     let home = coevo_home();
     ensure_dirs(&home);
+    let (identity_keys_path, signing_key_path, caller_identity_proof) =
+        prepare_local_identity(&home)?;
+    *CALLER_IDENTITY_PROOF.lock().unwrap() = caller_identity_proof;
     let port = find_free_port(8717)?;
     let db_path = home.join("data").join("coevo.db");
     if let Some(parent) = db_path.parent() {
@@ -202,6 +276,8 @@ async fn launch_server(app: tauri::AppHandle) -> Result<String, String> {
             heartbeat_path.to_string_lossy().to_string(),
         )
         .env("COEVO_AUTH_TOKEN", api_token.clone())
+        .env("COEVO_IDENTITY_KEYS", identity_keys_path.to_string_lossy().to_string())
+        .env("COEVO_SIGNING_KEY_PATH", signing_key_path.to_string_lossy().to_string())
         .env("RUST_LOG", "coevo=info");
 
     let (mut rx, child) = sidecar
@@ -341,6 +417,7 @@ fn main() {
             get_coevo_home,
             get_api_base,
             get_api_token,
+            get_caller_identity_proof,
             launch_server,
             stop_server,
             open_logs_dir,

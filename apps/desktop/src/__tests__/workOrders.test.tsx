@@ -260,6 +260,7 @@ describe("WorkOrders", () => {
       },
     ]);
     org.decideCompanyWorkOrderApproval.mockResolvedValue({ ok: true, approval_receipt: "approval-123" });
+    org.executeCompanyWorkOrder.mockResolvedValue({ ok: true, status: "Running", run_id: "run-approval-123" });
 
     renderWorkOrders();
 
@@ -273,6 +274,11 @@ describe("WorkOrders", () => {
         approval_id: "approval-123",
         decision: "approve",
         comment: "",
+      }),
+    );
+    await waitFor(() =>
+      expect(org.executeCompanyWorkOrder).toHaveBeenCalledWith("opc-live", "wo-yellow", {
+        caller_identity_proof: "approval-123",
       }),
     );
   });

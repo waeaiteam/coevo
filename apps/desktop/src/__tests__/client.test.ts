@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { getApiBase, getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, streamWorkerRunEvents, testModelConnection } from "../api/client";
+import { getApiBase, getHealth, headers, ApiError, get, post, createWorkOrder, discoverModels, getWorkOrderAuditExport, getWorkOrderTimeline, routePlan, streamWorkerRunEvents, testModelConnection, setCallerIdentityProof } from "../api/client";
 
 describe("API Client", () => {
   beforeEach(() => {
@@ -20,6 +20,23 @@ describe("API Client", () => {
     expect(h["traceparent"]).toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
   });
 
+  it("attaches the local caller identity proof when available", () => {
+    localStorage.setItem("coevo-user-id", "default-founder");
+    setCallerIdentityProof("ed25519:default-founder:signed-proof");
+
+    const h = headers();
+
+    expect(h["x-coevo-caller-identity-proof"]).toBe("ed25519:default-founder:signed-proof");
+    expect(h["x-coevo-actor-id"]).toBe("default-founder");
+  });
+
+  it("lets a request override the global active opc header", () => {
+    localStorage.setItem("coevo-opc-id", "opc-global");
+
+    const h = (headers as (options: { opcId?: string }) => Record<string, string>)({ opcId: "opc-alpha" });
+
+    expect(h["x-coevo-opc-id"]).toBe("opc-alpha");
+  });
   it("getHealth returns ok from mock", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true, status: 200,

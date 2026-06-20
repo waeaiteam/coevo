@@ -100,9 +100,10 @@ impl IdentityProvider for Ed25519IdentityProvider {
             return Err(AdapterError::IdentityError("empty identity proof".into()));
         }
         let (agent_id, signature_hex) = Self::parse_proof(caller_identity_proof)?;
-        let entry = self.agents.get(agent_id).ok_or_else(|| {
-            AdapterError::IdentityError(format!("unknown agent: {agent_id}"))
-        })?;
+        let entry = self
+            .agents
+            .get(agent_id)
+            .ok_or_else(|| AdapterError::IdentityError(format!("unknown agent: {agent_id}")))?;
 
         let challenge = identity_challenge(agent_id);
         // Real Ed25519 verification (fail-closed on any decode/length/verify failure).

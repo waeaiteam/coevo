@@ -11,9 +11,9 @@ type Row = Record<string, unknown>;
  * The server contract (apps/server/src/handlers/opc.rs):
  *  - executeCompanyWorkOrder on a Yellow task with no receipt returns
  *    `{ status: "WaitingApproval", approval_id, approval_mode: "NEGATIVE_CONSENT" }`.
- *  - decideCompanyWorkOrderApproval(approve) re-executes the harness and injects a
- *    top-level `run_id` (taken from worker_runs[0].run_id) into the payload, which the
- *    UI streams inline. decide(reject) returns `{ status: "ApprovalDenied" }`.
+ *  - decideCompanyWorkOrderApproval(approve) records the approval and returns an
+ *    `approval_receipt`; the client then calls executeCompanyWorkOrder with that
+ *    receipt so approval and execution stay separate operations.
  *
  * Both MissionChat (inline approval card) and WorkOrders use these helpers so the two
  * surfaces never diverge.
@@ -73,22 +73,47 @@ export type ApprovalResume = {
 };
 
 /**
- * Record an approval decision. On "approve" the server resumes execution and the returned
- * payload carries a `run_id` to stream. On "reject" no run is produced.
+ * Record an approval decision. On "approve", resume execution in a second API call
+ * using the returned approval receipt. On "reject" no run is produced.
  */
 export async function decideAndResume(
   opcId: string,
   workOrderId: string,
   options: { approvalId: string; decision: "approve" | "reject"; comment?: string },
 ): Promise<ApprovalResume> {
-  const payload = (await decideCompanyWorkOrderApproval(opcId, workOrderId, {
+  const decisionPayload = (await decideCompanyWorkOrderApproval(opcId, workOrderId, {
     approval_id: options.approvalId,
     decision: options.decision,
     comment: options.comment,
   })) as Row;
+
+  if (options.decision !== "approve") {
+    return {
+      status: String(decisionPayload.status || "").trim(),
+      runId: "",
+      payload: decisionPayload,
+    };
+  }
+
+  const approvalReceipt = extractApprovalId(decisionPayload);
+  if (!approvalReceipt) {
+    return {
+      status: String(decisionPayload.status || "").trim(),
+      runId: "",
+      payload: decisionPayload,
+    };
+  }
+
+  const executePayload = (await executeCompanyWorkOrder(opcId, workOrderId, {
+    caller_identity_proof: approvalReceipt,
+  })) as Row;
   return {
-    status: String(payload.status || "").trim(),
-    runId: options.decision === "approve" ? extractRunId(payload) : "",
-    payload,
+    status: String(executePayload.status || decisionPayload.status || "").trim(),
+    runId: extractRunId(executePayload),
+    payload: {
+      ...decisionPayload,
+      ...executePayload,
+      approval_receipt: approvalReceipt,
+    },
   };
 }

@@ -223,7 +223,11 @@ impl OpenApiToolHandler {
         let mut pairs = Vec::new();
         for q in &self.query_params {
             if let Some(v) = query_values.and_then(|qq| qq.get(&q.name)) {
-                pairs.push(format!("{}={}", urlencode(&q.name), urlencode(&value_to_string(v))));
+                pairs.push(format!(
+                    "{}={}",
+                    urlencode(&q.name),
+                    urlencode(&value_to_string(v))
+                ));
             } else if q.required {
                 return Err(WorkerError::ToolUnavailable(format!(
                     "missing required query parameter '{}'",
@@ -361,8 +365,14 @@ mod tests {
     #[test]
     fn get_operation_is_readonly_post_is_write() {
         let ops = import_openapi_tools(SAMPLE_SPEC, None, 0.4).unwrap();
-        let get = ops.iter().find(|o| o.tool.tool_id == "openapi-getuser").unwrap();
-        let post = ops.iter().find(|o| o.tool.tool_id == "openapi-createuser").unwrap();
+        let get = ops
+            .iter()
+            .find(|o| o.tool.tool_id == "openapi-getuser")
+            .unwrap();
+        let post = ops
+            .iter()
+            .find(|o| o.tool.tool_id == "openapi-createuser")
+            .unwrap();
         assert_eq!(get.tool.permission_boundary_json["writes"], false);
         assert_eq!(post.tool.permission_boundary_json["writes"], true);
         assert_eq!(get.tool.supported_actions, vec!["GET"]);
@@ -392,7 +402,10 @@ mod tests {
     #[test]
     fn build_url_substitutes_path_and_query() {
         let ops = import_openapi_tools(SAMPLE_SPEC, None, 0.4).unwrap();
-        let get = ops.iter().find(|o| o.tool.tool_id == "openapi-getuser").unwrap();
+        let get = ops
+            .iter()
+            .find(|o| o.tool.tool_id == "openapi-getuser")
+            .unwrap();
         let url = get
             .handler
             .build_url(&serde_json::json!({
@@ -406,7 +419,10 @@ mod tests {
     #[test]
     fn build_url_errors_on_missing_path_param() {
         let ops = import_openapi_tools(SAMPLE_SPEC, None, 0.4).unwrap();
-        let get = ops.iter().find(|o| o.tool.tool_id == "openapi-getuser").unwrap();
+        let get = ops
+            .iter()
+            .find(|o| o.tool.tool_id == "openapi-getuser")
+            .unwrap();
         assert!(get.handler.build_url(&serde_json::json!({})).is_err());
     }
 
@@ -433,7 +449,10 @@ mod tests {
 
         let base = format!("http://{addr}");
         let ops = import_openapi_tools(SAMPLE_SPEC, Some(&base), 0.4).unwrap();
-        let get = ops.into_iter().find(|o| o.tool.tool_id == "openapi-getuser").unwrap();
+        let get = ops
+            .into_iter()
+            .find(|o| o.tool.tool_id == "openapi-getuser")
+            .unwrap();
         let result = get
             .handler
             .execute(serde_json::json!({ "path_params": { "id": "7" } }))
@@ -445,4 +464,3 @@ mod tests {
         let _ = server.join();
     }
 }
-

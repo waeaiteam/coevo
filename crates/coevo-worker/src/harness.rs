@@ -2,12 +2,16 @@ use crate::agent_harness::{AgentRunContract, AgentSubHarness, RunAuthorization};
 use crate::error::WorkerError;
 use crate::queue::WorkerQueueService;
 use crate::r#loop::{SandboxProfile, SandboxTier};
+use coevo_core::contract::MCLSpec;
 use coevo_core::opc::{AutonomyCeiling, ExecutorStatus, ExternalExecutorPassport, ModelPreference};
 use coevo_models::gateway::select_gateway;
 use coevo_models::router::{default_model_profiles, ModelCapability, ModelProfile, PrivacyLevel};
 use coevo_models::types::{ModelProviderConfig, ModelProviderKind};
 use coevo_store::repos::worker_run_repo::{WorkerEventRepo, WorkerRunRepo, WorkerStepRepo};
-use coevo_store::repos::{agent_worker_repo::AgentWorkerRepo, model_config_repo::ModelConfigRepo};
+use coevo_store::repos::{
+    agent_worker_repo::AgentWorkerRepo, contract_repo::ContractRepo,
+    model_config_repo::ModelConfigRepo,
+};
 use coevo_store::repos_opc::work_order_repo;
 use sqlx::SqlitePool;
 use sqlx::{Column, Row};
@@ -42,6 +46,27 @@ fn workspace_root_from_env_or_cwd() -> Option<std::path::PathBuf> {
         .filter(|value| !value.trim().is_empty())
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
+}
+
+async fn load_execution_contract(
+    pool: &SqlitePool,
+    opc_pool: &SqlitePool,
+    contract_hash: &str,
+) -> Result<Option<MCLSpec>, WorkerError> {
+    if contract_hash.trim().is_empty() {
+        return Ok(None);
+    }
+    match ContractRepo::find_spec_by_hash(opc_pool, contract_hash).await {
+        Ok(Some(contract)) => return Ok(Some(contract)),
+        Ok(None) => {}
+        Err(err) => return Err(WorkerError::Internal(err.to_string())),
+    }
+    if std::ptr::eq(pool, opc_pool) {
+        return Ok(None);
+    }
+    ContractRepo::find_spec_by_hash(pool, contract_hash)
+        .await
+        .map_err(|err| WorkerError::Internal(err.to_string()))
 }
 
 fn select_selected_executor_passports(
@@ -534,6 +559,7 @@ impl WorkerHarness {
             .governance_proposal
             .as_ref()
             .map(|proposal| model_preference_to_role(proposal.model_preference).to_string());
+        let execution_contract = load_execution_contract(pool, opc_pool, &wo.contract_hash).await?;
         let authorization = RunAuthorization {
             work_order_id: work_order_id.to_string(),
             agent_id: agent_id.clone(),
@@ -551,6 +577,7 @@ impl WorkerHarness {
                 workspace_root_from_env_or_cwd(),
             ),
             model_preference,
+            execution_contract,
         };
         // Bind real adapters for every registered external executor so the agent
         // loop can dispatch CallExecutor proposals to live runtimes (Docker, local
@@ -821,6 +848,50 @@ mod tests {
         }
     }
 
+    fn test_mcl_spec(work_order_id: &str, max_hops: u32) -> MCLSpec {
+        MCLSpec {
+            mcl_version: "1.0".to_string(),
+            mcl_state: coevo_core::contract::ContractState::ActiveContract,
+            parent_contract_hash: "0".repeat(64),
+            goal_tree: coevo_core::contract::GoalTree {
+                root: coevo_core::contract::GoalNode {
+                    id: work_order_id.to_string(),
+                    description: "Test governed work".to_string(),
+                    status: coevo_core::contract::GoalStatus::InProgress,
+                    children: vec![],
+                    depends_on: vec![],
+                },
+            },
+            institution_policy_hash: "b".repeat(64),
+            data_boundary: vec!["urn:coevo:data:workspace".to_string()],
+            allowed_action_modes: vec![coevo_core::contract::ActionMode::DraftOnly],
+            human_approval_policy: coevo_core::contract::HumanApprovalPolicy {
+                approval_mode: coevo_core::contract::ApprovalMode::ExplicitApproval,
+                authorized_roles: vec!["founder".to_string()],
+                negative_consent_timeout_secs: 0,
+                mfa_auth_url: None,
+            },
+            evidence_requirement: coevo_core::contract::EvidenceRequirement {
+                minimum_level: "self_report".to_string(),
+                require_json_report: false,
+            },
+            risk_tolerance_profile: coevo_core::contract::RiskToleranceProfile {
+                max_risk_score: 0.3,
+                allow_emergency_lease: false,
+            },
+            termination_policy: coevo_core::contract::TerminationPolicy {
+                max_token_budget: 10_000,
+                max_hops,
+                max_latency_ms: 60_000,
+                max_stance_rounds: 16,
+            },
+            responsibility_anchor_policy: coevo_core::contract::ResponsibilityAnchorPolicy {
+                required_human_roles: vec!["founder".to_string()],
+                agent_forbidden_actions: vec![],
+            },
+        }
+    }
+
     fn test_executor(executor_id: &str, status: ExecutorStatus) -> ExternalExecutorPassport {
         let now = chrono::Utc::now().timestamp_millis() as u64;
         ExternalExecutorPassport {
@@ -851,6 +922,41 @@ mod tests {
             created_at_ms: now,
             updated_at_ms: now,
         }
+    }
+
+    #[tokio::test]
+    async fn load_execution_contract_prefers_company_scope_and_falls_back_to_global() {
+        let global_pool = create_test_pool().await.unwrap();
+        let company_pool = create_test_pool().await.unwrap();
+        run_migrations(&global_pool).await.unwrap();
+        run_migrations(&company_pool).await.unwrap();
+        let shared_hash = "c".repeat(64);
+        ContractRepo::insert(&global_pool, &test_mcl_spec("wo-global", 16), &shared_hash)
+            .await
+            .unwrap();
+        ContractRepo::insert(&company_pool, &test_mcl_spec("wo-company", 2), &shared_hash)
+            .await
+            .unwrap();
+
+        let scoped = load_execution_contract(&global_pool, &company_pool, &shared_hash)
+            .await
+            .unwrap()
+            .expect("company contract should load");
+        assert_eq!(scoped.termination_policy.max_hops, 2);
+
+        let global_only_hash = "d".repeat(64);
+        ContractRepo::insert(
+            &global_pool,
+            &test_mcl_spec("wo-global-only", 5),
+            &global_only_hash,
+        )
+        .await
+        .unwrap();
+        let fallback = load_execution_contract(&global_pool, &company_pool, &global_only_hash)
+            .await
+            .unwrap()
+            .expect("global fallback contract should load");
+        assert_eq!(fallback.termination_policy.max_hops, 5);
     }
 
     #[test]

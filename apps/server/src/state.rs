@@ -16,6 +16,7 @@ use coevo_adapters::traits::{
     A2aMessage, A2aProvider, A2aResponse, AdapterError, IdentityClaims, IdentityProvider,
     McpProvider, McpToolCall, McpToolResult,
 };
+use coevo_policy::config::ConfigDrivenPolicyEngine;
 use coevo_policy::mock::MockPolicyEngine;
 use coevo_policy::traits::PolicyEngine;
 use coevo_store::company_workspace::CompanyWorkspaceManager;
@@ -46,7 +47,7 @@ impl AppState {
             );
         // In server tests the worker crate is a dependency compiled WITHOUT its own
         // `cfg!(test)`, so its GovernGate would otherwise fall back to the fail-closed
-        // DenyAllPolicyEngine and block work-order execution. Opt the worker into the
+        // ConfigDrivenPolicyEngine and enforce production policy rules. Opt the worker into the
         // keyword MockPolicyEngine here, the same way acceptance suites do. Never set
         // in release/dev binaries — gated on the server crate's own test cfg.
         #[cfg(test)]
@@ -148,7 +149,7 @@ fn build_policy_engine(use_mocks: bool) -> Arc<dyn PolicyEngine> {
     if use_mocks {
         Arc::new(MockPolicyEngine::new())
     } else {
-        Arc::new(DenyAllPolicyEngine)
+        Arc::new(ConfigDrivenPolicyEngine::from_env_or_baseline())
     }
 }
 
@@ -193,14 +194,22 @@ impl DbBackedMcpProvider {
         let records = McpServerRepo::list_enabled(&self.pool)
             .await
             .map_err(|e| AdapterError::McpError(e.to_string()))?;
+        let mut seed_complete = true;
         for record in records {
-            if let Ok(config) = mcp_record_to_config(&record) {
-                if let Err(err) = self.manager.connect(config).await {
-                    tracing::warn!(server = %record.id, error = %err, "failed to seed MCP server");
+            match mcp_record_to_config(&record) {
+                Ok(config) => {
+                    if let Err(err) = self.manager.connect(config).await {
+                        seed_complete = false;
+                        tracing::warn!(opc_id = %record.opc_id, server = %record.id, error = %err, "failed to seed MCP server");
+                    }
+                }
+                Err(err) => {
+                    seed_complete = false;
+                    tracing::warn!(opc_id = %record.opc_id, server = %record.id, error = %err, "invalid MCP server config during seed");
                 }
             }
         }
-        *seeded = true;
+        *seeded = seed_complete;
         Ok(())
     }
 }
@@ -228,7 +237,7 @@ impl McpProvider for DbBackedMcpProvider {
 
 fn mcp_record_to_config(record: &McpServerRecord) -> Result<McpServerConfig, String> {
     McpServerConfig::from_row(McpServerRow {
-        id: record.id.clone(),
+        id: format!("{}:{}", record.opc_id, record.id),
         name: record.name.clone(),
         transport: record.transport.clone(),
         command: record.command.clone(),
@@ -266,74 +275,50 @@ impl IdentityProvider for DenyAllIdentityProvider {
     }
 }
 
-struct DenyAllPolicyEngine;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coevo_store::{migrate::run_migrations, pool::create_test_pool};
 
-#[async_trait]
-impl PolicyEngine for DenyAllPolicyEngine {
-    async fn validate_contract(
-        &self,
-        _contract: &coevo_core::contract::MCLSpec,
-    ) -> Result<coevo_policy::traits::PolicyResult, coevo_policy::traits::PolicyEngineError> {
-        Ok(coevo_policy::traits::PolicyResult {
-            passed: false,
-            violations: vec![coevo_policy::traits::PolicyViolation {
-                policy_urn: "urn:coevo:policy:unavailable".to_string(),
-                description: "policy engine unavailable".to_string(),
-                remediation: Some("set COEVO_ENABLE_MOCK_ADAPTERS=1 for dev/test".to_string()),
-            }],
-            policy_version: "unavailable".to_string(),
-            policies_checked: vec!["urn:coevo:policy:unavailable".to_string()],
-        })
+    fn bad_stdio_record() -> McpServerRecord {
+        let now = chrono::Utc::now().to_rfc3339();
+        McpServerRecord {
+            opc_id: "default-opc".to_string(),
+            id: "mcp-bad-seed".to_string(),
+            name: "bad-seed".to_string(),
+            transport: "stdio".to_string(),
+            command: Some("this-command-does-not-exist-coevo-mcp".to_string()),
+            args_json: "[]".to_string(),
+            env_json: "{}".to_string(),
+            url: None,
+            headers_json: "{}".to_string(),
+            enabled: true,
+            status: "unknown".to_string(),
+            last_error: None,
+            tools_json: "[]".to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+        }
     }
 
-    async fn dry_run(
-        &self,
-        contract: &coevo_core::contract::MCLSpec,
-    ) -> Result<coevo_policy::traits::PolicyResult, coevo_policy::traits::PolicyEngineError> {
-        self.validate_contract(contract).await
-    }
+    #[tokio::test]
+    async fn mcp_seed_failure_is_not_marked_complete() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        McpServerRepo::insert(&pool, &bad_stdio_record())
+            .await
+            .unwrap();
+        let provider = DbBackedMcpProvider::new(pool, Arc::new(McpClientManager::new()));
 
-    fn policy_version(&self) -> String {
-        "unavailable".to_string()
-    }
+        let tools = provider
+            .list_tools()
+            .await
+            .expect("failed MCP seed should not make listing itself fail");
 
-    async fn evaluate_action(
-        &self,
-        action_urn: &str,
-        _contract: &coevo_core::contract::MCLSpec,
-    ) -> Result<coevo_policy::traits::PolicyResult, coevo_policy::traits::PolicyEngineError> {
-        Ok(coevo_policy::traits::PolicyResult {
-            passed: false,
-            violations: vec![coevo_policy::traits::PolicyViolation {
-                policy_urn: action_urn.to_string(),
-                description: "policy engine unavailable".to_string(),
-                remediation: Some("set COEVO_ENABLE_MOCK_ADAPTERS=1 for dev/test".to_string()),
-            }],
-            policy_version: "unavailable".to_string(),
-            policies_checked: vec![action_urn.to_string()],
-        })
-    }
-
-    async fn diff_policies(
-        &self,
-        _old_version: &str,
-        _new_version: &str,
-    ) -> Result<coevo_policy::traits::PolicyDiff, coevo_policy::traits::PolicyEngineError> {
-        Err(coevo_policy::traits::PolicyEngineError::Internal(
-            "policy engine unavailable".to_string(),
-        ))
-    }
-
-    async fn health_check(&self) -> Result<bool, coevo_policy::traits::PolicyEngineError> {
-        Ok(false)
-    }
-
-    async fn rollback(
-        &mut self,
-        _target_version: &str,
-    ) -> Result<(), coevo_policy::traits::PolicyEngineError> {
-        Err(coevo_policy::traits::PolicyEngineError::Internal(
-            "policy engine unavailable".to_string(),
-        ))
+        assert!(tools.is_empty());
+        assert!(
+            !*provider.seeded.lock().await,
+            "partial MCP seed failure must leave provider unseeded so a later call retries"
+        );
     }
 }

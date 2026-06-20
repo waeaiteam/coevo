@@ -8,8 +8,9 @@ use coevo_core::contract::{
     TerminationPolicy,
 };
 use coevo_core::decision::{ActionProposalSpec, GateDecision};
+use coevo_policy::config::ConfigDrivenPolicyEngine;
 use coevo_policy::mock::MockPolicyEngine;
-use coevo_policy::traits::{PolicyEngine, PolicyEngineError, PolicyResult, PolicyViolation};
+use coevo_policy::traits::PolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use sha2::{Digest, Sha256};
 
@@ -23,6 +24,17 @@ pub enum GateOutcome {
         reason: String,
         action_digest: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct GateAuditRecord {
+    pub action_urn: String,
+    pub decision: String,
+    pub required_confidence: f64,
+    pub available_confidence: f64,
+    pub action_risk: f64,
+    pub inaction_risk: f64,
+    pub reason: String,
 }
 
 pub struct GovernGate {
@@ -42,11 +54,13 @@ impl GovernGate {
         let policy_engine: Box<dyn PolicyEngine> = if mock_policy_engine_enabled() {
             Box::new(MockPolicyEngine::default())
         } else {
-            Box::new(DenyAllPolicyEngine)
+            Box::new(ConfigDrivenPolicyEngine::from_env_or_baseline())
         };
         Self::new(
             RiskGate::new(policy_engine),
-            risk_contract_from_authorization(auth),
+            auth.execution_contract
+                .clone()
+                .unwrap_or_else(|| risk_contract_from_authorization(auth)),
         )
     }
 
@@ -56,16 +70,25 @@ impl GovernGate {
         auth: &RunAuthorization,
         tools: &[Tool],
     ) -> GateOutcome {
+        self.adjudicate_with_audit(proposal, auth, tools).await.0
+    }
+
+    pub async fn adjudicate_with_audit(
+        &self,
+        proposal: &ActionProposal,
+        auth: &RunAuthorization,
+        tools: &[Tool],
+    ) -> (GateOutcome, Option<GateAuditRecord>) {
         let (tool, tool_policy) = match self.tool_policy_outcome(proposal, auth, tools) {
             Ok(value) => value,
-            Err(outcome) => return outcome,
+            Err(outcome) => return (outcome, None),
         };
         if let Some(outcome) = tool_policy {
-            return outcome;
+            return (outcome, None);
         }
 
         let Some(tool) = tool else {
-            return GateOutcome::Allow;
+            return (GateOutcome::Allow, None);
         };
         let risk_proposal = action_proposal_spec(proposal, tool);
         let risk_decision = self
@@ -83,8 +106,17 @@ impl GovernGate {
                 false,
             )
             .await;
+        let audit = GateAuditRecord {
+            action_urn: risk_proposal.action_urn.clone(),
+            decision: gate_decision_label(risk_decision.decision).to_string(),
+            required_confidence: risk_decision.required_confidence,
+            available_confidence: risk_decision.available_confidence,
+            action_risk: risk_decision.action_risk,
+            inaction_risk: risk_decision.inaction_risk,
+            reason: risk_decision.reason.clone(),
+        };
 
-        match risk_decision.decision {
+        let outcome = match risk_decision.decision {
             GateDecision::Allow | GateDecision::AllowWithLease => GateOutcome::Allow,
             GateDecision::RequireHumanApproval => GateOutcome::NeedApproval {
                 reason: format!("RiskGate requires approval: {}", risk_decision.reason),
@@ -95,7 +127,8 @@ impl GovernGate {
             | GateDecision::EscalateToResolution => GateOutcome::Deny {
                 reason: format!("RiskGate blocked action: {}", risk_decision.reason),
             },
-        }
+        };
+        (outcome, Some(audit))
     }
 
     pub fn adjudicate_readonly(
@@ -118,7 +151,7 @@ impl GovernGate {
                         reason: format!("Executor {executor_id} is not registered for this run"),
                     };
                 };
-                Self::from_tool_policy(tool, auth)
+                Self::from_tool_policy(proposal, tool, auth)
             }
             ActionProposal::CallTool { tool_id, .. } => {
                 let Some(tool) = tools.iter().find(|tool| tool.tool_id == *tool_id) else {
@@ -126,7 +159,7 @@ impl GovernGate {
                         reason: format!("Tool {tool_id} is not registered for this run"),
                     };
                 };
-                Self::from_tool_policy(tool, auth)
+                Self::from_tool_policy(proposal, tool, auth)
             }
         }
     }
@@ -154,7 +187,7 @@ impl GovernGate {
                         reason: format!("Executor {executor_id} is not registered for this run"),
                     });
                 };
-                Ok((Some(tool), Self::tool_policy_decision(tool, auth)))
+                Ok((Some(tool), Self::tool_policy_decision(proposal, tool, auth)))
             }
             ActionProposal::CallTool { tool_id, .. } => {
                 let Some(tool) = tools.iter().find(|tool| tool.tool_id == *tool_id) else {
@@ -162,12 +195,16 @@ impl GovernGate {
                         reason: format!("Tool {tool_id} is not registered for this run"),
                     });
                 };
-                Ok((Some(tool), Self::tool_policy_decision(tool, auth)))
+                Ok((Some(tool), Self::tool_policy_decision(proposal, tool, auth)))
             }
         }
     }
 
-    fn tool_policy_decision(tool: &Tool, auth: &RunAuthorization) -> Option<GateOutcome> {
+    fn tool_policy_decision(
+        proposal: &ActionProposal,
+        tool: &Tool,
+        auth: &RunAuthorization,
+    ) -> Option<GateOutcome> {
         let decision = ToolPolicyEngine::evaluate(
             tool,
             &auth.track,
@@ -182,14 +219,18 @@ impl GovernGate {
         if decision.required_approval && auth.approval_receipt.is_none() {
             return Some(GateOutcome::NeedApproval {
                 reason: decision.reason,
-                action_digest: action_digest_for_tool(tool),
+                action_digest: action_digest(proposal),
             });
         }
         None
     }
 
-    fn from_tool_policy(tool: &Tool, auth: &RunAuthorization) -> GateOutcome {
-        if let Some(outcome) = Self::tool_policy_decision(tool, auth) {
+    fn from_tool_policy(
+        proposal: &ActionProposal,
+        tool: &Tool,
+        auth: &RunAuthorization,
+    ) -> GateOutcome {
+        if let Some(outcome) = Self::tool_policy_decision(proposal, tool, auth) {
             return outcome;
         }
         GateOutcome::Allow
@@ -206,6 +247,17 @@ fn mock_policy_engine_enabled() -> bool {
             std::env::var("COEVO_ENABLE_MOCK_POLICY_ENGINE"),
             Ok(value) if value == "1"
         )
+}
+
+fn gate_decision_label(decision: GateDecision) -> &'static str {
+    match decision {
+        GateDecision::Allow => "ALLOW",
+        GateDecision::Deny => "DENY",
+        GateDecision::RequireHumanApproval => "REQUIRE_HUMAN_APPROVAL",
+        GateDecision::DeferForMoreEvidence => "DEFER_FOR_MORE_EVIDENCE",
+        GateDecision::AllowWithLease => "ALLOW_WITH_LEASE",
+        GateDecision::EscalateToResolution => "ESCALATE_TO_RESOLUTION",
+    }
 }
 
 fn action_proposal_spec(proposal: &ActionProposal, tool: &Tool) -> ActionProposalSpec {
@@ -255,12 +307,6 @@ fn risk_factors_for_tool(tool: &Tool) -> (u8, u8, u8, u8) {
 fn action_digest(proposal: &ActionProposal) -> String {
     let mut hasher = Sha256::new();
     hasher.update(serde_json::to_vec(proposal).unwrap_or_default());
-    hex::encode(hasher.finalize())
-}
-
-fn action_digest_for_tool(tool: &Tool) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(tool.tool_id.as_bytes());
     hex::encode(hasher.finalize())
 }
 
@@ -329,72 +375,6 @@ fn allowed_action_modes(allowed_actions: &[String]) -> Vec<ActionMode> {
     modes
 }
 
-struct DenyAllPolicyEngine;
-
-#[async_trait::async_trait]
-impl PolicyEngine for DenyAllPolicyEngine {
-    async fn validate_contract(
-        &self,
-        _contract: &MCLSpec,
-    ) -> Result<PolicyResult, PolicyEngineError> {
-        Ok(PolicyResult {
-            passed: false,
-            violations: vec![PolicyViolation {
-                policy_urn: "urn:coevo:policy:unavailable".to_string(),
-                description: "policy engine unavailable".to_string(),
-                remediation: Some("set COEVO_ENABLE_MOCK_POLICY_ENGINE=1 for dev/test".to_string()),
-            }],
-            policy_version: "unavailable".to_string(),
-            policies_checked: vec!["urn:coevo:policy:unavailable".to_string()],
-        })
-    }
-
-    async fn dry_run(&self, contract: &MCLSpec) -> Result<PolicyResult, PolicyEngineError> {
-        self.validate_contract(contract).await
-    }
-
-    fn policy_version(&self) -> String {
-        "unavailable".to_string()
-    }
-
-    async fn evaluate_action(
-        &self,
-        action_urn: &str,
-        _contract: &MCLSpec,
-    ) -> Result<PolicyResult, PolicyEngineError> {
-        Ok(PolicyResult {
-            passed: false,
-            violations: vec![PolicyViolation {
-                policy_urn: action_urn.to_string(),
-                description: "policy engine unavailable".to_string(),
-                remediation: Some("set COEVO_ENABLE_MOCK_POLICY_ENGINE=1 for dev/test".to_string()),
-            }],
-            policy_version: "unavailable".to_string(),
-            policies_checked: vec![action_urn.to_string()],
-        })
-    }
-
-    async fn diff_policies(
-        &self,
-        _old_version: &str,
-        _new_version: &str,
-    ) -> Result<coevo_policy::traits::PolicyDiff, PolicyEngineError> {
-        Err(PolicyEngineError::Internal(
-            "policy engine unavailable".to_string(),
-        ))
-    }
-
-    async fn health_check(&self) -> Result<bool, PolicyEngineError> {
-        Ok(false)
-    }
-
-    async fn rollback(&mut self, _target_version: &str) -> Result<(), PolicyEngineError> {
-        Err(PolicyEngineError::Internal(
-            "policy engine unavailable".to_string(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +396,7 @@ mod tests {
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track(track, None),
             model_preference: None,
+            execution_contract: None,
         }
     }
 
@@ -457,6 +438,38 @@ mod tests {
             GovernGate::adjudicate_readonly(&proposal, &auth("red", None), &[external_tool()]);
 
         assert!(matches!(outcome, GateOutcome::Deny { .. }));
+    }
+    #[test]
+    fn approval_digest_includes_tool_arguments() {
+        let first = ActionProposal::CallTool {
+            tool_id: "external-read".to_string(),
+            input: serde_json::json!({"path":"alpha.txt"}),
+            rationale: "external boundary".to_string(),
+        };
+        let second = ActionProposal::CallTool {
+            tool_id: "external-read".to_string(),
+            input: serde_json::json!({"path":"beta.txt"}),
+            rationale: "external boundary".to_string(),
+        };
+
+        let first_digest = match GovernGate::adjudicate_readonly(
+            &first,
+            &auth("yellow", None),
+            &[external_tool()],
+        ) {
+            GateOutcome::NeedApproval { action_digest, .. } => action_digest,
+            other => panic!("expected NeedApproval, got {other:?}"),
+        };
+        let second_digest = match GovernGate::adjudicate_readonly(
+            &second,
+            &auth("yellow", None),
+            &[external_tool()],
+        ) {
+            GateOutcome::NeedApproval { action_digest, .. } => action_digest,
+            other => panic!("expected NeedApproval, got {other:?}"),
+        };
+
+        assert_ne!(first_digest, second_digest);
     }
 
     #[tokio::test]

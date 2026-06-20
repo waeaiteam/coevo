@@ -5,6 +5,8 @@ export type { HealthResponse, ContractResponse } from "../types";
 
 const DEFAULT_API_BASE = "http://127.0.0.1:8717";
 
+export type RequestOptions = { opcId?: string };
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -35,6 +37,7 @@ export function setApiBase(url: string) { try { localStorage.setItem("coevo-api-
 // request. In plain browser dev (no Tauri) the token stays empty and no
 // header is sent.
 let cachedApiToken = "";
+let cachedCallerIdentityProof = "";
 
 export function getApiToken(): string {
   return cachedApiToken;
@@ -42,6 +45,14 @@ export function getApiToken(): string {
 
 export function setApiToken(token: string) {
   cachedApiToken = String(token || "");
+}
+
+export function getCallerIdentityProof(): string {
+  return cachedCallerIdentityProof;
+}
+
+export function setCallerIdentityProof(proof: string) {
+  cachedCallerIdentityProof = String(proof || "");
 }
 
 /**
@@ -56,6 +67,12 @@ export async function ensureApiToken(): Promise<string> {
     if (typeof invoke === "function") {
       const token = await invoke<string>("get_api_token");
       cachedApiToken = String(token || "");
+      try {
+        const proof = await invoke<string>("get_caller_identity_proof");
+        cachedCallerIdentityProof = String(proof || "");
+      } catch {
+        /* older sidecar or web dev mode */
+      }
     }
   } catch {
     /* no token available — browser dev or command missing */
@@ -63,10 +80,11 @@ export async function ensureApiToken(): Promise<string> {
   return cachedApiToken;
 }
 
-export function headers(): Record<string, string> {
-  // Read active OPC ID (same source as companies.ts::getActiveOpcId) without circular import
-  let opcId = "";
-  try { opcId = localStorage.getItem("coevo-opc-id") || ""; } catch { /* ignore */ }
+export function headers(options: RequestOptions = {}): Record<string, string> {
+  // Read active OPC ID (same source as companies.ts::getActiveOpcId) without circular import.
+  // Company-scoped calls pass opcId explicitly so localStorage cannot leak one company scope into another request.
+  let opcId = String(options.opcId || "").trim();
+  try { if (!opcId) opcId = localStorage.getItem("coevo-opc-id") || ""; } catch { /* ignore */ }
   const identity = getLocalIdentity();
   if (!opcId) opcId = identity.opcId;
 
@@ -87,6 +105,10 @@ export function headers(): Record<string, string> {
   };
   // Attach optional auth token when the sidecar provided one (Tauri only).
   if (cachedApiToken) base["x-coevo-token"] = cachedApiToken;
+  if (cachedCallerIdentityProof) {
+    base["x-coevo-caller-identity-proof"] = cachedCallerIdentityProof;
+    base["x-coevo-actor-id"] = identity.userId;
+  }
   return base;
 }
 
@@ -111,22 +133,22 @@ async function handleResponse(res: Response) {
   try { return await res.json(); } catch { return {}; }
 }
 
-export async function get<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, { headers: headers() });
+export async function get<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
+  const res = await fetch(`${getApiBase()}${path}`, { headers: headers(options) });
   return handleResponse(res) as Promise<T>;
 }
 
-export async function post<T = unknown>(path: string, body: unknown): Promise<T> {
+export async function post<T = unknown>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     method: "POST",
-    headers: headers(),
+    headers: headers(options),
     body: JSON.stringify(body),
   });
   return handleResponse(res) as Promise<T>;
 }
 
-export async function del<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, { method: "DELETE", headers: headers() });
+export async function del<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
+  const res = await fetch(`${getApiBase()}${path}`, { method: "DELETE", headers: headers(options) });
   return handleResponse(res) as Promise<T>;
 }
 
@@ -527,8 +549,8 @@ export async function getPromptVersion(versionId: string): Promise<PromptVersion
   return get(`/opc/prompts/versions/${versionId}`);
 }
 
-export async function put<T=unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
+export async function put<T=unknown>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
+  const res = await fetch(`${getApiBase()}${path}`, { method: "PUT", headers: headers(options), body: JSON.stringify(body) });
   return handleResponse(res) as Promise<T>;
 }
 

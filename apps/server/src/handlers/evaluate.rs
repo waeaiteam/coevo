@@ -2,7 +2,7 @@
 use axum::{extract::State, Json};
 use coevo_core::decision::ActionProposalSpec;
 use coevo_core::problem::ProblemDetails;
-use coevo_policy::mock::MockPolicyEngine;
+use coevo_policy::config::ConfigDrivenPolicyEngine;
 use coevo_risk::decision_tree::RiskGate;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -45,7 +45,7 @@ pub async fn evaluate_risk(
     State(_state): State<AppState>,
     Json(req): Json<EvaluateRequest>,
 ) -> Result<Json<EvaluateResponse>, ProblemDetails> {
-    let policy = Box::new(MockPolicyEngine::new());
+    let policy = Box::new(ConfigDrivenPolicyEngine::from_env_or_baseline());
     let gate = RiskGate::new(policy);
 
     let action = ActionProposalSpec {

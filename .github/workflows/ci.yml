@@ -12,7 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: {toolchain: stable}
+        with:
+          toolchain: stable
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace
       - run: cargo test --workspace -- --nocapture
@@ -23,30 +24,80 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: {toolchain: stable}
+        with:
+          toolchain: stable
       - uses: actions/setup-node@v4
-        with: {node-version: 20}
+        with:
+          node-version: 20
       - run: cd apps/desktop && npm ci && npm run check:tauri && npm run build && npm test
 
-  synthetic:
+  security:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: {toolchain: stable}
+        with:
+          toolchain: stable
       - uses: actions/setup-node@v4
-        with: {node-version: 20}
+        with:
+          node-version: 20
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+      - name: Cargo audit
+        run: cargo audit
+      - name: Cargo deny
+        run: cargo deny check advisories bans sources
+      - name: npm audit
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm audit --audit-level=high
+      - name: Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  synthetic:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, security]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
       - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
+        with:
+          python-version: '3.11'
       - run: cargo build -p coevo-server
-      - run: |
-          nohup env COEVO_AUTH_TOKEN=ci-sidecar-token cargo run -p coevo-server >/tmp/coevo-server.log 2>&1 &
-          for i in $(seq 1 30); do
+      - name: Start coevo-server
+        run: |
+          nohup env COEVO_AUTH_TOKEN=ci-sidecar-token ./target/debug/coevo-server >/tmp/coevo-server.log 2>&1 &
+          for i in $(seq 1 90); do
             curl -fsS http://127.0.0.1:8717/health && exit 0
             sleep 2
           done
           cat /tmp/coevo-server.log
           exit 1
       - run: curl -fsS http://127.0.0.1:8717/health
-      - run: cd apps/desktop && COEVO_AUTH_TOKEN=ci-sidecar-token COEVO_OPC_ID=opc-synthetic npm run test:synthetic-opc
+      - name: Synthetic real-provider smoke
+        env:
+          COEVO_AUTH_TOKEN: ci-sidecar-token
+          COEVO_OPC_ID: opc-synthetic
+          COEVO_SYNTHETIC_PROVIDER_ID: ${{ secrets.COEVO_SYNTHETIC_PROVIDER_ID }}
+          COEVO_SYNTHETIC_MODEL_KIND: ${{ secrets.COEVO_SYNTHETIC_MODEL_KIND }}
+          COEVO_SYNTHETIC_BASE_URL: ${{ secrets.COEVO_SYNTHETIC_BASE_URL }}
+          COEVO_SYNTHETIC_API_KEY: ${{ secrets.COEVO_SYNTHETIC_API_KEY }}
+          COEVO_SYNTHETIC_DEFAULT_MODEL: ${{ secrets.COEVO_SYNTHETIC_DEFAULT_MODEL }}
+          COEVO_SYNTHETIC_FAST_MODEL: ${{ secrets.COEVO_SYNTHETIC_FAST_MODEL }}
+          COEVO_SYNTHETIC_REASONING_MODEL: ${{ secrets.COEVO_SYNTHETIC_REASONING_MODEL }}
+          COEVO_SYNTHETIC_STRUCTURED_MODEL: ${{ secrets.COEVO_SYNTHETIC_STRUCTURED_MODEL }}
+          COEVO_SYNTHETIC_MAX_TOKENS: ${{ vars.COEVO_SYNTHETIC_MAX_TOKENS }}
+          COEVO_SYNTHETIC_TEMPERATURE: ${{ vars.COEVO_SYNTHETIC_TEMPERATURE }}
+          COEVO_SYNTHETIC_TIMEOUT_MS: ${{ vars.COEVO_SYNTHETIC_TIMEOUT_MS }}
+          COEVO_SYNTHETIC_MAX_COST_USD: ${{ vars.COEVO_SYNTHETIC_MAX_COST_USD }}
+        run: python scripts/synthetic_opc_user_test.py

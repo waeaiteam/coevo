@@ -18,9 +18,11 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+const DOCKER_OUTPUT_LIMIT_BYTES: usize = 64 * 1024;
 const DOCKER_BIN: &str = "docker";
 
 /// Tracks the container name per run so `cancel` can `docker kill` it.
@@ -66,6 +68,7 @@ impl DockerExecutor {
             "--name".to_string(),
             container_name.to_string(),
         ];
+        append_default_safety_args(&mut args, &self.passport);
         // Mount the working dir per sandbox level.
         if let Some(dir) = config::working_dir(&self.passport) {
             let mode = if config::is_read_only_sandbox(self.passport.sandbox_level) {
@@ -87,6 +90,36 @@ impl DockerExecutor {
         args.extend(spec.command);
         Ok(args)
     }
+}
+
+fn append_default_safety_args(args: &mut Vec<String>, passport: &ExternalExecutorPassport) {
+    if !docker_network_allowed(passport) {
+        args.push("--network".to_string());
+        args.push("none".to_string());
+    }
+    args.push("--memory".to_string());
+    args.push("512m".to_string());
+    args.push("--cpus".to_string());
+    args.push("1.0".to_string());
+    args.push("--pids-limit".to_string());
+    args.push("128".to_string());
+    args.push("--cap-drop".to_string());
+    args.push("ALL".to_string());
+    args.push("--security-opt".to_string());
+    args.push("no-new-privileges".to_string());
+    args.push("--read-only".to_string());
+    args.push("--tmpfs".to_string());
+    args.push("/tmp:rw,noexec,nosuid,size=64m".to_string());
+}
+
+fn docker_network_allowed(passport: &ExternalExecutorPassport) -> bool {
+    passport.capabilities.iter().any(|cap| {
+        let normalized = cap.trim().to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "network" | "network-access" | "network_access" | "allow-network" | "allow_network"
+        )
+    })
 }
 
 #[async_trait]
@@ -209,6 +242,8 @@ impl ExternalExecutorAdapter for DockerExecutor {
             "exit_code": out.exit_code,
             "stdout": out.stdout,
             "stderr": out.stderr,
+            "stdout_truncated": out.stdout_truncated,
+            "stderr_truncated": out.stderr_truncated,
             "duration_ms": duration_ms,
         });
         Ok(ExecutorResult {
@@ -263,25 +298,37 @@ struct DockerOutput {
     exit_code: Option<i32>,
     stdout: String,
     stderr: String,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
 }
 
+#[derive(Debug)]
 enum DockerError {
     NotInstalled,
     Timeout,
     Io(String),
 }
 
-/// Run a `docker` subcommand with a timeout, capturing output. Distinguishes a
-/// missing docker binary from other IO errors so callers can report honestly.
+/// Run a `docker` subcommand with a timeout, capturing bounded output.
+/// Distinguishes a missing docker binary from other IO errors so callers can
+/// report honestly.
 async fn run_docker(args: &[&str], timeout: Duration) -> Result<DockerOutput, DockerError> {
-    let mut cmd = Command::new(DOCKER_BIN);
+    run_command_with_output_limit(DOCKER_BIN, args, timeout).await
+}
+
+async fn run_command_with_output_limit(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<DockerOutput, DockerError> {
+    let mut cmd = Command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let child = cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             DockerError::NotInstalled
         } else {
@@ -289,17 +336,70 @@ async fn run_docker(args: &[&str], timeout: Duration) -> Result<DockerOutput, Do
         }
     })?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(o)) => o,
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_task = tokio::spawn(read_limited_output(stdout));
+    let stderr_task = tokio::spawn(read_limited_output(stderr));
+
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => status,
         Ok(Err(e)) => return Err(DockerError::Io(e.to_string())),
-        Err(_) => return Err(DockerError::Timeout),
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            stdout_task.abort();
+            stderr_task.abort();
+            return Err(DockerError::Timeout);
+        }
     };
+
+    let (stdout, stdout_truncated) = stdout_task
+        .await
+        .map_err(|e| DockerError::Io(format!("stdout task failed: {e}")))??;
+    let (stderr, stderr_truncated) = stderr_task
+        .await
+        .map_err(|e| DockerError::Io(format!("stderr task failed: {e}")))??;
+
     Ok(DockerOutput {
-        status_success: output.status.success(),
-        exit_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        status_success: status.success(),
+        exit_code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        stdout_truncated,
+        stderr_truncated,
     })
+}
+
+async fn read_limited_output<R>(reader: Option<R>) -> Result<(Vec<u8>, bool), DockerError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut reader) = reader else {
+        return Ok((Vec::new(), false));
+    };
+    let mut out = Vec::with_capacity(DOCKER_OUTPUT_LIMIT_BYTES.min(8192));
+    let mut buf = [0_u8; 8192];
+    let mut truncated = false;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .await
+            .map_err(|e| DockerError::Io(format!("read failed: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        let remaining = DOCKER_OUTPUT_LIMIT_BYTES.saturating_sub(out.len());
+        if remaining > 0 {
+            let keep = remaining.min(n);
+            out.extend_from_slice(&buf[..keep]);
+            if keep < n {
+                truncated = true;
+            }
+        } else {
+            truncated = true;
+        }
+    }
+    Ok((out, truncated))
 }
 
 /// `docker version` server version string, or an honest offline reason.
@@ -392,6 +492,74 @@ mod tests {
             .any(|w| w[0] == "-v" && w[1] == "/tmp/work:/workspace:rw"));
     }
 
+    #[test]
+    fn build_run_args_adds_default_container_safety_flags() {
+        let exec = DockerExecutor::new(docker_passport("docker:busybox echo hi"));
+        let args = exec
+            .build_run_args(&test_work_order(), "coevo-test")
+            .unwrap();
+
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1] == "none"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--memory" && w[1] == "512m"));
+        assert!(args.windows(2).any(|w| w[0] == "--cpus" && w[1] == "1.0"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--pids-limit" && w[1] == "128"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--cap-drop" && w[1] == "ALL"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--security-opt" && w[1] == "no-new-privileges"));
+        assert!(args.contains(&"--read-only".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--tmpfs" && w[1].starts_with("/tmp:")));
+    }
+
+    #[test]
+    fn build_run_args_preserves_network_when_capability_declares_it() {
+        let mut passport = docker_passport("docker:busybox wget https://example.com");
+        passport.capabilities.push("network-access".to_string());
+        let exec = DockerExecutor::new(passport);
+        let args = exec
+            .build_run_args(&test_work_order(), "coevo-test")
+            .unwrap();
+
+        assert!(!args
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1] == "none"));
+    }
+    #[tokio::test]
+    async fn command_output_is_capped_without_waiting_for_full_buffer() {
+        let args: Vec<&str> = if cfg!(windows) {
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.Write(('x' * 200000))",
+            ]
+        } else {
+            vec!["-c", "yes x | head -c 200000"]
+        };
+        let program = if cfg!(windows) {
+            "powershell.exe"
+        } else {
+            "/bin/sh"
+        };
+
+        let out = run_command_with_output_limit(program, &args, Duration::from_secs(10))
+            .await
+            .expect("test command should run");
+
+        assert!(out.status_success);
+        assert!(out.stdout.len() <= DOCKER_OUTPUT_LIMIT_BYTES);
+        assert!(out.stdout_truncated);
+    }
     #[test]
     fn build_run_args_errors_without_image() {
         let exec = DockerExecutor::new(docker_passport("docker:"));

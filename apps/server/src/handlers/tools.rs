@@ -888,6 +888,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("coevo-tools-write-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::env::set_var("COEVO_WORKSPACE_DIR", &root);
+        std::env::set_var("COEVO_ENABLE_WORKSPACE_SHELL", "1");
         let state = AppState::new(pool.clone(), root.clone());
 
         insert_work_order(
@@ -943,6 +944,7 @@ mod tests {
             .contains("workspace-shell-ok"));
 
         std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::env::remove_var("COEVO_ENABLE_WORKSPACE_SHELL");
         std::fs::remove_dir_all(root).ok();
     }
 

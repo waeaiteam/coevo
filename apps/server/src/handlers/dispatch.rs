@@ -280,9 +280,21 @@ mod tests {
 
     fn heads() -> Vec<(String, String, String)> {
         vec![
-            ("FounderOffice".into(), "agent-founder-01".into(), "Founder Assistant".into()),
-            ("Product".into(), "agent-pm-01".into(), "Product Manager".into()),
-            ("Engineering".into(), "agent-engineer-01".into(), "Engineer".into()),
+            (
+                "FounderOffice".into(),
+                "agent-founder-01".into(),
+                "Founder Assistant".into(),
+            ),
+            (
+                "Product".into(),
+                "agent-pm-01".into(),
+                "Product Manager".into(),
+            ),
+            (
+                "Engineering".into(),
+                "agent-engineer-01".into(),
+                "Engineer".into(),
+            ),
         ]
     }
 

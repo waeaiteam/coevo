@@ -1,10 +1,14 @@
-//! Persisted MCP server registrations (migration 051).
+//! Persisted MCP server registrations (migration 051+054).
 //!
 //! Backs the real MCP client: connection settings for stdio/http transports,
 //! the enable switch, the last observed connection status, and the cached
-//! tool list discovered from the server.
+//! tool list discovered from the server. MCP registrations are scoped by opc_id
+//! so companies cannot see or call each other's configured servers.
 
 use sqlx::SqlitePool;
+
+const DEFAULT_OPC_ID: &str = "default-opc";
+const MCP_SELECT_COLUMNS: &str = "opc_id, id, name, transport, command, args_json, env_json, url, headers_json, enabled, status, last_error, tools_json, created_at, updated_at";
 
 /// One row of `mcp_servers`.
 ///
@@ -14,6 +18,7 @@ use sqlx::SqlitePool;
 /// `created_at`/`updated_at` are RFC 3339 timestamps.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct McpServerRecord {
+    pub opc_id: String,
     pub id: String,
     pub name: String,
     pub transport: String,
@@ -35,10 +40,11 @@ impl McpServerRepo {
     pub async fn insert(pool: &SqlitePool, record: &McpServerRecord) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO mcp_servers (\
-                id, name, transport, command, args_json, env_json, url, headers_json, \
+                opc_id, id, name, transport, command, args_json, env_json, url, headers_json, \
                 enabled, status, last_error, tools_json, created_at, updated_at\
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
+        .bind(&record.opc_id)
         .bind(&record.id)
         .bind(&record.name)
         .bind(&record.transport)
@@ -58,14 +64,22 @@ impl McpServerRepo {
         Ok(())
     }
 
-    /// Full-row update by id (`created_at` is preserved as stored on insert).
-    /// Returns `RowNotFound` when the id does not exist.
+    /// Full-row update by company + id (`created_at` is preserved as stored on insert).
+    /// Returns `RowNotFound` when the scoped id does not exist.
     pub async fn update(pool: &SqlitePool, record: &McpServerRecord) -> Result<(), sqlx::Error> {
+        Self::update_for_opc(pool, &record.opc_id, record).await
+    }
+
+    pub async fn update_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+        record: &McpServerRecord,
+    ) -> Result<(), sqlx::Error> {
         let result = sqlx::query(
             "UPDATE mcp_servers SET \
                 name=?, transport=?, command=?, args_json=?, env_json=?, url=?, headers_json=?, \
                 enabled=?, status=?, last_error=?, tools_json=?, updated_at=? \
-            WHERE id=?",
+            WHERE opc_id=? AND id=?",
         )
         .bind(&record.name)
         .bind(&record.transport)
@@ -79,6 +93,7 @@ impl McpServerRepo {
         .bind(&record.last_error)
         .bind(&record.tools_json)
         .bind(&record.updated_at)
+        .bind(opc_id)
         .bind(&record.id)
         .execute(pool)
         .await?;
@@ -89,7 +104,16 @@ impl McpServerRepo {
     }
 
     pub async fn delete(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM mcp_servers WHERE id=?")
+        Self::delete_for_opc(pool, DEFAULT_OPC_ID, id).await
+    }
+
+    pub async fn delete_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM mcp_servers WHERE opc_id=? AND id=?")
+            .bind(opc_id)
             .bind(id)
             .execute(pool)
             .await?;
@@ -97,24 +121,63 @@ impl McpServerRepo {
     }
 
     pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<McpServerRecord>, sqlx::Error> {
-        sqlx::query_as::<_, McpServerRecord>("SELECT * FROM mcp_servers WHERE id=?")
+        Self::get_for_opc(pool, DEFAULT_OPC_ID, id).await
+    }
+
+    pub async fn get_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+    ) -> Result<Option<McpServerRecord>, sqlx::Error> {
+        let sql = format!("SELECT {MCP_SELECT_COLUMNS} FROM mcp_servers WHERE opc_id=? AND id=?");
+        sqlx::query_as::<_, McpServerRecord>(&sql)
+            .bind(opc_id)
             .bind(id)
             .fetch_optional(pool)
             .await
     }
 
+    /// List all MCP registrations across companies. Prefer `list_for_opc` in request paths.
     pub async fn list(pool: &SqlitePool) -> Result<Vec<McpServerRecord>, sqlx::Error> {
-        sqlx::query_as::<_, McpServerRecord>("SELECT * FROM mcp_servers ORDER BY name")
+        let sql = format!("SELECT {MCP_SELECT_COLUMNS} FROM mcp_servers ORDER BY opc_id, name");
+        sqlx::query_as::<_, McpServerRecord>(&sql)
             .fetch_all(pool)
             .await
     }
 
+    pub async fn list_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+    ) -> Result<Vec<McpServerRecord>, sqlx::Error> {
+        let sql =
+            format!("SELECT {MCP_SELECT_COLUMNS} FROM mcp_servers WHERE opc_id=? ORDER BY name");
+        sqlx::query_as::<_, McpServerRecord>(&sql)
+            .bind(opc_id)
+            .fetch_all(pool)
+            .await
+    }
+
+    /// List all enabled MCP registrations across companies. Prefer `list_enabled_for_opc` in workers.
     pub async fn list_enabled(pool: &SqlitePool) -> Result<Vec<McpServerRecord>, sqlx::Error> {
-        sqlx::query_as::<_, McpServerRecord>(
-            "SELECT * FROM mcp_servers WHERE enabled=1 ORDER BY name",
-        )
-        .fetch_all(pool)
-        .await
+        let sql = format!(
+            "SELECT {MCP_SELECT_COLUMNS} FROM mcp_servers WHERE enabled=1 ORDER BY opc_id, name"
+        );
+        sqlx::query_as::<_, McpServerRecord>(&sql)
+            .fetch_all(pool)
+            .await
+    }
+
+    pub async fn list_enabled_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+    ) -> Result<Vec<McpServerRecord>, sqlx::Error> {
+        let sql = format!(
+            "SELECT {MCP_SELECT_COLUMNS} FROM mcp_servers WHERE opc_id=? AND enabled=1 ORDER BY name"
+        );
+        sqlx::query_as::<_, McpServerRecord>(&sql)
+            .bind(opc_id)
+            .fetch_all(pool)
+            .await
     }
 
     /// Record the latest connection status. `last_error` should be `Some`
@@ -125,14 +188,26 @@ impl McpServerRepo {
         status: &str,
         last_error: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        let result =
-            sqlx::query("UPDATE mcp_servers SET status=?, last_error=?, updated_at=? WHERE id=?")
-                .bind(status)
-                .bind(last_error)
-                .bind(chrono::Utc::now().to_rfc3339())
-                .bind(id)
-                .execute(pool)
-                .await?;
+        Self::set_status_for_opc(pool, DEFAULT_OPC_ID, id, status, last_error).await
+    }
+
+    pub async fn set_status_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+        status: &str,
+        last_error: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE mcp_servers SET status=?, last_error=?, updated_at=? WHERE opc_id=? AND id=?",
+        )
+        .bind(status)
+        .bind(last_error)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(opc_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(sqlx::Error::RowNotFound);
         }
@@ -145,12 +220,24 @@ impl McpServerRepo {
         id: &str,
         tools_json: &str,
     ) -> Result<(), sqlx::Error> {
-        let result = sqlx::query("UPDATE mcp_servers SET tools_json=?, updated_at=? WHERE id=?")
-            .bind(tools_json)
-            .bind(chrono::Utc::now().to_rfc3339())
-            .bind(id)
-            .execute(pool)
-            .await?;
+        Self::set_tools_for_opc(pool, DEFAULT_OPC_ID, id, tools_json).await
+    }
+
+    pub async fn set_tools_for_opc(
+        pool: &SqlitePool,
+        opc_id: &str,
+        id: &str,
+        tools_json: &str,
+    ) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE mcp_servers SET tools_json=?, updated_at=? WHERE opc_id=? AND id=?",
+        )
+        .bind(tools_json)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(opc_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(sqlx::Error::RowNotFound);
         }
@@ -166,6 +253,7 @@ mod tests {
     fn stdio_record(id: &str, name: &str) -> McpServerRecord {
         let now = chrono::Utc::now().to_rfc3339();
         McpServerRecord {
+            opc_id: DEFAULT_OPC_ID.to_string(),
             id: id.to_string(),
             name: name.to_string(),
             transport: "stdio".to_string(),
@@ -181,6 +269,39 @@ mod tests {
             created_at: now.clone(),
             updated_at: now,
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_servers_are_scoped_by_opc_id() {
+        let pool = create_test_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let mut alpha = stdio_record("shared-server", "shared-name");
+        alpha.opc_id = "opc-alpha".to_string();
+        let mut beta = stdio_record("shared-server", "shared-name");
+        beta.opc_id = "opc-beta".to_string();
+
+        McpServerRepo::insert(&pool, &alpha).await.unwrap();
+        McpServerRepo::insert(&pool, &beta).await.unwrap();
+
+        let alpha_rows = McpServerRepo::list_for_opc(&pool, "opc-alpha")
+            .await
+            .unwrap();
+        assert_eq!(alpha_rows.len(), 1);
+        assert_eq!(alpha_rows[0].opc_id, "opc-alpha");
+
+        let beta_row = McpServerRepo::get_for_opc(&pool, "opc-beta", "shared-server")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(beta_row.opc_id, "opc-beta");
+
+        assert!(
+            McpServerRepo::get_for_opc(&pool, "opc-gamma", "shared-server")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -294,7 +415,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_rejects_invalid_transport_status_and_duplicate_name() {
+    async fn schema_rejects_invalid_transport_status_and_duplicate_name_in_same_company() {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 

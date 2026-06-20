@@ -12,10 +12,10 @@ pub mod mcp_client;
 pub mod traits;
 
 pub use a2a_router::InProcessA2aRouter;
-pub use traits::DeliveredMessage;
 pub use identity_ed25519::{identity_challenge, Ed25519IdentityProvider};
 pub use mcp_client::{
     integrity_hash, make_tool_urn, parse_tool_urn, shared_mcp_client_manager, McpClient,
     McpClientManager, McpContent, McpServerConfig, McpServerInfo, McpServerRow, McpToolInfo,
     McpToolOutput, McpTransportConfig, RealMcpClient, TransportKind, DEFAULT_TOOL_TIMEOUT,
 };
+pub use traits::DeliveredMessage;

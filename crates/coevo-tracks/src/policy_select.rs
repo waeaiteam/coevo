@@ -1,13 +1,9 @@
 //! Policy-engine selection for track runners.
 //!
-//! Mirrors `coevo-worker`'s GovernGate: the live default is the fail-closed
-//! [`DenyAllPolicyEngine`]; the keyword [`MockPolicyEngine`] is only used under
-//! `cfg!(test)` (this crate's own unit tests) or when
-//! `COEVO_ENABLE_MOCK_POLICY_ENGINE=1`. With no env var and outside tests, the
-//! default is fail-closed — a track can never silently authorize an action
-//! through an absent policy engine.
-
-use coevo_policy::fail_closed::DenyAllPolicyEngine;
+//! Mirrors `coevo-worker`'s GovernGate: the live default is the config-driven
+//! production rules engine. The keyword [`MockPolicyEngine`] is only used under
+//! `cfg!(test)` or explicit `COEVO_ENABLE_MOCK_POLICY_ENGINE=1`.
+use coevo_policy::config::ConfigDrivenPolicyEngine;
 use coevo_policy::mock::MockPolicyEngine;
 use coevo_policy::traits::PolicyEngine;
 
@@ -22,12 +18,12 @@ fn mock_allowed() -> bool {
 
 /// Select the policy engine a track runner should gate with.
 ///
-/// Fail-closed [`DenyAllPolicyEngine`] by default; [`MockPolicyEngine`] only
+/// Config-driven [`ConfigDrivenPolicyEngine`] by default; [`MockPolicyEngine`] only
 /// under tests or `COEVO_ENABLE_MOCK_POLICY_ENGINE=1`.
 pub fn select_policy_engine() -> Box<dyn PolicyEngine> {
     if mock_allowed() {
         Box::new(MockPolicyEngine::new())
     } else {
-        Box::new(DenyAllPolicyEngine)
+        Box::new(ConfigDrivenPolicyEngine::from_env_or_baseline())
     }
 }

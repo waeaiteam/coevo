@@ -43,7 +43,7 @@ struct PendingMap {
 /// JSON-RPC peer over a byte stream: writes newline-delimited requests, and a
 /// background task routes responses to per-request oneshot channels by id.
 pub(crate) struct StreamPeer {
-    writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
+    writer: Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>,
     pending: Arc<StdMutex<PendingMap>>,
     next_id: AtomicI64,
     reader_task: JoinHandle<()>,
@@ -64,9 +64,18 @@ impl StreamPeer {
             map: HashMap::new(),
             closed: false,
         }));
-        let reader_task = tokio::spawn(read_loop(read, Arc::clone(&pending), notifications, label));
+        let writer = Arc::new(Mutex::new(
+            Box::new(write) as Box<dyn AsyncWrite + Send + Unpin>
+        ));
+        let reader_task = tokio::spawn(read_loop(
+            read,
+            Arc::clone(&writer),
+            Arc::clone(&pending),
+            notifications,
+            label,
+        ));
         Self {
-            writer: Mutex::new(Box::new(write)),
+            writer,
             pending,
             next_id: AtomicI64::new(1),
             reader_task,
@@ -141,6 +150,7 @@ impl Drop for StreamPeer {
 
 async fn read_loop<R>(
     read: R,
+    writer: Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>,
     pending: Arc<StdMutex<PendingMap>>,
     notifications: Arc<NotificationState>,
     label: String,
@@ -179,11 +189,14 @@ async fn read_loop<R>(
                     Ok(InboundMessage::Notification(n)) => {
                         handle_notification(&n, &notifications, &label)
                     }
-                    Ok(InboundMessage::Request(req)) => warn!(
-                        server = %label,
-                        method = %req.method,
-                        "ignoring server-initiated MCP request (tools-only client)"
-                    ),
+                    Ok(InboundMessage::Request(req)) => {
+                        warn!(
+                            server = %label,
+                            method = %req.method,
+                            "rejecting server-initiated MCP request (tools-only client)"
+                        );
+                        send_method_not_found(&writer, req.id, &req.method, &label).await;
+                    }
                     Err(e) => warn!(server = %label, error = %e, "unparseable MCP message"),
                 }
             }
@@ -201,6 +214,42 @@ async fn read_loop<R>(
     debug!(server = %label, "MCP stream closed");
 }
 
+async fn send_method_not_found(
+    writer: &Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>,
+    id: RequestId,
+    method: &str,
+    label: &str,
+) {
+    let response = JsonRpcResponse {
+        jsonrpc: jsonrpc::JSONRPC_VERSION.to_string(),
+        id: Some(id),
+        result: None,
+        error: Some(jsonrpc::JsonRpcError {
+            code: -32601,
+            message: "method not found".to_string(),
+            data: Some(serde_json::json!({ "method": method })),
+        }),
+    };
+    let line = match serde_json::to_string(&response) {
+        Ok(line) => line,
+        Err(e) => {
+            warn!(server = %label, error = %e, "failed to encode MCP server-request error");
+            return;
+        }
+    };
+    let mut writer = writer.lock().await;
+    if let Err(e) = writer.write_all(line.as_bytes()).await {
+        warn!(server = %label, error = %e, "failed to write MCP server-request error");
+        return;
+    }
+    if let Err(e) = writer.write_all(b"\n").await {
+        warn!(server = %label, error = %e, "failed to terminate MCP server-request error");
+        return;
+    }
+    if let Err(e) = writer.flush().await {
+        warn!(server = %label, error = %e, "failed to flush MCP server-request error");
+    }
+}
 /// MCP stdio transport: a child process speaking newline-delimited JSON-RPC
 /// on stdin/stdout, with stderr forwarded to tracing.
 pub(crate) struct StdioTransport {
@@ -283,5 +332,44 @@ impl StdioTransport {
         if let Some(task) = &self.stderr_task {
             task.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{duplex, split, AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn server_initiated_request_gets_jsonrpc_error_response() {
+        let (client_side, server_side) = duplex(4096);
+        let (client_read, client_write) = split(client_side);
+        let (server_read, mut server_write) = split(server_side);
+        let _peer = StreamPeer::new(
+            client_read,
+            client_write,
+            Arc::new(NotificationState::default()),
+            "test-server".to_string(),
+        );
+
+        server_write
+            .write_all(
+                br#"{"jsonrpc":"2.0","id":99,"method":"sampling/createMessage","params":{}}
+"#,
+            )
+            .await
+            .unwrap();
+        server_write.flush().await.unwrap();
+
+        let mut lines = BufReader::new(server_read).lines();
+        let line = tokio::time::timeout(Duration::from_secs(1), lines.next_line())
+            .await
+            .expect("server-initiated request should receive a JSON-RPC error response")
+            .unwrap()
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["jsonrpc"], "2.0");
+        assert_eq!(response["id"], 99);
+        assert_eq!(response["error"]["code"], -32601);
     }
 }

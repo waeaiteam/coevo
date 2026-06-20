@@ -14,6 +14,7 @@ use crate::tool_registry::ToolRegistry;
 use crate::types::WorkerRun;
 use coevo_audit::logger::AuditLogger;
 use coevo_core::cognitive::CognitiveLayer;
+use coevo_core::contract::MCLSpec;
 use coevo_core::opc::{MemoryRecord, MemoryScope, MemoryStatus};
 use coevo_models::gateway::ModelGateway;
 use coevo_models::openai::extract_structured_json_text;
@@ -26,6 +27,7 @@ use coevo_models::types::{
     ModelToolDefinition, ResponseFormat,
 };
 use coevo_store::company_workspace::CompanyWorkspaceManager;
+use coevo_store::repos::risk_repo::RiskRepo;
 use coevo_store::repos::worker_run_repo::{
     WorkerEventRepo, WorkerRunRepo, WorkerSkillUsageRepo, WorkerToolCallRepo,
 };
@@ -49,6 +51,7 @@ pub struct RunAuthorization {
     pub plan_hash: String,
     pub sandbox_profile: SandboxProfile,
     pub model_preference: Option<String>,
+    pub execution_contract: Option<MCLSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -246,11 +249,18 @@ impl AgentSubHarness {
         // governed tool the agent can call; the server connection is made lazily on
         // first invocation, so listing here costs no network.
         if let Ok(mcp_servers) =
-            coevo_store::repos::mcp_server_repo::McpServerRepo::list_enabled(pool).await
+            coevo_store::repos::mcp_server_repo::McpServerRepo::list_enabled_for_opc(
+                pool,
+                &run_contract.opc_id,
+            )
+            .await
         {
             for record in mcp_servers {
+                if record.transport.trim().eq_ignore_ascii_case("stdio") {
+                    continue;
+                }
                 let row = coevo_adapters::McpServerRow {
-                    id: record.id.clone(),
+                    id: format!("{}:{}", record.opc_id, record.id),
                     name: record.name.clone(),
                     transport: record.transport.clone(),
                     command: record.command.clone(),
@@ -341,7 +351,17 @@ impl AgentSubHarness {
         let mut timed_out = false;
         let mut blocked = false;
         let mut consecutive_denials = 0usize;
-        let max_rounds = 16usize;
+        let max_rounds = authorization
+            .execution_contract
+            .as_ref()
+            .map(|contract| contract.termination_policy.max_hops.max(1) as usize)
+            .unwrap_or(16usize);
+        let effective_max_runtime_ms = max_runtime_ms.or_else(|| {
+            authorization
+                .execution_contract
+                .as_ref()
+                .and_then(|contract| i64::try_from(contract.termination_policy.max_latency_ms).ok())
+        });
         let context_engine = MemoryBudgetContextEngine;
         let govern_gate = GovernGate::default_for_authorization(authorization);
         let started_at_ms = now();
@@ -365,7 +385,7 @@ impl AgentSubHarness {
                 last_tool_summary = "Run cancelled by server before a new round began".to_string();
                 break;
             }
-            if let Some(max_runtime_ms) = max_runtime_ms {
+            if let Some(max_runtime_ms) = effective_max_runtime_ms {
                 if now().saturating_sub(started_at_ms) >= max_runtime_ms {
                     timed_out = true;
                     termination_reason = "runtime_timeout".to_string();
@@ -385,7 +405,7 @@ impl AgentSubHarness {
                 "ModelCall",
                 caps,
                 model_profiles,
-                max_runtime_ms.map(|m| m as u64),
+                effective_max_runtime_ms.map(|m| m as u64),
             );
             if routing.selected_model_id == "unavailable" {
                 return Err(WorkerError::Internal(
@@ -661,15 +681,24 @@ impl AgentSubHarness {
                 | ActionProposal::Finish { .. }
                 | ActionProposal::AskHuman { .. } => vec![],
             };
-            let allowed_native_calls = if streamed_tool_calls.len() > 1 {
-                streamed_tool_calls
-                    .iter()
-                    .filter(|call| allowed.iter().any(|tool| tool.tool_id == call.name))
-                    .cloned()
-                    .collect::<Vec<_>>()
+            let streamed_native_gate = if streamed_tool_calls.len() > 1 {
+                Some(
+                    adjudicate_streamed_native_tool_calls(
+                        &govern_gate,
+                        &streamed_tool_calls,
+                        &allowed,
+                        &all_tools,
+                        authorization,
+                    )
+                    .await,
+                )
             } else {
-                vec![]
+                None
             };
+            let allowed_native_calls = streamed_native_gate
+                .as_ref()
+                .map(|result| result.allowed_calls.clone())
+                .unwrap_or_default();
             let assistant_history_message = ModelMessage {
                 role: "assistant".to_string(),
                 content: serde_json::to_string(&reasoning).unwrap_or_default(),
@@ -678,9 +707,29 @@ impl AgentSubHarness {
                 tool_call_id: None,
             };
 
-            let gate = govern_gate
-                .adjudicate(&reasoning.proposal, authorization, &all_tools)
+            let (mut gate, mut gate_audit) = govern_gate
+                .adjudicate_with_audit(&reasoning.proposal, authorization, &all_tools)
                 .await;
+            if let Some(streamed_gate) = &streamed_native_gate {
+                gate = streamed_gate.gate.clone();
+                gate_audit = None;
+            }
+            if let Some(audit) = &gate_audit {
+                let _ = RiskRepo::insert(
+                    pool,
+                    &uuid::Uuid::new_v4().to_string(),
+                    &authorization.contract_hash,
+                    &authorization.agent_id,
+                    &audit.action_urn,
+                    &audit.decision,
+                    audit.required_confidence,
+                    audit.available_confidence,
+                    audit.action_risk,
+                    audit.inaction_risk,
+                    &audit.reason,
+                )
+                .await;
+            }
             let _ = AuditLogger::log_json(
                 pool,
                 "worker.governance",
@@ -735,6 +784,15 @@ impl AgentSubHarness {
                     }),
                 );
                 obj.insert("gate".into(), gate_to_json(&gate));
+                if let Some(streamed_gate) = &streamed_native_gate {
+                    obj.insert(
+                        "streamed_tool_gate".into(),
+                        serde_json::json!({
+                            "gate": gate_to_json(&streamed_gate.gate),
+                            "allowed_call_count": streamed_gate.allowed_calls.len(),
+                        }),
+                    );
+                }
             }
             WorkerEventStream::append(
                 pool,
@@ -1473,11 +1531,7 @@ impl AgentSubHarness {
                             observation = Some(next_observation);
                             termination_reason = "executor_executed".to_string();
                         }
-                        ActionProposal::SpawnSubagent {
-                            skill_id,
-                            task,
-                            ..
-                        } => {
+                        ActionProposal::SpawnSubagent { skill_id, task, .. } => {
                             if is_run_cancelled(
                                 pool,
                                 &authorization.run_id,
@@ -2554,6 +2608,63 @@ async fn is_run_cancelled(
     Ok(matches!(session_status.as_deref(), Some("Cancelled")))
 }
 
+#[derive(Debug)]
+struct StreamedNativeToolGate {
+    gate: GateOutcome,
+    allowed_calls: Vec<ModelToolCall>,
+}
+
+async fn adjudicate_streamed_native_tool_calls(
+    govern_gate: &GovernGate,
+    streamed_tool_calls: &[ModelToolCall],
+    visible_tools: &[&crate::types::Tool],
+    all_tools: &[crate::types::Tool],
+    authorization: &RunAuthorization,
+) -> StreamedNativeToolGate {
+    let mut allowed_calls = Vec::new();
+    for call in streamed_tool_calls {
+        if !visible_tools.iter().any(|tool| tool.tool_id == call.name) {
+            return StreamedNativeToolGate {
+                gate: GateOutcome::Deny {
+                    reason: format!("Tool {} is not permitted for this run", call.name),
+                },
+                allowed_calls: Vec::new(),
+            };
+        }
+        let input = match serde_json::from_str::<serde_json::Value>(&call.arguments) {
+            Ok(value) => value,
+            Err(e) => {
+                return StreamedNativeToolGate {
+                    gate: GateOutcome::Deny {
+                        reason: format!("Tool {} arguments are not valid JSON: {e}", call.name),
+                    },
+                    allowed_calls: Vec::new(),
+                };
+            }
+        };
+        let proposal = ActionProposal::CallTool {
+            tool_id: call.name.clone(),
+            input,
+            rationale: "streamed model tool call".to_string(),
+        };
+        match govern_gate
+            .adjudicate(&proposal, authorization, all_tools)
+            .await
+        {
+            GateOutcome::Allow => allowed_calls.push(call.clone()),
+            other => {
+                return StreamedNativeToolGate {
+                    gate: other,
+                    allowed_calls: Vec::new(),
+                };
+            }
+        }
+    }
+    StreamedNativeToolGate {
+        gate: GateOutcome::Allow,
+        allowed_calls,
+    }
+}
 struct ExecutedNativeToolCall {
     tool_call: ModelToolCall,
     input: serde_json::Value,
@@ -2744,7 +2855,10 @@ async fn run_governed_subagent(
     skill_directive: &str,
     task: &str,
 ) -> Result<String, WorkerError> {
-    let mut caps = vec![ModelCapability::StructuredJSON, ModelCapability::DeepReasoning];
+    let mut caps = vec![
+        ModelCapability::StructuredJSON,
+        ModelCapability::DeepReasoning,
+    ];
     caps.sort_by_key(|capability| format!("{capability:?}"));
     caps.dedup();
     let routing = route_for_step(
@@ -3382,6 +3496,50 @@ mod tests {
         }
     }
 
+    fn test_mcl_contract(work_order_id: &str) -> MCLSpec {
+        MCLSpec {
+            mcl_version: "1.0".to_string(),
+            mcl_state: coevo_core::contract::ContractState::ActiveContract,
+            parent_contract_hash: "0".repeat(64),
+            goal_tree: coevo_core::contract::GoalTree {
+                root: coevo_core::contract::GoalNode {
+                    id: work_order_id.to_string(),
+                    description: "Test governed work".to_string(),
+                    status: coevo_core::contract::GoalStatus::InProgress,
+                    children: vec![],
+                    depends_on: vec![],
+                },
+            },
+            institution_policy_hash: "b".repeat(64),
+            data_boundary: vec!["urn:coevo:data:workspace".to_string()],
+            allowed_action_modes: vec![coevo_core::contract::ActionMode::DraftOnly],
+            human_approval_policy: coevo_core::contract::HumanApprovalPolicy {
+                approval_mode: coevo_core::contract::ApprovalMode::ExplicitApproval,
+                authorized_roles: vec!["founder".to_string()],
+                negative_consent_timeout_secs: 0,
+                mfa_auth_url: None,
+            },
+            evidence_requirement: coevo_core::contract::EvidenceRequirement {
+                minimum_level: "self_report".to_string(),
+                require_json_report: false,
+            },
+            risk_tolerance_profile: coevo_core::contract::RiskToleranceProfile {
+                max_risk_score: 0.3,
+                allow_emergency_lease: false,
+            },
+            termination_policy: coevo_core::contract::TerminationPolicy {
+                max_token_budget: 10_000,
+                max_hops: 16,
+                max_latency_ms: 60_000,
+                max_stance_rounds: 16,
+            },
+            responsibility_anchor_policy: coevo_core::contract::ResponsibilityAnchorPolicy {
+                required_human_roles: vec!["founder".to_string()],
+                agent_forbidden_actions: vec![],
+            },
+        }
+    }
+
     fn memory_context() -> crate::types::MemoryContext {
         crate::types::MemoryContext {
             user_profile: None,
@@ -3422,6 +3580,7 @@ mod tests {
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track("green", Some(std::env::temp_dir())),
             model_preference: None,
+            execution_contract: None,
         }
     }
 
@@ -3440,9 +3599,72 @@ mod tests {
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track("green", None),
             model_preference: None,
+            execution_contract: None,
         }
     }
 
+    fn harness_tool(
+        id: &str,
+        tool_type: crate::types::ToolType,
+        risk_ceiling: f64,
+        actions: Vec<&str>,
+    ) -> crate::types::Tool {
+        crate::types::Tool {
+            tool_id: id.to_string(),
+            name: id.to_string(),
+            tool_type,
+            risk_ceiling,
+            supported_actions: actions.into_iter().map(ToString::to_string).collect(),
+            permission_boundary_json: serde_json::json!({}),
+            requires_credential: false,
+            credential_ref: None,
+            enabled: true,
+        }
+    }
+
+    fn streamed_call(index: usize, name: &str, arguments: serde_json::Value) -> ModelToolCall {
+        ModelToolCall {
+            index,
+            id: Some(format!("call-{index}")),
+            name: name.to_string(),
+            arguments: serde_json::to_string(&arguments).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_native_tool_calls_fail_closed_when_any_call_is_not_visible() {
+        let auth = test_auth("wo-multi-tool-gate", "run-multi-tool-gate", vec![]);
+        let gate = GovernGate::default_for_authorization(&auth);
+        let read_tool = harness_tool(
+            "file-readonly",
+            crate::types::ToolType::FileReadonly,
+            0.3,
+            vec!["ReadFile"],
+        );
+        let shell_tool = harness_tool(
+            "workspace-shell",
+            crate::types::ToolType::LocalProcessSandbox,
+            0.6,
+            vec!["RunShell"],
+        );
+        let all_tools = vec![read_tool.clone(), shell_tool];
+        let visible_tools = vec![&read_tool];
+        let calls = vec![
+            streamed_call(0, "file-readonly", serde_json::json!({"path":"README.md"})),
+            streamed_call(
+                1,
+                "workspace-shell",
+                serde_json::json!({"command":"whoami"}),
+            ),
+        ];
+
+        let result =
+            adjudicate_streamed_native_tool_calls(&gate, &calls, &visible_tools, &all_tools, &auth)
+                .await;
+
+        assert!(matches!(result.gate, GateOutcome::Deny { .. }));
+        assert!(result.allowed_calls.is_empty());
+    }
     async fn migrated_pool() -> sqlx::SqlitePool {
         let pool = create_test_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
@@ -4552,6 +4774,80 @@ mod tests {
         assert!(required.contains(&serde_json::Value::String("action".to_string())));
         assert!(required.contains(&serde_json::Value::String("path".to_string())));
         assert_eq!(first_request.tool_choice, Some(serde_json::json!("auto")));
+    }
+
+    #[tokio::test]
+    async fn stdio_mcp_servers_are_never_advertised_to_worker_from_persisted_rows() {
+        std::env::set_var("COEVO_ENABLE_MCP_STDIO", "1");
+        let pool = migrated_pool().await;
+        let now = chrono::Utc::now().timestamp_millis().to_string();
+        let tools_json = serde_json::to_string(&vec![coevo_adapters::McpToolInfo {
+            name: "dangerous".to_string(),
+            description: Some("legacy stdio tool".to_string()),
+            input_schema: serde_json::json!({"type":"object"}),
+        }])
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mcp_servers (opc_id,id,name,transport,command,args_json,env_json,url,headers_json,enabled,status,last_error,tools_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind("default-opc")
+        .bind("legacy-stdio")
+        .bind("legacy-stdio")
+        .bind("stdio")
+        .bind("should-not-run")
+        .bind("[]")
+        .bind("{}")
+        .bind(Option::<String>::None)
+        .bind("{}")
+        .bind(1_i64)
+        .bind("connected")
+        .bind(Option::<String>::None)
+        .bind(tools_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let gateway = ScriptedGateway::new(vec![serde_json::json!({
+            "thought": "I can finish without calling any tool.",
+            "proposal": {
+                "kind": "finish",
+                "summary": "Only safe tools were advertised.",
+                "result": {"ok": true}
+            },
+            "confidence": 0.88
+        })]);
+        let seen_requests = gateway.seen_requests.clone();
+        let mut auth = test_auth("wo-stdio-mcp-hidden", "run-stdio-mcp-hidden", vec![]);
+        auth.allowed_actions = vec!["read".to_string(), "execute".to_string()];
+
+        let result = AgentSubHarness::execute(
+            &pool,
+            &test_contract("wo-stdio-mcp-hidden", "Summarize the launch plan."),
+            &auth,
+            &default_model_profiles(),
+            None,
+            &gateway,
+            &ModelProviderConfig::mock(),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_status, "Completed");
+        let requests = seen_requests.lock().unwrap();
+        let tool_names = requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !tool_names.contains(&"urn:mcp:legacy-stdio:dangerous"),
+            "stdio MCP tools from persisted legacy rows must never be advertised to worker runs: {tool_names:?}"
+        );
+        std::env::remove_var("COEVO_ENABLE_MCP_STDIO");
     }
 
     #[tokio::test]
@@ -6472,7 +6768,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_reasoning_output_rebuilds_string_call_tool_when_payload_fields_exist() {        let parsed = parse_reasoning_output(
+    fn parse_reasoning_output_rebuilds_string_call_tool_when_payload_fields_exist() {
+        let parsed = parse_reasoning_output(
             serde_json::json!({
                 "thought": "I can use the tool directly.",
                 "proposal": "call_tool",
@@ -6986,6 +7283,126 @@ Conclusion:
     }
 
     #[tokio::test]
+    async fn governance_decisions_are_persisted_to_risk_repo() {
+        let pool = migrated_pool().await;
+        let root = std::env::temp_dir().join(format!("coevo-risk-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let gateway = ScriptedGateway::new(vec![serde_json::json!({
+            "thought": "Inspect the allowed directory before summarizing.",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_id": "file-readonly",
+                "input": {
+                    "action": "ListDirectory",
+                    "path": root.to_string_lossy().to_string(),
+                    "allowed_paths": [root.to_string_lossy().to_string()]
+                },
+                "rationale": "Legal read-only evidence gathering."
+            },
+            "confidence": 0.8
+        })]);
+        let mut auth = test_auth("wo-risk-audit", "run-risk-audit", vec![]);
+        auth.contract_hash = "e".repeat(64);
+        let execution_contract = test_mcl_contract("wo-risk-audit");
+        coevo_store::repos::contract_repo::ContractRepo::insert(
+            &pool,
+            &execution_contract,
+            &auth.contract_hash,
+        )
+        .await
+        .unwrap();
+        auth.execution_contract = Some(execution_contract);
+
+        let result = AgentSubHarness::execute(
+            &pool,
+            &test_contract("wo-risk-audit", "Inspect evidence."),
+            &auth,
+            &default_model_profiles(),
+            None,
+            &gateway,
+            &ModelProviderConfig::mock(),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        std::fs::remove_dir_all(&root).ok();
+
+        assert!(matches!(
+            result.final_status.as_str(),
+            "Completed" | "TimedOut"
+        ));
+        let risk_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM risk_decisions WHERE contract_hash=? AND agent_id=? AND action_urn LIKE 'urn:coevo:action:file-readonly:%'",
+        )
+        .bind(&auth.contract_hash)
+        .bind(&auth.agent_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            risk_rows > 0,
+            "expected worker RiskGate decision to be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn loop_uses_persisted_contract_max_hops() {
+        let pool = migrated_pool().await;
+        let root =
+            std::env::temp_dir().join(format!("coevo-contract-max-hops-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let outputs = (0..16)
+            .map(|_| {
+                serde_json::json!({
+                    "thought": "Keep inspecting the allowed directory without finishing.",
+                    "proposal": {
+                        "kind": "call_tool",
+                        "tool_id": "file-readonly",
+                        "input": {
+                            "action": "ListDirectory",
+                            "path": root.to_string_lossy().to_string(),
+                            "allowed_paths": [root.to_string_lossy().to_string()]
+                        },
+                        "rationale": "This is a legal read-only action, but the model never finishes."
+                    },
+                    "confidence": 0.4
+                })
+            })
+            .collect();
+        let gateway = ScriptedGateway::new(outputs);
+        let mut auth = test_auth("wo-contract-max-hops", "run-contract-max-hops", vec![]);
+        let mut execution_contract = test_mcl_contract("wo-contract-max-hops");
+        execution_contract.termination_policy.max_hops = 2;
+        auth.execution_contract = Some(execution_contract);
+
+        let result = AgentSubHarness::execute(
+            &pool,
+            &test_contract("wo-contract-max-hops", "Keep trying an unavailable tool."),
+            &auth,
+            &default_model_profiles(),
+            None,
+            &gateway,
+            &ModelProviderConfig::mock(),
+            &[],
+            &[],
+        )
+        .await
+        .unwrap();
+
+        std::fs::remove_dir_all(&root).ok();
+
+        assert_eq!(result.final_status, "TimedOut");
+        let model_steps: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM worker_steps WHERE run_id='run-contract-max-hops' AND step_type='ModelCall' AND output_json LIKE '%file-readonly%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(model_steps, 2);
+    }
+    #[tokio::test]
     async fn denied_proposals_block_after_three_rounds() {
         let pool = migrated_pool().await;
         let outputs = (0..3)
@@ -7060,6 +7477,7 @@ Conclusion:
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("seed.txt"), "sandbox seed").unwrap();
         let mut auth = test_auth(work_order_id, run_id, vec![]);
+        auth.allowed_actions.push("execute".to_string());
         auth.sandbox_profile = SandboxProfile::from_track("green", Some(root.clone()));
 
         let result = AgentSubHarness::execute(

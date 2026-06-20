@@ -1,7 +1,7 @@
 use crate::error::WorkerError;
 use async_trait::async_trait;
-use std::path::Component;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 
 use super::github_readonly::ToolHandler;
 
@@ -48,6 +48,87 @@ fn normalize_for_comparison(path: &std::path::Path) -> PathBuf {
 
 fn path_within_root(candidate: &std::path::Path, root: &std::path::Path) -> bool {
     normalize_for_comparison(candidate).starts_with(normalize_for_comparison(root))
+}
+
+fn ensure_replaceable_leaf(target: &Path) -> Result<(), WorkerError> {
+    match std::fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(WorkerError::PathTraversalDenied),
+        Ok(metadata) if !metadata.is_file() => Err(WorkerError::PathTraversalDenied),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(WorkerError::Internal(e.to_string())),
+    }
+}
+
+fn temporary_sibling(target: &Path) -> Result<(PathBuf, std::fs::File), WorkerError> {
+    let parent = target.parent().ok_or(WorkerError::PathTraversalDenied)?;
+    let file_name = target
+        .file_name()
+        .ok_or(WorkerError::PathTraversalDenied)?
+        .to_string_lossy();
+    for _ in 0..10 {
+        let tmp = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => return Ok((tmp, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(WorkerError::Internal(e.to_string())),
+        }
+    }
+    Err(WorkerError::Internal(
+        "could not allocate temporary workspace file".to_string(),
+    ))
+}
+
+#[cfg(windows)]
+fn replace_with_temporary(tmp: &Path, target: &Path) -> Result<(), WorkerError> {
+    match std::fs::rename(tmp, target) {
+        Ok(()) => Ok(()),
+        Err(first_error) => match std::fs::symlink_metadata(target) {
+            Ok(_) => {
+                ensure_replaceable_leaf(target)?;
+                std::fs::remove_file(target).map_err(|e| WorkerError::Internal(e.to_string()))?;
+                match std::fs::rename(tmp, target) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        Err(WorkerError::PathTraversalDenied)
+                    }
+                    Err(e) => Err(WorkerError::Internal(e.to_string())),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(WorkerError::Internal(first_error.to_string()))
+            }
+            Err(e) => Err(WorkerError::Internal(e.to_string())),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_with_temporary(tmp: &Path, target: &Path) -> Result<(), WorkerError> {
+    std::fs::rename(tmp, target).map_err(|e| WorkerError::Internal(e.to_string()))
+}
+
+fn write_without_following_leaf(target: &Path, content: &str) -> Result<(), WorkerError> {
+    ensure_replaceable_leaf(target)?;
+    let (tmp, mut file) = temporary_sibling(target)?;
+    let write_result = file
+        .write_all(content.as_bytes())
+        .map_err(|e| WorkerError::Internal(e.to_string()));
+    if let Err(e) = write_result {
+        std::fs::remove_file(&tmp).ok();
+        return Err(e);
+    }
+    drop(file);
+
+    let replace_result = replace_with_temporary(&tmp, target);
+    if replace_result.is_err() {
+        std::fs::remove_file(&tmp).ok();
+    }
+    replace_result
 }
 
 fn ensure_existing_ancestor_within_root(
@@ -111,12 +192,6 @@ impl ToolHandler for WorkspaceWriteFileTool {
 
     async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value, WorkerError> {
         let (root, target) = resolve_target(&input)?;
-        if std::fs::symlink_metadata(&target)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return Err(WorkerError::PathTraversalDenied);
-        }
         let content = input["content"].as_str().unwrap_or("");
         let parent = target.parent().ok_or(WorkerError::PathTraversalDenied)?;
         std::fs::create_dir_all(parent).map_err(|e| WorkerError::Internal(e.to_string()))?;
@@ -127,7 +202,7 @@ impl ToolHandler for WorkspaceWriteFileTool {
         }
         let target =
             canonical_parent.join(target.file_name().ok_or(WorkerError::PathTraversalDenied)?);
-        std::fs::write(&target, content).map_err(|e| WorkerError::Internal(e.to_string()))?;
+        write_without_following_leaf(&target, content)?;
         Ok(serde_json::json!({
             "workspace_root": root.to_string_lossy().to_string(),
             "path": target.to_string_lossy().to_string(),
@@ -194,6 +269,40 @@ mod tests {
             .expect_err("absolute path outside the trusted workspace must be denied");
 
         assert!(matches!(err, WorkerError::PathTraversalDenied));
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[tokio::test]
+    async fn safe_writer_overwrites_existing_regular_file() {
+        let _guard = workspace_test_lock();
+        let (base, trusted_root, _) = setup_workspace();
+        let target = trusted_root.join("existing.txt");
+        std::fs::write(&target, "old").unwrap();
+
+        write_without_following_leaf(&target, "new").expect("regular file overwrite should work");
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        std::env::remove_var("COEVO_WORKSPACE_DIR");
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_writer_rejects_symlink_leaf_without_caller_precheck() {
+        let _guard = workspace_test_lock();
+        let (base, trusted_root, malicious_root) = setup_workspace();
+        let outside = malicious_root.join("outside-helper.txt");
+        std::fs::write(&outside, "outside").unwrap();
+        let link = trusted_root.join("helper-linked.txt");
+        use std::os::unix::fs::symlink;
+        symlink(&outside, &link).unwrap();
+
+        let err = write_without_following_leaf(&link, "hello")
+            .expect_err("safe writer must reject symlink leaf directly");
+
+        assert!(matches!(err, WorkerError::PathTraversalDenied));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
         std::env::remove_var("COEVO_WORKSPACE_DIR");
         std::fs::remove_dir_all(base).ok();
     }

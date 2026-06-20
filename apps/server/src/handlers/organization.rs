@@ -418,8 +418,14 @@ fn normalize_meeting_participant_id(value: &str, participants: &[String]) -> Opt
 /// the dissent comes from what a role *is*, not from a hardcoded agent id.
 fn inferred_stance(agent_id_or_role: &str) -> String {
     let lower = agent_id_or_role.to_lowercase();
-    const SCRUTINY_MARKERS: [&str; 6] =
-        ["critic", "risk", "compliance", "governance", "audit", "legal"];
+    const SCRUTINY_MARKERS: [&str; 6] = [
+        "critic",
+        "risk",
+        "compliance",
+        "governance",
+        "audit",
+        "legal",
+    ];
     if SCRUTINY_MARKERS.iter().any(|m| lower.contains(m)) {
         "oppose".to_string()
     } else {
@@ -759,57 +765,66 @@ async fn generate_meeting_draft(
     participants: &[String],
 ) -> Result<MeetingDraft, String> {
     // Run the deliberation over the real in-process A2A bus: every head registers
-    // reconstructs its prior context by draining what it actually received. The bus
-    // is the conduit (transport + audit), not decoration.
+    // and reconstructs its prior context by draining what it actually received.
+    // Clear stale inbox data before the meeting starts; unregister in all exit
+    // paths so one meeting cannot leak state into the next one.
     for participant in participants {
         state.a2a.register(participant);
+        let _ = state.a2a.drain_inbox(participant);
     }
-    let mut transcript: Vec<MeetingTurnDraft> = Vec::new();
-    for participant in participants {
-        // What this head has received from peers so far (turns 0..n delivered to it).
-        let mut prior_turns: Vec<MeetingTurnDraft> = state
-            .a2a
-            .drain_inbox(participant)
-            .into_iter()
-            .filter_map(|msg| meeting_turn_from_payload(&msg.payload))
-            .collect();
-        // Preserve chronological order using the authoritative transcript as the key
-        // (inbox order matches delivery order, but guard against any reordering).
-        if prior_turns.len() != transcript.len() {
-            prior_turns = transcript.clone();
+    let result = async {
+        let mut transcript: Vec<MeetingTurnDraft> = Vec::new();
+        for participant in participants {
+            // What this head has received from peers so far (turns 0..n delivered to it).
+            let mut prior_turns: Vec<MeetingTurnDraft> = state
+                .a2a
+                .drain_inbox(participant)
+                .into_iter()
+                .filter_map(|msg| meeting_turn_from_payload(&msg.payload))
+                .collect();
+            // Preserve chronological order using the authoritative transcript as the key
+            // (inbox order matches delivery order, but guard against any reordering).
+            if prior_turns.len() != transcript.len() {
+                prior_turns = transcript.clone();
+            }
+            let turn = generate_meeting_turn(
+                state,
+                opc_id,
+                topic,
+                participants,
+                close_mode,
+                participant,
+                &prior_turns,
+            )
+            .await?;
+            // Deliver this turn to every other participant's inbox over the bus.
+            deliver_meeting_turn(state, opc_id, participants, &turn).await?;
+            transcript.push(turn);
         }
-        let turn = generate_meeting_turn(
-            state,
-            opc_id,
-            topic,
+        let (resolution_md, responsibility_anchor_raw) =
+            generate_meeting_resolution(state, topic, close_mode, &transcript).await?;
+        let responsibility_anchor = normalize_meeting_participant_id(
+            responsibility_anchor_raw.trim(),
             participants,
-            close_mode,
-            participant,
-            &prior_turns,
         )
-        .await?;
-        // Deliver this turn to every other participant's inbox over the bus.
-        deliver_meeting_turn(state, opc_id, participants, &turn).await?;
-        transcript.push(turn);
+        .or_else(|| infer_meeting_responsibility_anchor(&transcript, participants))
+        .ok_or_else(|| {
+            format!(
+                "meeting resolution generation failed: responsibility_anchor {} is not a meeting participant",
+                responsibility_anchor_raw
+            )
+        })?;
+        Ok(MeetingDraft {
+            transcript,
+            resolution_md,
+            responsibility_anchor,
+        })
     }
-    let (resolution_md, responsibility_anchor_raw) =
-        generate_meeting_resolution(state, topic, close_mode, &transcript).await?;
-    let responsibility_anchor = normalize_meeting_participant_id(
-        responsibility_anchor_raw.trim(),
-        participants,
-    )
-    .or_else(|| infer_meeting_responsibility_anchor(&transcript, participants))
-    .ok_or_else(|| {
-        format!(
-            "meeting resolution generation failed: responsibility_anchor {} is not a meeting participant",
-            responsibility_anchor_raw
-        )
-    })?;
-    Ok(MeetingDraft {
-        transcript,
-        resolution_md,
-        responsibility_anchor,
-    })
+    .await;
+    for participant in participants {
+        state.a2a.unregister(participant);
+    }
+    result
 }
 
 fn infer_meeting_responsibility_anchor(

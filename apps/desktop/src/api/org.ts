@@ -2,20 +2,12 @@ import {
   get,
   post,
   put,
-  decideWorkOrderApproval,
-  listEmployees,
-  listMemory,
-  listWorkOrders,
-  listConversations,
-  createConversation,
-  listConversationMessages,
-  appendConversationMessage,
-  getCompanyProfile,
   getAgentGrowth,
   approveSkillProposal,
 } from "./client";
 
 const companyPath = (opcId: string) => `/companies/${encodeURIComponent(opcId)}`;
+const companyOptions = (opcId: string) => ({ opcId });
 
 type Row = Record<string, unknown>;
 
@@ -112,16 +104,12 @@ export type CompanyAuditEvent = {
 };
 
 export async function listCompanyEmployees(opcId: string): Promise<Row[]> {
-  try {
-    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/employees`));
-  } catch {
-    return asArray<Row>(await listEmployees());
-  }
+  return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/employees`, companyOptions(opcId)));
 }
 
 export async function listCompanySkills(opcId: string): Promise<Row[]> {
   try {
-    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/skills`));
+    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/skills`, companyOptions(opcId)));
   } catch {
     return [];
   }
@@ -132,7 +120,7 @@ export async function getCompanyEmployee(
   agentId: string,
 ): Promise<Row | null> {
   try {
-    const detail = await get<Row>(`${companyPath(opcId)}/employees/${encodeURIComponent(agentId)}`);
+    const detail = await get<Row>(`${companyPath(opcId)}/employees/${encodeURIComponent(agentId)}`, companyOptions(opcId));
     return isRecord(detail) ? detail : null;
   } catch {
     return null;
@@ -140,53 +128,32 @@ export async function getCompanyEmployee(
 }
 
 export async function getCompanyProfileById(opcId: string): Promise<Row> {
-  try {
-    const detail = await get<Row>(`${companyPath(opcId)}/profile/company`);
-    return isRecord(detail) ? detail : {};
-  } catch {
-    try {
-      const legacy = await getCompanyProfile();
-      return isRecord(legacy) ? legacy : {};
-    } catch {
-      return { opc_id: opcId };
-    }
-  }
+  const detail = await get<Row>(`${companyPath(opcId)}/profile/company`, companyOptions(opcId));
+  return isRecord(detail) ? detail : {};
 }
 
 export async function listCompanyConversations(opcId: string): Promise<Row[]> {
-  try {
-    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/conversations`));
-  } catch {
-    return asArray<Row>(await listConversations());
-  }
+  return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/conversations`, companyOptions(opcId)));
 }
 
 export async function createCompanyConversation(
   opcId: string,
   payload: Row,
 ): Promise<Row> {
-  try {
-    const created = await post<Row>(`${companyPath(opcId)}/conversations`, payload);
-    return isRecord(created) ? created : {};
-  } catch {
-    const legacy = await createConversation(payload);
-    return isRecord(legacy) ? legacy : {};
-  }
+  const created = await post<Row>(`${companyPath(opcId)}/conversations`, payload, companyOptions(opcId));
+  return isRecord(created) ? created : {};
 }
 
 export async function listCompanyConversationMessages(
   opcId: string,
   conversationId: string,
 ): Promise<Row[]> {
-  try {
-    return asArray<Row>(
-      await get<Row[]>(
-        `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
-      ),
-    );
-  } catch {
-    return asArray<Row>(await listConversationMessages(conversationId));
-  }
+  return asArray<Row>(
+    await get<Row[]>(
+      `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+      companyOptions(opcId),
+    ),
+  );
 }
 
 export async function appendCompanyConversationMessage(
@@ -194,20 +161,16 @@ export async function appendCompanyConversationMessage(
   conversationId: string,
   payload: Row,
 ): Promise<Row> {
-  try {
-    const appended = await post<Row>(
-      `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
-      payload,
-    );
-    return isRecord(appended) ? appended : {};
-  } catch {
-    const legacy = await appendConversationMessage(conversationId, payload);
-    return isRecord(legacy) ? legacy : {};
-  }
+  const appended = await post<Row>(
+    `${companyPath(opcId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+    payload,
+    companyOptions(opcId),
+  );
+  return isRecord(appended) ? appended : {};
 }
 
 export async function createCompanyWorkOrder(opcId: string, payload: Row): Promise<Row> {
-  const created = await post<Row>(`${companyPath(opcId)}/work-orders`, payload);
+  const created = await post<Row>(`${companyPath(opcId)}/work-orders`, payload, companyOptions(opcId));
   return isRecord(created) ? created : {};
 }
 
@@ -232,7 +195,7 @@ export type DispatchPlan = {
  */
 export async function dispatchPlan(opcId: string, intent: string): Promise<DispatchPlan | null> {
   try {
-    const plan = await post<DispatchPlan>(`${companyPath(opcId)}/dispatch`, { intent });
+    const plan = await post<DispatchPlan>(`${companyPath(opcId)}/dispatch`, { intent }, companyOptions(opcId));
     return plan && Array.isArray(plan.subtasks) ? plan : null;
   } catch {
     return null;
@@ -240,12 +203,12 @@ export async function dispatchPlan(opcId: string, intent: string): Promise<Dispa
 }
 
 export async function listMeetings(opcId: string): Promise<MeetingSummary[]> {
-  const rows = await get<MeetingSummary[]>(`${companyPath(opcId)}/meetings`);
+  const rows = await get<MeetingSummary[]>(`${companyPath(opcId)}/meetings`, companyOptions(opcId));
   return asArray<MeetingSummary>(rows);
 }
 
 export async function getMeeting(opcId: string, meetingId: string): Promise<MeetingDetail | null> {
-  const detail = await get<MeetingDetail>(`${companyPath(opcId)}/meetings/${encodeURIComponent(meetingId)}`);
+  const detail = await get<MeetingDetail>(`${companyPath(opcId)}/meetings/${encodeURIComponent(meetingId)}`, companyOptions(opcId));
   return detail && detail.meeting_id ? detail : null;
 }
 
@@ -253,24 +216,26 @@ export async function startMeeting(
   opcId: string,
   req: { topic: string; participants: string[]; close_mode: "vote" | "chair" },
 ): Promise<{ meeting_id: string; status: string }> {
-  return post<{ meeting_id: string; status: string }>(`${companyPath(opcId)}/meetings`, req);
+  return post<{ meeting_id: string; status: string }>(`${companyPath(opcId)}/meetings`, req, companyOptions(opcId));
 }
 
 export async function listKpi(opcId: string, agentId: string): Promise<KpiRecord[]> {
   const rows = await get<KpiRecord[]>(
     `${companyPath(opcId)}/employees/${encodeURIComponent(agentId)}/kpi`,
+    companyOptions(opcId),
   );
   return asArray<KpiRecord>(rows);
 }
 
 export async function listReports(opcId: string): Promise<ReportSummary[]> {
-  const rows = await get<ReportSummary[]>(`${companyPath(opcId)}/reports`);
+  const rows = await get<ReportSummary[]>(`${companyPath(opcId)}/reports`, companyOptions(opcId));
   return asArray<ReportSummary>(rows);
 }
 
 export async function getReport(opcId: string, reportId: string): Promise<ReportDetail | null> {
   const detail = await get<ReportDetail>(
     `${companyPath(opcId)}/reports/${encodeURIComponent(reportId)}`,
+    companyOptions(opcId),
   );
   return detail && detail.report_id ? detail : null;
 }
@@ -279,11 +244,11 @@ export async function generateReport(
   opcId: string,
   period: "daily" | "monthly",
 ): Promise<{ report_id: string }> {
-  return post<{ report_id: string }>(`${companyPath(opcId)}/reports/generate`, { period });
+  return post<{ report_id: string }>(`${companyPath(opcId)}/reports/generate`, { period }, companyOptions(opcId));
 }
 
 export async function getCost(opcId: string): Promise<CostOverview> {
-  const res = await get<CostOverview>(`${companyPath(opcId)}/cost`);
+  const res = await get<CostOverview>(`${companyPath(opcId)}/cost`, companyOptions(opcId));
   return res && Array.isArray(res.by_department) ? res : { by_department: [], total: 0 };
 }
 
@@ -295,15 +260,11 @@ export async function setCostQuota(
   return put<{ ok: boolean }>(`${companyPath(opcId)}/cost/quota`, {
     department,
     token_quota: tokenQuota,
-  });
+  }, companyOptions(opcId));
 }
 
 export async function listCompanyWorkOrders(opcId: string): Promise<Row[]> {
-  try {
-    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/work-orders`));
-  } catch {
-    return asArray<Row>(await listWorkOrders());
-  }
+  return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/work-orders`, companyOptions(opcId)));
 }
 
 export async function executeCompanyWorkOrder(
@@ -311,16 +272,12 @@ export async function executeCompanyWorkOrder(
   workOrderId: string,
   payload: Row = {},
 ): Promise<Row> {
-  try {
-    const result = await post<Row>(
-      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/execute`,
-      payload,
-    );
-    return isRecord(result) ? result : {};
-  } catch {
-    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/execute`, payload);
-    return isRecord(legacy) ? legacy : {};
-  }
+  const result = await post<Row>(
+    `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/execute`,
+    payload,
+    companyOptions(opcId),
+  );
+  return isRecord(result) ? result : {};
 }
 
 export async function decideCompanyWorkOrderApproval(
@@ -328,29 +285,21 @@ export async function decideCompanyWorkOrderApproval(
   workOrderId: string,
   payload: { approval_id: string; decision: "approve" | "reject"; comment?: string },
 ): Promise<Row> {
-  try {
-    const result = await post<Row>(
-      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/approval`,
-      payload,
-    );
-    return isRecord(result) ? result : {};
-  } catch {
-    const legacy = await decideWorkOrderApproval(workOrderId, payload);
-    return isRecord(legacy as Row) ? (legacy as Row) : {};
-  }
+  const result = await post<Row>(
+    `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/approval`,
+    payload,
+    companyOptions(opcId),
+  );
+  return isRecord(result) ? result : {};
 }
 
 export async function cancelCompanyWorkOrder(opcId: string, workOrderId: string): Promise<Row> {
-  try {
-    const result = await post<Row>(
-      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/cancel`,
-      {},
-    );
-    return isRecord(result) ? result : {};
-  } catch {
-    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/cancel`, {});
-    return isRecord(legacy) ? legacy : {};
-  }
+  const result = await post<Row>(
+    `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/cancel`,
+    {},
+    companyOptions(opcId),
+  );
+  return isRecord(result) ? result : {};
 }
 
 export async function submitCompanyWorkOrderFeedback(
@@ -360,22 +309,18 @@ export async function submitCompanyWorkOrderFeedback(
   agentId?: string,
 ): Promise<Row> {
   const payload = { feedback, agent_id: agentId };
-  try {
-    const result = await post<Row>(
-      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/feedback`,
-      payload,
-    );
-    return isRecord(result) ? result : {};
-  } catch {
-    const legacy = await post<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/feedback`, payload);
-    return isRecord(legacy) ? legacy : {};
-  }
+  const result = await post<Row>(
+    `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/feedback`,
+    payload,
+    companyOptions(opcId),
+  );
+  return isRecord(result) ? result : {};
 }
 
 export async function getCompanyWorkOrderTimeline(opcId: string, workOrderId: string): Promise<Row[]> {
   try {
     return asArray<Row>(
-      await get<Row[]>(`${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/timeline`),
+      await get<Row[]>(`${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/timeline`, companyOptions(opcId)),
     );
   } catch {
     return [];
@@ -386,15 +331,11 @@ export async function getCompanyWorkOrderAuditExport(
   opcId: string,
   workOrderId: string,
 ): Promise<Row> {
-  try {
-    const result = await get<Row>(
-      `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/audit-export`,
-    );
-    return isRecord(result) ? result : {};
-  } catch {
-    const legacy = await get<Row>(`/opc/work-orders/${encodeURIComponent(workOrderId)}/audit-export`);
-    return isRecord(legacy) ? legacy : {};
-  }
+  const result = await get<Row>(
+    `${companyPath(opcId)}/work-orders/${encodeURIComponent(workOrderId)}/audit-export`,
+    companyOptions(opcId),
+  );
+  return isRecord(result) ? result : {};
 }
 
 export async function listCompanyAuditEvents(
@@ -407,23 +348,13 @@ export async function listCompanyAuditEvents(
   if (options?.runId) params.set("run_id", options.runId);
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
 
-  try {
-    return asArray<CompanyAuditEvent>(
-      await get<CompanyAuditEvent[]>(`${companyPath(opcId)}/audit${suffix}`),
-    );
-  } catch {
-    return asArray<CompanyAuditEvent>(
-      await get<CompanyAuditEvent[]>(`/opc/audit/${encodeURIComponent(opcId)}${suffix}`),
-    );
-  }
+  return asArray<CompanyAuditEvent>(
+    await get<CompanyAuditEvent[]>(`${companyPath(opcId)}/audit${suffix}`, companyOptions(opcId)),
+  );
 }
 
 export async function listCompanyMemory(opcId: string): Promise<Row[]> {
-  try {
-    return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/memory`));
-  } catch {
-    return asArray<Row>(await listMemory({ scope: "company" }));
-  }
+  return asArray<Row>(await get<Row[]>(`${companyPath(opcId)}/memory`, companyOptions(opcId)));
 }
 
 export async function getCompanyGrowth(agentId: string) {

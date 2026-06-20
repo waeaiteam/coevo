@@ -74,8 +74,40 @@ impl ToolRegistry {
     }
 }
 
+fn workspace_shell_enabled() -> bool {
+    std::env::var("COEVO_ENABLE_WORKSPACE_SHELL")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn workspace_shell_spec() -> (Tool, Box<dyn ToolHandler>) {
+    (
+        Tool {
+            tool_id: "workspace-shell".into(),
+            name: "Workspace Shell".into(),
+            tool_type: ToolType::LocalProcessSandbox,
+            risk_ceiling: 0.6,
+            supported_actions: vec!["RunShell".into()],
+            permission_boundary_json: serde_json::json!({
+                "scope": "workspace-shell",
+                "writes": true,
+                "enabled_by": "COEVO_ENABLE_WORKSPACE_SHELL",
+            }),
+            requires_credential: false,
+            credential_ref: None,
+            enabled: true,
+        },
+        Box::new(WorkspaceShellTool),
+    )
+}
+
 fn default_tool_specs() -> Vec<(Tool, Box<dyn ToolHandler>)> {
-    vec![
+    let mut tools: Vec<(Tool, Box<dyn ToolHandler>)> = vec![
         (
             Tool {
                 tool_id: "github-readonly".into(),
@@ -148,24 +180,13 @@ fn default_tool_specs() -> Vec<(Tool, Box<dyn ToolHandler>)> {
             },
             Box::new(WorkspaceWriteFileTool),
         ),
-        (
-            Tool {
-                tool_id: "workspace-shell".into(),
-                name: "Workspace Shell".into(),
-                tool_type: ToolType::LocalProcessSandbox,
-                risk_ceiling: 0.6,
-                supported_actions: vec!["RunShell".into()],
-                permission_boundary_json: serde_json::json!({
-                    "scope": "workspace-shell",
-                    "writes": true,
-                }),
-                requires_credential: false,
-                credential_ref: None,
-                enabled: true,
-            },
-            Box::new(WorkspaceShellTool),
-        ),
-    ]
+    ];
+
+    if workspace_shell_enabled() {
+        tools.push(workspace_shell_spec());
+    }
+
+    tools
 }
 
 impl Default for ToolRegistry {
@@ -178,13 +199,37 @@ impl Default for ToolRegistry {
 mod tests {
     use super::*;
 
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn registry_env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
     #[test]
-    fn default_registry_exposes_real_supported_actions() {
+    fn default_registry_hides_workspace_shell_by_default() {
+        let _guard = registry_env_lock();
+        std::env::remove_var("COEVO_ENABLE_WORKSPACE_SHELL");
+
+        let registry = ToolRegistry::default_registry();
+
+        assert!(registry.get("workspace-shell").is_none());
+        assert!(registry.get("file-readonly").is_some());
+        assert!(registry.get("workspace-write-file").is_some());
+    }
+
+    #[test]
+    fn default_registry_exposes_workspace_shell_when_explicitly_enabled() {
+        let _guard = registry_env_lock();
+        std::env::set_var("COEVO_ENABLE_WORKSPACE_SHELL", "1");
+
         let registry = ToolRegistry::default_registry();
         let shell = registry.get("workspace-shell").unwrap();
 
         assert_eq!(shell.supported_actions, vec!["RunShell"]);
         assert_eq!(shell.permission_boundary_json["scope"], "workspace-shell");
+
+        std::env::remove_var("COEVO_ENABLE_WORKSPACE_SHELL");
     }
 
     #[test]
@@ -207,6 +252,8 @@ mod tests {
     #[test]
     fn register_openapi_spec_rejects_invalid_document() {
         let mut registry = ToolRegistry::new();
-        assert!(registry.register_openapi_spec("not json", None, 0.4).is_err());
+        assert!(registry
+            .register_openapi_spec("not json", None, 0.4)
+            .is_err());
     }
 }

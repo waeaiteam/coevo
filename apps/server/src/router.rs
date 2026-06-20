@@ -625,35 +625,181 @@ mod tests {
             .filter(|value| !value.is_empty())
     }
 
-    async fn configure_real_deepseek_provider_if_env(
-        pool: &sqlx::SqlitePool,
-    ) -> Option<(String, String, String)> {
-        let api_key = real_provider_env("COEVO_REAL_DEEPSEEK_API_KEY")?;
-        let model = real_provider_env("COEVO_REAL_DEEPSEEK_MODEL")
-            .unwrap_or_else(|| "deepseek-v4-flash".to_string());
-        let base_url = real_provider_env("COEVO_REAL_DEEPSEEK_BASE_URL")
-            .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
-        ModelConfigRepo::upsert_config(
-            pool,
-            "desktop-real-deepseek",
-            "DeepSeek",
-            &base_url,
-            &api_key,
-            &ModelConfigRepo::mask_key(&api_key),
-            &model,
-            &model,
-            &model,
-            &model,
-            4096,
-            0.2,
-            30000,
-            5.0,
-        )
-        .await
-        .unwrap();
-        Some((api_key, base_url, model))
+    #[derive(Debug, Clone)]
+    struct RealProviderAcceptanceConfig {
+        provider_id: String,
+        kind: String,
+        base_url: String,
+        api_key: String,
+        default_model: String,
+        fast_model: String,
+        reasoning_model: String,
+        structured_output_model: String,
+        max_tokens: i64,
+        temperature: f64,
+        timeout_ms: i64,
+        max_cost_per_task_usd: f64,
     }
 
+    fn required_real_provider_env(name: &str) -> Result<String, String> {
+        real_provider_env(name)
+            .ok_or_else(|| format!("{name} is required for real-provider acceptance testing"))
+    }
+
+    fn expected_provider_kind_json(kind: &str) -> &'static str {
+        match kind {
+            "OpenAICompatible" => "open_ai_compatible",
+            "OpenAI" => "open_ai",
+            "Anthropic" => "anthropic",
+            "Gemini" => "gemini",
+            "DeepSeek" => "deep_seek",
+            "Ollama" => "ollama",
+            "Local" => "local",
+            _ => "open_ai_compatible",
+        }
+    }
+    fn real_provider_config_json(config: &RealProviderAcceptanceConfig) -> serde_json::Value {
+        serde_json::json!({
+            "provider_id": config.provider_id,
+            "kind": config.kind,
+            "base_url": config.base_url,
+            "api_key": config.api_key,
+            "default_model": config.default_model,
+            "fast_model": config.fast_model,
+            "reasoning_model": config.reasoning_model,
+            "structured_output_model": config.structured_output_model,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "timeout_ms": config.timeout_ms,
+            "max_cost_per_task_usd": config.max_cost_per_task_usd
+        })
+    }
+
+    fn real_provider_acceptance_config_from_env(
+    ) -> Result<Option<RealProviderAcceptanceConfig>, String> {
+        if let Some(api_key) = real_provider_env("COEVO_REAL_PROVIDER_API_KEY") {
+            let model = real_provider_env("COEVO_REAL_PROVIDER_DEFAULT_MODEL")
+                .or_else(|| real_provider_env("COEVO_REAL_PROVIDER_MODEL"))
+                .ok_or_else(|| {
+                    "COEVO_REAL_PROVIDER_MODEL or COEVO_REAL_PROVIDER_DEFAULT_MODEL is required for real-provider acceptance testing".to_string()
+                })?;
+            let base_url = required_real_provider_env("COEVO_REAL_PROVIDER_BASE_URL")?;
+            return Ok(Some(RealProviderAcceptanceConfig {
+                provider_id: real_provider_env("COEVO_REAL_PROVIDER_ID")
+                    .unwrap_or_else(|| "candidate-real-provider".to_string()),
+                kind: real_provider_env("COEVO_REAL_PROVIDER_KIND")
+                    .unwrap_or_else(|| "OpenAICompatible".to_string()),
+                base_url,
+                api_key,
+                default_model: model.clone(),
+                fast_model: real_provider_env("COEVO_REAL_PROVIDER_FAST_MODEL")
+                    .unwrap_or_else(|| model.clone()),
+                reasoning_model: real_provider_env("COEVO_REAL_PROVIDER_REASONING_MODEL")
+                    .unwrap_or_else(|| model.clone()),
+                structured_output_model: real_provider_env("COEVO_REAL_PROVIDER_STRUCTURED_MODEL")
+                    .unwrap_or_else(|| model.clone()),
+                max_tokens: real_provider_env("COEVO_REAL_PROVIDER_MAX_TOKENS")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(4096),
+                temperature: real_provider_env("COEVO_REAL_PROVIDER_TEMPERATURE")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.2),
+                timeout_ms: real_provider_env("COEVO_REAL_PROVIDER_TIMEOUT_MS")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(30000),
+                max_cost_per_task_usd: real_provider_env("COEVO_REAL_PROVIDER_MAX_COST_USD")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(5.0),
+            }));
+        }
+
+        // Backward-compatible local developer shortcut. New CI and acceptance runs
+        // should use COEVO_REAL_PROVIDER_* so the test is not tied to one vendor.
+        if let Some(api_key) = real_provider_env("COEVO_REAL_DEEPSEEK_API_KEY") {
+            let model = real_provider_env("COEVO_REAL_DEEPSEEK_MODEL")
+                .unwrap_or_else(|| "deepseek-v4-flash".to_string());
+            return Ok(Some(RealProviderAcceptanceConfig {
+                provider_id: "legacy-real-provider".to_string(),
+                kind: "DeepSeek".to_string(),
+                base_url: real_provider_env("COEVO_REAL_DEEPSEEK_BASE_URL")
+                    .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string()),
+                api_key,
+                default_model: model.clone(),
+                fast_model: model.clone(),
+                reasoning_model: model.clone(),
+                structured_output_model: model,
+                max_tokens: 4096,
+                temperature: 0.2,
+                timeout_ms: 30000,
+                max_cost_per_task_usd: 5.0,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    async fn configure_real_provider_if_env(
+        pool: &sqlx::SqlitePool,
+    ) -> Result<Option<RealProviderAcceptanceConfig>, String> {
+        let Some(config) = real_provider_acceptance_config_from_env()? else {
+            return Ok(None);
+        };
+        ModelConfigRepo::upsert_config(
+            pool,
+            &config.provider_id,
+            &config.kind,
+            &config.base_url,
+            &config.api_key,
+            &ModelConfigRepo::mask_key(&config.api_key),
+            &config.default_model,
+            &config.fast_model,
+            &config.reasoning_model,
+            &config.structured_output_model,
+            config.max_tokens,
+            config.temperature,
+            config.timeout_ms,
+            config.max_cost_per_task_usd,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+        Ok(Some(config))
+    }
+    fn clear_real_provider_env() {
+        for key in [
+            "COEVO_REAL_PROVIDER_API_KEY",
+            "COEVO_REAL_PROVIDER_KIND",
+            "COEVO_REAL_PROVIDER_BASE_URL",
+            "COEVO_REAL_PROVIDER_MODEL",
+            "COEVO_REAL_PROVIDER_DEFAULT_MODEL",
+            "COEVO_REAL_PROVIDER_FAST_MODEL",
+            "COEVO_REAL_PROVIDER_REASONING_MODEL",
+            "COEVO_REAL_PROVIDER_STRUCTURED_MODEL",
+            "COEVO_REAL_DEEPSEEK_API_KEY",
+            "COEVO_REAL_DEEPSEEK_MODEL",
+            "COEVO_REAL_DEEPSEEK_BASE_URL",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn generic_real_provider_env_does_not_default_to_deepseek() {
+        let _lock = REAL_PROVIDER_LOCK.lock().unwrap();
+        clear_real_provider_env();
+        std::env::set_var("COEVO_REAL_PROVIDER_API_KEY", "sk-generic-test");
+        std::env::set_var("COEVO_REAL_PROVIDER_KIND", "OpenAICompatible");
+        std::env::set_var("COEVO_REAL_PROVIDER_BASE_URL", "http://127.0.0.1:1/v1");
+        std::env::set_var("COEVO_REAL_PROVIDER_MODEL", "generic-test-model");
+
+        let config = real_provider_acceptance_config_from_env().unwrap().unwrap();
+
+        assert_eq!(config.kind, "OpenAICompatible");
+        assert_eq!(config.default_model, "generic-test-model");
+        assert_eq!(config.base_url, "http://127.0.0.1:1/v1");
+        assert!(!config.provider_id.contains("deepseek"));
+        assert!(!config.default_model.contains("deepseek"));
+        clear_real_provider_env();
+    }
     async fn insert_contract(pool: &sqlx::SqlitePool, hash: &str) {
         use coevo_core::contract::*;
         use coevo_store::repos::contract_repo::ContractRepo;
@@ -700,6 +846,33 @@ mod tests {
             },
         };
         ContractRepo::insert(pool, &contract, hash).await.unwrap();
+    }
+
+    async fn insert_plan(
+        pool: &sqlx::SqlitePool,
+        contract_hash: &str,
+        plan_hash: &str,
+        agent_id: &str,
+    ) {
+        use coevo_core::plan::ExecutionPlanSpec;
+        use coevo_store::repos::plan_repo::PlanRepo;
+
+        let plan = ExecutionPlanSpec::single_agent(
+            plan_hash.to_string(),
+            "0".repeat(64),
+            agent_id.to_string(),
+        );
+        PlanRepo::insert(pool, &plan, contract_hash).await.unwrap();
+    }
+
+    async fn insert_contract_and_plan(
+        pool: &sqlx::SqlitePool,
+        contract_hash: &str,
+        plan_hash: &str,
+        agent_id: &str,
+    ) {
+        insert_contract(pool, contract_hash).await;
+        insert_plan(pool, contract_hash, plan_hash, agent_id).await;
     }
 
     async fn response_status_and_text(response: axum::response::Response) -> (StatusCode, String) {
@@ -856,13 +1029,13 @@ mod tests {
             &pool,
             "desktop-test",
             "OpenAICompatible",
-            "https://api.deepseek.com/v1",
+            "http://127.0.0.1:1/v1",
             "sk-test",
             "sk-test",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
             4096,
             0.2,
             30000,
@@ -874,6 +1047,9 @@ mod tests {
             "coevo-router-legacy-execute-{}",
             uuid::Uuid::new_v4()
         ));
+        let contract_hash = "a".repeat(64);
+        let plan_hash = "b".repeat(64);
+        insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
         let app = build_router(AppState::new(pool, root.clone()));
         let company_response = app
             .clone()
@@ -927,8 +1103,8 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "work_order_id": work_order_id,
-                            "contract_hash": "a".repeat(64),
-                            "plan_hash": "b".repeat(64),
+                            "contract_hash": contract_hash,
+                            "plan_hash": plan_hash,
                             "user_id": "default-founder",
                             "opc_id": opc_id,
                             "mission_intent": "Analyze README.md",
@@ -969,13 +1145,13 @@ mod tests {
             &pool,
             "desktop-test",
             "OpenAICompatible",
-            "https://api.deepseek.com/v1",
+            "http://127.0.0.1:1/v1",
             "sk-test",
             "sk-test",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
             4096,
             0.2,
             30000,
@@ -987,6 +1163,9 @@ mod tests {
             "coevo-router-company-execute-{}",
             uuid::Uuid::new_v4()
         ));
+        let contract_hash = "a".repeat(64);
+        let plan_hash = "b".repeat(64);
+        insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
         let app = build_router(AppState::new(pool, root.clone()));
 
         let company_response = app
@@ -1041,8 +1220,8 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "work_order_id": work_order_id,
-                            "contract_hash": "a".repeat(64),
-                            "plan_hash": "b".repeat(64),
+                            "contract_hash": contract_hash,
+                            "plan_hash": plan_hash,
                             "user_id": "default-founder",
                             "opc_id": opc_id,
                             "mission_intent": "Analyze README.md",
@@ -1159,6 +1338,9 @@ mod tests {
             "coevo-router-company-work-orders-{}",
             uuid::Uuid::new_v4()
         ));
+        let contract_hash = "a".repeat(64);
+        let plan_hash = "b".repeat(64);
+        insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
         let app = build_router(AppState::new(pool, root.clone()));
 
         let company_response = app
@@ -1199,8 +1381,8 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "work_order_id": work_order_id,
-                            "contract_hash": "a".repeat(64),
-                            "plan_hash": "b".repeat(64),
+                            "contract_hash": contract_hash,
+                            "plan_hash": plan_hash,
                             "user_id": "default-founder",
                             "opc_id": opc_id,
                             "mission_intent": "Analyze README.md",
@@ -1266,6 +1448,9 @@ mod tests {
             "coevo-router-company-work-order-audit-{}",
             uuid::Uuid::new_v4()
         ));
+        let contract_hash = "a".repeat(64);
+        let plan_hash = "b".repeat(64);
+        insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
         let app = build_router(AppState::new(pool, root.clone()));
 
         let company_response = app
@@ -1306,8 +1491,8 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "work_order_id": work_order_id,
-                            "contract_hash": "a".repeat(64),
-                            "plan_hash": "b".repeat(64),
+                            "contract_hash": contract_hash,
+                            "plan_hash": plan_hash,
                             "user_id": "default-founder",
                             "opc_id": opc_id,
                             "mission_intent": "Audit canonical timeline export",
@@ -3244,9 +3429,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_deepseek_integration_acceptance_paths_pass_when_env_is_configured() {
+    async fn real_provider_integration_acceptance_paths_pass_when_env_is_configured() {
         let _lock = REAL_PROVIDER_LOCK.lock().unwrap();
-        let Some(api_key) = real_provider_env("COEVO_REAL_DEEPSEEK_API_KEY") else {
+        let Some(config) = real_provider_acceptance_config_from_env()
+            .expect("invalid real-provider acceptance env")
+        else {
             return;
         };
         keyring_core::set_default_store(keyring_core::sample::Store::new().unwrap());
@@ -3255,7 +3442,7 @@ mod tests {
             let pool = create_test_pool().await.unwrap();
             run_migrations(&pool).await.unwrap();
             let root = std::env::temp_dir().join(format!(
-                "coevo-real-deepseek-acceptance-{}",
+                "coevo-real-provider-acceptance-{}",
                 uuid::Uuid::new_v4()
             ));
             let workspace = root.join("workspace");
@@ -3270,10 +3457,6 @@ mod tests {
             let app = build_router(AppState::new(pool.clone(), root.clone()));
 
             let result = async {
-                let candidate_model = real_provider_env("COEVO_REAL_DEEPSEEK_MODEL")
-                    .unwrap_or_else(|| "deepseek-v4-flash".to_string());
-                let candidate_base_url = real_provider_env("COEVO_REAL_DEEPSEEK_BASE_URL")
-                    .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
 
                 let test_response = app
                     .clone()
@@ -3284,20 +3467,7 @@ mod tests {
                             .header("content-type", "application/json")
                             .body(Body::from(
                                 serde_json::json!({
-                                    "config": {
-                                        "provider_id": "candidate-deepseek",
-                                        "kind": "DeepSeek",
-                                        "base_url": candidate_base_url,
-                                        "api_key": api_key,
-                                        "default_model": candidate_model,
-                                        "fast_model": candidate_model,
-                                        "reasoning_model": candidate_model,
-                                        "structured_output_model": candidate_model,
-                                        "max_tokens": 4096,
-                                        "temperature": 0.2,
-                                        "timeout_ms": 30000,
-                                        "max_cost_per_task_usd": 5.0
-                                    }
+                                    "config": real_provider_config_json(&config)
                                 })
                                 .to_string(),
                             ))
@@ -3312,7 +3482,7 @@ mod tests {
                         .unwrap(),
                 )
                 .unwrap();
-                assert_eq!(test_body["provider_kind"], "deep_seek");
+                assert_eq!(test_body["provider_kind"], expected_provider_kind_json(&config.kind));
                 assert!(test_body["latency_ms"].as_u64().unwrap_or_default() > 0);
 
                 let persisted_count_before: i64 =
@@ -3322,8 +3492,8 @@ mod tests {
                         .unwrap();
                 assert_eq!(persisted_count_before, 0);
 
-                let (_real_key, base_url, model) =
-                    configure_real_deepseek_provider_if_env(&pool).await.unwrap();
+                let persisted_config = configure_real_provider_if_env(&pool).await.unwrap().unwrap();
+                let model = persisted_config.default_model.clone();
 
                 let discover_response = app
                     .clone()
@@ -3334,20 +3504,7 @@ mod tests {
                             .header("content-type", "application/json")
                             .body(Body::from(
                                 serde_json::json!({
-                                    "config": {
-                                        "provider_id": "candidate-deepseek",
-                                        "kind": "DeepSeek",
-                                        "base_url": base_url,
-                                        "api_key": api_key,
-                                        "default_model": model,
-                                        "fast_model": model,
-                                        "reasoning_model": model,
-                                        "structured_output_model": model,
-                                        "max_tokens": 4096,
-                                        "temperature": 0.2,
-                                        "timeout_ms": 30000,
-                                        "max_cost_per_task_usd": 5.0
-                                    }
+                                    "config": real_provider_config_json(&persisted_config)
                                 })
                                 .to_string(),
                             ))
@@ -3402,7 +3559,7 @@ mod tests {
                 assert_eq!(
                     chat_status,
                     StatusCode::OK,
-                    "real deepseek /opc/models/chat failed: {}",
+                    "real provider /opc/models/chat failed: {}",
                     chat_text
                 );
                 let chat_body: serde_json::Value = serde_json::from_str(&chat_text).unwrap();
@@ -3419,7 +3576,7 @@ mod tests {
                             .header("content-type", "application/json")
                             .body(Body::from(
                                 serde_json::json!({
-                                    "name": "Real DeepSeek Co",
+                                    "name": "Real Provider Co",
                                     "mission": "Acceptance verification"
                                 })
                                 .to_string(),
@@ -3476,7 +3633,7 @@ mod tests {
                 assert_eq!(
                     playground_status,
                     StatusCode::OK,
-                    "real deepseek playground run failed: {}",
+                    "real provider playground run failed: {}",
                     playground_text
                 );
                 let playground_body: serde_json::Value =
@@ -3493,7 +3650,8 @@ mod tests {
                 assert!(playground_results.iter().all(playground_result_looks_real));
 
                 let contract_hash = "c".repeat(64);
-                insert_contract(&pool, &contract_hash).await;
+                let plan_hash = "d".repeat(64);
+                insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
 
                 let work_order_id = format!("wo-real-{}", uuid::Uuid::new_v4().simple());
                 let create_work_order_response = app
@@ -3508,7 +3666,7 @@ mod tests {
                                 serde_json::json!({
                                     "work_order_id": work_order_id,
                                     "contract_hash": contract_hash,
-                                    "plan_hash": "d".repeat(64),
+                                    "plan_hash": plan_hash.clone(),
                                     "user_id": "default-founder",
                                     "opc_id": opc_id,
                                     "mission_intent": "Read mission-notes.md with the native file-readonly tool, then return the exact mission evidence token and the strongest B2B signal in one sentence. Do not answer unless you have inspected the file.",
@@ -3538,7 +3696,7 @@ mod tests {
                         work_order_id: work_order_id.clone(),
                         conversation_id: None,
                         contract_hash: contract_hash.clone(),
-                        plan_hash: "d".repeat(64),
+                        plan_hash: plan_hash.clone(),
                         user_id: "default-founder".to_string(),
                         opc_id: opc_id.clone(),
                         mission_intent: "Read mission-notes.md with the native file-readonly tool, then return the exact mission evidence token and the strongest B2B signal in one sentence. Do not answer unless you have inspected the file."
@@ -3586,7 +3744,7 @@ mod tests {
                 assert_eq!(
                     execute_status,
                     StatusCode::OK,
-                    "real deepseek execute failed: {}",
+                    "real provider execute failed: {}",
                     String::from_utf8_lossy(&execute_bytes)
                 );
                 let execute_body: serde_json::Value = serde_json::from_slice(&execute_bytes).unwrap();
@@ -3660,7 +3818,7 @@ mod tests {
                 for event in expected_stream_core_events {
                     assert!(
                         event_types.iter().any(|seen| *seen == event),
-                        "real deepseek run did not persist {event}; seen={event_types:?}, rows={event_rows:?}"
+                        "real provider run did not persist {event}; seen={event_types:?}, rows={event_rows:?}"
                     );
                 }
                 let tool_call_rows = event_rows
@@ -3669,7 +3827,7 @@ mod tests {
                     .collect::<Vec<_>>();
                 assert!(
                     !tool_call_rows.is_empty(),
-                    "expected at least one ToolCallDelta row in real deepseek run"
+                    "expected at least one ToolCallDelta row in real provider run"
                 );
                 assert!(tool_call_rows.iter().any(|row| {
                     row["payload_json"]
@@ -3686,7 +3844,7 @@ mod tests {
                 .unwrap();
                 assert!(
                     persisted_file_tool_calls > 0,
-                    "expected at least one persisted file-readonly tool call for real deepseek run"
+                    "expected at least one persisted file-readonly tool call for real provider run"
                 );
 
                 let run_events_stream_response = app
@@ -3797,7 +3955,7 @@ mod tests {
                 assert_eq!(
                     create_meeting_status,
                     StatusCode::OK,
-                    "real deepseek meeting creation failed: {}",
+                    "real provider meeting creation failed: {}",
                     create_meeting_text
                 );
                 let create_meeting_body: serde_json::Value =
@@ -3861,7 +4019,7 @@ mod tests {
                             .body(Body::from(
                                 serde_json::json!({
                                     "name": "Real Eval",
-                                    "description": "DeepSeek acceptance"
+                                    "description": "Real provider acceptance"
                                 })
                                 .to_string(),
                             ))
@@ -3925,7 +4083,7 @@ mod tests {
                 assert_eq!(
                     run_eval_status,
                     StatusCode::OK,
-                    "real deepseek eval run failed: {}",
+                    "real provider eval run failed: {}",
                     run_eval_text
                 );
                 let run_eval_body: serde_json::Value = serde_json::from_str(&run_eval_text).unwrap();
@@ -4021,7 +4179,7 @@ mod tests {
                 assert_eq!(
                     evolution_status,
                     StatusCode::OK,
-                    "real deepseek evolution run failed: {}",
+                    "real provider evolution run failed: {}",
                     evolution_text
                 );
                 let evolution_body: serde_json::Value =
@@ -4125,13 +4283,13 @@ mod tests {
             &pool,
             "desktop-test",
             "OpenAICompatible",
-            "https://api.deepseek.com/v1",
+            "http://127.0.0.1:1/v1",
             "sk-test",
             "sk-test",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
+            "test-compatible-model",
             4096,
             0.2,
             30000,
@@ -4143,6 +4301,9 @@ mod tests {
             "coevo-router-summary-columns-{}",
             uuid::Uuid::new_v4()
         ));
+        let contract_hash = "a".repeat(64);
+        let plan_hash = "b".repeat(64);
+        insert_contract_and_plan(&pool, &contract_hash, &plan_hash, "agent-founder-01").await;
         let app = build_router(AppState::new(pool, root.clone()));
         let company_response = app
             .clone()
@@ -4195,8 +4356,8 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "work_order_id": work_order_id,
-                            "contract_hash": "a".repeat(64),
-                            "plan_hash": "b".repeat(64),
+                            "contract_hash": contract_hash,
+                            "plan_hash": plan_hash,
                             "user_id": "default-founder",
                             "opc_id": opc_id,
                             "mission_intent": "Analyze README.md",
@@ -4246,7 +4407,7 @@ mod tests {
     #[test]
     fn real_playground_result_accepts_low_latency_when_usage_is_real() {
         let result = serde_json::json!({
-            "model": "deepseek-v4-flash",
+            "model": "test-compatible-model",
             "output": "Product discovery reduces uncertainty before teams commit roadmap effort.",
             "input_tokens": 21,
             "output_tokens": 13,

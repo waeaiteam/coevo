@@ -7,33 +7,52 @@ pub struct FileToolPolicy {
     pub risk_ceiling: Option<f64>,
 }
 
-fn action_match(allowed: &str, supported: &str) -> bool {
-    let a = allowed.to_lowercase();
-    let s = supported.to_lowercase();
-    let a_norm: String = a.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    let s_norm: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    if s.contains(&a) || a.contains(&s) {
-        return true;
-    }
-    if s_norm.contains(&a_norm) || a_norm.contains(&s_norm) {
-        return true;
-    }
-    // alias: read matches ReadReadme, ReadFile, ReadRepositoryMetadata, ListFiles
-    if a == "read" && (s.contains("read") || s.contains("list")) {
-        return true;
-    }
-    if a == "list" && s.contains("list") {
-        return true;
-    }
-    if a == "analyze" && (s.contains("read") || s.contains("list")) {
-        return true;
-    }
-    if a == "http_get" && s_norm.contains("httpget") {
-        return true;
-    }
-    false
+fn normalize_action(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
 }
 
+fn is_read_action(action: &str) -> bool {
+    action.starts_with("read") || action.starts_with("list") || action == "httpget"
+}
+
+fn is_write_action(action: &str) -> bool {
+    action.starts_with("write") || action.starts_with("create") || action.starts_with("update")
+}
+
+fn is_execute_action(action: &str) -> bool {
+    action.starts_with("execute") || action.starts_with("run") || action == "runshell"
+}
+
+fn action_match(allowed: &str, supported: &str) -> bool {
+    let allowed = normalize_action(allowed);
+    let supported = normalize_action(supported);
+    if allowed.is_empty() || supported.is_empty() {
+        return false;
+    }
+    if allowed == supported {
+        return true;
+    }
+    match allowed.as_str() {
+        "read" | "analyze" => is_read_action(&supported),
+        "list" => supported.starts_with("list"),
+        "write" | "mutate" => is_write_action(&supported),
+        "execute" | "run" | "runshell" | "shell" => is_execute_action(&supported),
+        "httpget" => supported == "httpget",
+        _ => false,
+    }
+}
+
+fn actions_cover_all_supported(allowed_actions: &[String], supported_actions: &[String]) -> bool {
+    supported_actions.iter().all(|supported| {
+        allowed_actions
+            .iter()
+            .any(|allowed| action_match(allowed, supported))
+    })
+}
 pub struct ToolPolicyEngine;
 impl ToolPolicyEngine {
     fn track_risk(track: &str) -> f64 {
@@ -111,9 +130,7 @@ impl ToolPolicyEngine {
             };
         }
         if !allowed_actions.is_empty()
-            && !allowed_actions
-                .iter()
-                .any(|a| tool.supported_actions.iter().any(|sa| action_match(a, sa)))
+            && !actions_cover_all_supported(allowed_actions, &tool.supported_actions)
         {
             return ToolPolicyDecision {
                 allowed: false,
@@ -187,10 +204,10 @@ impl ToolPolicyEngine {
                         return false;
                     }
                     allowed.eq_ignore_ascii_case(&tool.tool_id)
-                        || tool
-                            .supported_actions
-                            .iter()
-                            .any(|action| action_match(allowed, action))
+                        || actions_cover_all_supported(
+                            &[allowed.to_string()],
+                            &tool.supported_actions,
+                        )
                         || matches_tool_scope(allowed, tool)
                 })
             })
@@ -381,5 +398,23 @@ mod tests {
             vec!["file-readonly", "urn:coevo:tool:read"]
         );
         assert_eq!(parsed.risk_ceiling, Some(0.3));
+    }
+    #[test]
+    fn read_action_does_not_match_embedded_substrings() {
+        assert!(!action_match("read", "ThreadDelete"));
+    }
+
+    #[test]
+    fn read_allowed_action_does_not_admit_execute_capable_tool() {
+        let t = make_tool(
+            "mcp-mixed-tool",
+            0.3,
+            true,
+            false,
+            ToolType::Mcp,
+            vec!["ReadFile", "ExecuteProcess"],
+        );
+        let decision = ToolPolicyEngine::evaluate(&t, "green", &["read".into()], &[]);
+        assert!(!decision.allowed);
     }
 }

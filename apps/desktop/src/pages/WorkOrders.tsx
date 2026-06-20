@@ -238,16 +238,26 @@ export default function WorkOrders() {
       return;
     }
     try {
-      const payload = await decideCompanyWorkOrderApproval(activeOpcId, id, {
+      const decisionPayload = (await decideCompanyWorkOrderApproval(activeOpcId, id, {
         approval_id: approvalId,
         decision,
         comment,
-      });
+      })) as Record<string, unknown>;
+      let payload = decisionPayload;
+      if (decision === "approve") {
+        const approvalReceipt = String(decisionPayload.approval_receipt || decisionPayload.approval_id || "").trim();
+        if (approvalReceipt) {
+          const executePayload = (await executeCompanyWorkOrder(activeOpcId, id, {
+            caller_identity_proof: approvalReceipt,
+          })) as Record<string, unknown>;
+          payload = { ...decisionPayload, ...executePayload, approval_receipt: approvalReceipt };
+        }
+      }
       setRowResults((prev) => ({
         ...prev,
         [id]: {
           label: decision === "approve" ? t("workorders.approved") : t("workorders.rejected"),
-          payload: payload as Record<string, unknown>,
+          payload,
         },
       }));
       await load();

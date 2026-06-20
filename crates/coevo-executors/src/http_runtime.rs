@@ -6,10 +6,9 @@
 //! authenticates with headers resolved from `required_credentials` (env-backed
 //! references — never literal secrets).
 //!
-//! Response contract (lenient): the runtime SHOULD return a JSON object. A
-//! top-level `success` bool, `run_id`/`id` string, `output`/`result` object,
-//! and `cost_usd` number are recognised; anything missing falls back to a
-//! reasonable default and the raw body is preserved under `output`.
+//! Response contract (strict): the runtime MUST return a JSON object with an
+//! explicit top-level `success` bool and a stable `run_id`/`id` string. Optional
+//! `output`/`result` and `cost_usd` fields are preserved when present.
 
 use crate::config::{self, AuthHeader};
 use crate::traits::*;
@@ -17,6 +16,9 @@ use async_trait::async_trait;
 use coevo_core::lease::EmergencyLease;
 use coevo_core::opc::{ExternalExecutorPassport, WorkOrder};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::redirect::Policy;
+use reqwest::Url;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 /// Default per-request timeout for runtime calls.
@@ -29,14 +31,19 @@ pub struct HttpRuntimeExecutor {
     passport: ExternalExecutorPassport,
     client: reqwest::Client,
     timeout: Duration,
+    allow_private_network_endpoints: bool,
 }
 
 impl HttpRuntimeExecutor {
     pub fn new(passport: ExternalExecutorPassport) -> Self {
         Self {
             passport,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .expect("default reqwest client should build"),
             timeout: DEFAULT_TIMEOUT,
+            allow_private_network_endpoints: allow_private_http_executors_from_env(),
         }
     }
 
@@ -51,13 +58,25 @@ impl HttpRuntimeExecutor {
         self
     }
 
-    fn base_url(&self) -> Result<String, ExecutorError> {
-        config::parse_http_base(&self.passport.runtime_endpoint).ok_or_else(|| {
+    pub fn with_private_network_endpoints_allowed(mut self, allowed: bool) -> Self {
+        self.allow_private_network_endpoints = allowed;
+        self
+    }
+
+    async fn base_url(&self) -> Result<String, ExecutorError> {
+        let base = config::parse_http_base(&self.passport.runtime_endpoint).ok_or_else(|| {
             ExecutorError::Internal(format!(
                 "HTTP runtime '{}' has a non-http runtime_endpoint '{}'",
                 self.passport.executor_id, self.passport.runtime_endpoint
             ))
-        })
+        })?;
+        validate_http_endpoint_url(
+            &base,
+            self.allow_private_network_endpoints,
+            "runtime_endpoint",
+        )
+        .await?;
+        Ok(base)
     }
 
     fn auth_headers(&self) -> HeaderMap {
@@ -79,6 +98,124 @@ fn build_header_map(headers: &[AuthHeader]) -> HeaderMap {
     map
 }
 
+fn allow_private_http_executors_from_env() -> bool {
+    matches!(
+        std::env::var("COEVO_ALLOW_PRIVATE_HTTP_EXECUTORS")
+            .ok()
+            .as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
+
+async fn validate_http_endpoint_url(
+    url: &str,
+    allow_private: bool,
+    label: &str,
+) -> Result<(), ExecutorError> {
+    let parsed = Url::parse(url)
+        .map_err(|e| ExecutorError::Internal(format!("invalid HTTP runtime {label}: {e}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(ExecutorError::Internal(format!(
+            "HTTP runtime {label} must use http or https"
+        )));
+    }
+    if allow_private {
+        return Ok(());
+    }
+
+    let host = parsed.host_str().ok_or_else(|| {
+        ExecutorError::Internal(format!("HTTP runtime {label} is missing a host"))
+    })?;
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "localhost" || normalized_host.ends_with(".localhost") {
+        return Err(private_endpoint_error(label, host));
+    }
+
+    if let Ok(ip) = normalized_host.parse::<IpAddr>() {
+        reject_private_ip(ip, label, host)?;
+        return Ok(());
+    }
+
+    let port = parsed.port_or_known_default().ok_or_else(|| {
+        ExecutorError::Internal(format!("HTTP runtime {label} is missing a port"))
+    })?;
+    let mut addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+        ExecutorError::Internal(format!("could not resolve HTTP runtime {label} host: {e}"))
+    })?;
+    let mut resolved_any = false;
+    for addr in &mut addrs {
+        resolved_any = true;
+        reject_private_ip(addr.ip(), label, host)?;
+    }
+    if !resolved_any {
+        return Err(ExecutorError::Internal(format!(
+            "HTTP runtime {label} host resolved to no addresses"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_private_ip(ip: IpAddr, label: &str, host: &str) -> Result<(), ExecutorError> {
+    if is_forbidden_endpoint_ip(ip) {
+        Err(private_endpoint_error(label, host))
+    } else {
+        Ok(())
+    }
+}
+
+fn private_endpoint_error(label: &str, host: &str) -> ExecutorError {
+    ExecutorError::Internal(format!(
+        "HTTP runtime {label} resolves to private or local endpoint '{host}'; set COEVO_ALLOW_PRIVATE_HTTP_EXECUTORS=1 only for trusted local runtimes"
+    ))
+}
+
+fn is_forbidden_endpoint_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_forbidden_ipv4(ip),
+        IpAddr::V6(ip) => is_forbidden_ipv6(ip),
+    }
+}
+
+fn is_forbidden_ipv4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_unspecified()
+        || o[0] == 0
+        || (o[0] == 100 && (64..=127).contains(&o[1]))
+        || o[0] >= 240
+}
+
+fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_forbidden_ipv4(v4);
+    }
+    let first = ip.segments()[0];
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || (first & 0xfe00) == 0xfc00
+        || (first & 0xffc0) == 0xfe80
+}
+
+fn validate_run_id(run_id: &str) -> Result<(), ExecutorError> {
+    let valid = !run_id.is_empty()
+        && run_id.len() <= 128
+        && run_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ExecutorError::Internal(
+            "HTTP runtime run_id must be 1-128 chars of [A-Za-z0-9_:-]".to_string(),
+        ))
+    }
+}
+
 #[async_trait]
 impl ExternalExecutorAdapter for HttpRuntimeExecutor {
     fn passport(&self) -> &ExternalExecutorPassport {
@@ -96,6 +233,22 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
                     self.passport.runtime_endpoint
                 ),
             });
+        };
+        let url = match validate_http_endpoint_url(
+            &url,
+            self.allow_private_network_endpoints,
+            "health_check_url",
+        )
+        .await
+        {
+            Ok(()) => url,
+            Err(e) => {
+                return Ok(ExecutorHealth {
+                    online: false,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    version: e.to_string(),
+                })
+            }
         };
         let resp = self
             .client
@@ -141,7 +294,7 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
             warnings.push(format!("credential reference unresolved: {missing}"));
         }
 
-        let base = match self.base_url() {
+        let base = match self.base_url().await {
             Ok(b) => b,
             Err(e) => {
                 return Ok(DryRunResult {
@@ -221,7 +374,7 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
         work_order: &WorkOrder,
         _lease: Option<&EmergencyLease>,
     ) -> Result<ExecutorResult, ExecutorError> {
-        let base = self.base_url()?;
+        let base = self.base_url().await?;
         let payload = config::task_payload(&self.passport, work_order, false);
         let resp = self
             .client
@@ -254,16 +407,25 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
             )));
         }
 
+        let success = body
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                ExecutorError::Internal(
+                    "HTTP runtime response missing explicit success boolean".to_string(),
+                )
+            })?;
         let run_id = body
             .get("run_id")
             .or_else(|| body.get("id"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let success = body
-            .get("success")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+            .ok_or_else(|| {
+                ExecutorError::Internal(
+                    "HTTP runtime response missing explicit run_id/id string".to_string(),
+                )
+            })?
+            .to_string();
+        validate_run_id(&run_id)?;
         let output = body
             .get("output")
             .or_else(|| body.get("result"))
@@ -281,7 +443,8 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
     }
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutorError> {
-        let base = self.base_url()?;
+        validate_run_id(run_id)?;
+        let base = self.base_url().await?;
         // Best effort: POST {base}/cancel/{id}. A non-2xx or unreachable runtime
         // surfaces honestly rather than pretending the cancel happened.
         let resp = self
@@ -308,7 +471,8 @@ impl ExternalExecutorAdapter for HttpRuntimeExecutor {
     }
 
     async fn fetch_audit(&self, run_id: &str) -> Result<String, ExecutorError> {
-        let base = self.base_url()?;
+        validate_run_id(run_id)?;
+        let base = self.base_url().await?;
         let resp = self
             .client
             .get(format!("{base}/audit/{run_id}"))
@@ -342,6 +506,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_rejects_missing_success_flag() {
+        let server = stub_server(StubResponse {
+            status: 200,
+            body: serde_json::json!({
+                "run_id": "run-123",
+                "output": {"answer": 42}
+            })
+            .to_string(),
+        })
+        .await;
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
+        let err = exec.execute(&test_work_order(), None).await.unwrap_err();
+        match err {
+            ExecutorError::Internal(msg) => assert!(msg.contains("success")),
+            other => panic!("expected strict success error, got {other:?}"),
+        }
+        server.shutdown();
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_missing_run_id() {
+        let server = stub_server(StubResponse {
+            status: 200,
+            body: serde_json::json!({
+                "success": true,
+                "output": {"answer": 42}
+            })
+            .to_string(),
+        })
+        .await;
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
+        let err = exec.execute(&test_work_order(), None).await.unwrap_err();
+        match err {
+            ExecutorError::Internal(msg) => assert!(msg.contains("run_id")),
+            other => panic!("expected strict run_id error, got {other:?}"),
+        }
+        server.shutdown();
+    }
+
+    #[tokio::test]
+    async fn fetch_audit_rejects_path_like_run_id() {
+        let exec = HttpRuntimeExecutor::new(http_passport("https://runtime.example.com"));
+        let err = exec.fetch_audit("../secret").await.unwrap_err();
+        match err {
+            ExecutorError::Internal(msg) => assert!(msg.contains("run_id")),
+            other => panic!("expected run_id validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_private_http_runtime_by_default() {
+        let exec = HttpRuntimeExecutor::new(http_passport("http://127.0.0.1:9000"));
+        let err = exec.execute(&test_work_order(), None).await.unwrap_err();
+        match err {
+            ExecutorError::Internal(msg) => assert!(msg.contains("private")),
+            other => panic!("expected private endpoint error, got {other:?}"),
+        }
+    }
+    #[tokio::test]
     async fn execute_posts_and_parses_response() {
         let server = stub_server(StubResponse {
             status: 200,
@@ -354,7 +579,8 @@ mod tests {
             .to_string(),
         })
         .await;
-        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()));
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
         let result = exec.execute(&test_work_order(), None).await.unwrap();
         assert_eq!(result.run_id, "run-123");
         assert!(result.success);
@@ -370,7 +596,8 @@ mod tests {
             body: serde_json::json!({"error": "boom"}).to_string(),
         })
         .await;
-        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()));
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
         let err = exec.execute(&test_work_order(), None).await.unwrap_err();
         assert!(matches!(err, ExecutorError::Internal(_)));
         server.shutdown();
@@ -383,7 +610,8 @@ mod tests {
             body: "ok".to_string(),
         })
         .await;
-        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()));
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
         let health = exec.health_check().await.unwrap();
         assert!(health.online);
         server.shutdown();
@@ -403,7 +631,8 @@ mod tests {
             body: String::new(),
         })
         .await;
-        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()));
+        let exec = HttpRuntimeExecutor::new(http_passport(&server.base_url()))
+            .with_private_network_endpoints_allowed(true);
         let err = exec.cancel("run-1").await.unwrap_err();
         match err {
             ExecutorError::Internal(msg) => assert!(msg.contains("cancel not supported")),

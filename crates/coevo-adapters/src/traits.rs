@@ -40,8 +40,12 @@ pub trait A2aProvider: Send + Sync {
     async fn health_check(&self) -> Result<bool, AdapterError>;
 
     /// Register an agent so it can receive messages. Default no-op for transports
-    /// (e.g. the echo mock) that don't maintain inboxes.
+    /// that do not maintain a local registry.
     fn register(&self, _agent_id: &str) {}
+
+    /// Unregister an agent and discard any queued local messages for it. Default
+    /// no-op for stateless transports.
+    fn unregister(&self, _agent_id: &str) {}
 
     /// Drain (take and clear) the recipient's inbox. Default empty for transports
     /// without inboxes; the in-process router returns real queued peer messages.

@@ -504,16 +504,91 @@ mod tests {
 
     const LEGACY_OPC_ID_HEADER: &str = "x-coevo-opc-id";
 
+    fn test_hash(input: &str) -> String {
+        use sha2::{Digest, Sha256};
+
+        hex::encode(Sha256::digest(input.as_bytes()))
+    }
+
+    async fn insert_test_contract(pool: &sqlx::SqlitePool, hash: &str) {
+        use coevo_core::contract::*;
+        use coevo_store::repos::contract_repo::ContractRepo;
+
+        let contract = MCLSpec {
+            mcl_version: "1.0".to_string(),
+            mcl_state: ContractState::DraftContract,
+            parent_contract_hash: "0".repeat(64),
+            goal_tree: GoalTree {
+                root: GoalNode {
+                    id: "root".to_string(),
+                    description: "test contract".to_string(),
+                    status: GoalStatus::Pending,
+                    children: vec![],
+                    depends_on: vec![],
+                },
+            },
+            institution_policy_hash: "0".repeat(64),
+            data_boundary: vec![],
+            allowed_action_modes: vec![ActionMode::DraftOnly],
+            human_approval_policy: HumanApprovalPolicy {
+                approval_mode: ApprovalMode::NegativeConsent,
+                authorized_roles: vec!["Admin".to_string()],
+                negative_consent_timeout_secs: 300,
+                mfa_auth_url: None,
+            },
+            evidence_requirement: EvidenceRequirement {
+                minimum_level: "none".to_string(),
+                require_json_report: false,
+            },
+            risk_tolerance_profile: RiskToleranceProfile {
+                max_risk_score: 0.6,
+                allow_emergency_lease: false,
+            },
+            termination_policy: TerminationPolicy {
+                max_token_budget: 10000,
+                max_hops: 3,
+                max_latency_ms: 60000,
+                max_stance_rounds: 3,
+            },
+            responsibility_anchor_policy: ResponsibilityAnchorPolicy {
+                required_human_roles: vec!["Admin".to_string()],
+                agent_forbidden_actions: vec![],
+            },
+        };
+        ContractRepo::insert(pool, &contract, hash).await.unwrap();
+    }
+
+    async fn insert_test_contract_and_plan(
+        pool: &sqlx::SqlitePool,
+        contract_hash: &str,
+        plan_hash: &str,
+        agent_id: &str,
+    ) {
+        use coevo_core::plan::ExecutionPlanSpec;
+        use coevo_store::repos::plan_repo::PlanRepo;
+
+        insert_test_contract(pool, contract_hash).await;
+        let plan = ExecutionPlanSpec::single_agent(
+            plan_hash.to_string(),
+            "0".repeat(64),
+            agent_id.to_string(),
+        );
+        PlanRepo::insert(pool, &plan, contract_hash).await.unwrap();
+    }
+
     async fn create_company_work_order(
         state: &AppState,
         opc_id: &str,
         work_order_id: &str,
         agent_id: &str,
     ) {
+        let contract_hash = test_hash(&format!("contract:{work_order_id}"));
+        let plan_hash = test_hash(&format!("plan:{work_order_id}"));
+        insert_test_contract_and_plan(&state.pool, &contract_hash, &plan_hash, agent_id).await;
         let req = CreateWORequest {
             work_order_id: Some(work_order_id.to_string()),
-            contract_hash: "c".repeat(64),
-            plan_hash: "d".repeat(64),
+            contract_hash,
+            plan_hash,
             user_id: "default-founder".to_string(),
             opc_id: opc_id.to_string(),
             mission_intent: format!("Mission for {agent_id}"),
@@ -994,6 +1069,7 @@ mod tests {
             plan_hash: "b".repeat(64),
             sandbox_profile: SandboxProfile::from_track("green", Some(std::env::temp_dir())),
             model_preference: None,
+            execution_contract: None,
         };
         let provider_config = ModelProviderConfig {
             provider_id: "stream-test".to_string(),
